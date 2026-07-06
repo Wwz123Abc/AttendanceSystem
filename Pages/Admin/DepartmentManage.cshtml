@@ -1,0 +1,206 @@
+@page
+@model AttendanceSystem.Pages.Admin.DepartmentManageModel
+@{
+    ViewData["Title"] = "部门管理";
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-diagram-3 me-2 text-primary"></i>部门管理</h4>
+    <div class="d-flex gap-2">
+        <button class="btn btn-primary btn-sm" onclick="openAdd(null)"><i class="bi bi-plus-lg me-1"></i>添加部门</button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="editSelected()"><i class="bi bi-pencil me-1"></i>编辑选中</button>
+        <button class="btn btn-outline-danger btn-sm" onclick="deleteSelected()"><i class="bi bi-trash me-1"></i>删除选中</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+
+<div class="card">
+    <div class="card-header">部门列表（共 @Model.Rows.Count 个）</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th style="width:44px"><input type="checkbox" id="checkAll" onclick="toggleAll(this)" /></th>
+                        <th>部门名称</th>
+                        <th style="width:110px">成员数<i class="bi bi-info-circle ms-1 text-muted small" title="父部门显示的是含所有下级部门的总人数"></i></th>
+                        <th style="width:240px">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.Rows.Any())
+                    {
+                        <tr><td colspan="4" class="empty-state"><i class="bi bi-inbox"></i>暂无部门，点右上角「添加部门」新建</td></tr>
+                    }
+                    @foreach (var r in Model.Rows)
+                    {
+                        <tr data-id="@r.Dept.Id" data-parent="@(r.Dept.ParentId?.ToString() ?? "")"
+                            data-name="@r.Dept.DeptName" data-parentid="@(r.Dept.ParentId?.ToString() ?? "")"
+                            data-sort="@r.Dept.SortIndex" data-active="@r.Dept.IsActive.ToString().ToLower()"
+                            data-haschildren="@r.HasChildren.ToString().ToLower()" data-members="@r.MemberCount"
+                            style="@(r.Depth > 0 ? "display:none" : "")">
+                            <td><input type="checkbox" class="row-check" value="@r.Dept.Id" /></td>
+                            <td>
+                                <span style="display:inline-block;width:@(r.Depth * 1.5)rem"></span>
+                                @if (r.HasChildren)
+                                {
+                                    <button type="button" class="btn btn-sm btn-link p-0 me-1 tree-toggle collapsed text-secondary"
+                                            onclick="toggleNode(@r.Dept.Id, this)"><i class="bi bi-chevron-right"></i></button>
+                                }
+                                else
+                                {
+                                    <span class="me-1" style="display:inline-block;width:1rem"></span>
+                                }
+                                <i class="bi bi-diagram-3 text-muted me-1"></i>
+                                <span class="fw-semibold">@r.Dept.DeptName</span>
+                                @if (!r.Dept.IsActive)
+                                {
+                                    <span class="badge bg-secondary ms-1">停用</span>
+                                }
+                            </td>
+                            <td><span class="badge bg-info-subtle text-info" title="含下级部门的总人数">@r.MemberCount 人</span></td>
+                            <td>
+                                <button class="btn btn-outline-primary btn-sm me-1" onclick="openEditFromRow(this.closest('tr'))">编辑</button>
+                                <button class="btn btn-outline-success btn-sm me-1" onclick="openAdd(@r.Dept.Id)">添加子部门</button>
+                                <button class="btn btn-outline-danger btn-sm" onclick="deleteOne(@r.Dept.Id)">删除</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 批量删除用的隐藏表单 -->
+<form method="post" asp-page-handler="Delete" id="deleteForm" class="d-none">
+    <input type="hidden" name="DeleteIds" id="fDeleteIds" />
+</form>
+
+<!-- 新增/编辑 弹窗 -->
+<div class="modal fade" id="deptModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deptModalTitle">添加部门</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" id="deptForm">
+                <input type="hidden" asp-for="EditId" id="fEditId" />
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">部门名称 <span class="text-danger">*</span></label>
+                        <input asp-for="DeptName" class="form-control" id="fDeptName" required maxlength="100" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">上级部门</label>
+                        <select asp-for="ParentId" class="form-select" id="fParentId">
+                            <option value="">（顶级部门 · 无上级）</option>
+                            @foreach (var r in Model.Rows)
+                            {
+                                <option value="@r.Dept.Id">@(new string('　', r.Depth))@r.Dept.DeptName</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">排序（越小越靠前）</label>
+                        <input asp-for="SortIndex" type="number" class="form-control" id="fSortIndex" value="0" />
+                    </div>
+                    <div class="form-check form-switch">
+                        <input asp-for="IsActive" class="form-check-input" type="checkbox" id="fIsActive" />
+                        <label class="form-check-label" for="fIsActive">启用</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+// ── 展开 / 折叠 ────────────────────────────────────────────────────────────
+function toggleNode(id, btn) {
+    const collapsed = btn.classList.toggle('collapsed');
+    btn.querySelector('i').className = collapsed ? 'bi bi-chevron-right' : 'bi bi-chevron-down';
+    applyChildVisibility(id, !collapsed);
+}
+function applyChildVisibility(parentId, visible) {
+    document.querySelectorAll(`tr[data-parent="${parentId}"]`).forEach(tr => {
+        tr.style.display = visible ? '' : 'none';
+        const cid  = tr.getAttribute('data-id');
+        const cbtn = tr.querySelector('.tree-toggle');
+        if (!visible) applyChildVisibility(cid, false);
+        else          applyChildVisibility(cid, cbtn ? !cbtn.classList.contains('collapsed') : true);
+    });
+}
+
+// ── 勾选 ──────────────────────────────────────────────────────────────────
+function toggleAll(cb) { document.querySelectorAll('.row-check').forEach(c => c.checked = cb.checked); }
+
+// ── 新增 / 编辑 ────────────────────────────────────────────────────────────
+function openAdd(parentId) {
+    document.getElementById('deptModalTitle').textContent = '添加部门';
+    document.getElementById('deptForm').action = '?handler=Create';
+    document.getElementById('fEditId').value    = 0;
+    document.getElementById('fDeptName').value  = '';
+    document.getElementById('fSortIndex').value = 0;
+    document.getElementById('fIsActive').checked = true;
+    // 默认上级：显式传入的 > 列表里唯一勾选的那个 > 无
+    let pid = parentId;
+    if (pid == null) {
+        const checked = document.querySelectorAll('.row-check:checked');
+        if (checked.length === 1) pid = checked[0].value;
+    }
+    document.getElementById('fParentId').value = pid ?? '';
+    new bootstrap.Modal(document.getElementById('deptModal')).show();
+}
+function openEditFromRow(tr) {
+    const d = tr.dataset;
+    document.getElementById('deptModalTitle').textContent = '编辑部门';
+    document.getElementById('deptForm').action = '?handler=Update';
+    document.getElementById('fEditId').value    = d.id;
+    document.getElementById('fDeptName').value  = d.name;
+    document.getElementById('fParentId').value  = d.parentid || '';
+    document.getElementById('fSortIndex').value = d.sort;
+    document.getElementById('fIsActive').checked = d.active === 'true';
+    new bootstrap.Modal(document.getElementById('deptModal')).show();
+}
+function editSelected() {
+    const checked = document.querySelectorAll('.row-check:checked');
+    if (checked.length !== 1) { alert('请只勾选一个部门，再点「编辑选中」'); return; }
+    openEditFromRow(checked[0].closest('tr'));
+}
+
+// ── 删除（批量 / 单个）────────────────────────────────────────────────────
+function submitDelete(ids) {
+    if (ids.length === 0) { alert('请先勾选要删除的部门'); return; }
+    let warn = false;
+    ids.forEach(id => {
+        const tr = document.querySelector(`tr[data-id="${id}"]`);
+        if (tr && (tr.dataset.haschildren === 'true' || parseInt(tr.dataset.members) > 0)) warn = true;
+    });
+    const msg = warn
+        ? '所选部门中含有子部门或员工。\n删除后：这些部门的员工将变为“未分配”，其子部门将提升为顶级部门。\n\n确认删除？'
+        : '确认删除所选部门？';
+    if (!confirm(msg)) return;
+    document.getElementById('fDeleteIds').value = ids.join(',');
+    document.getElementById('deleteForm').submit();
+}
+function deleteSelected() { submitDelete([...document.querySelectorAll('.row-check:checked')].map(c => c.value)); }
+function deleteOne(id)    { submitDelete([String(id)]); }
+</script>
+}

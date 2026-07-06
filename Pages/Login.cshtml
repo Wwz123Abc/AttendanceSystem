@@ -1,0 +1,336 @@
+@page
+@model AttendanceSystem.Pages.LoginModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>科瑞技术 - 考勤管理系统</title>
+    <link rel="icon" type="image/png" href="~/img/logo-icon.png" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <style>
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; }
+        body {
+            background: #000; overflow-x: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+        }
+
+        /* ── 顶部导航（仿科瑞技术官网首页头部）───────────────────────────── */
+        .hero-nav { position: fixed; top: 0; left: 0; width: 100%; z-index: 50; }
+        .hero-nav-inner { display: flex; align-items: center; height: 88px; padding: 0 48px; }
+        .hero-logo { display: flex; align-items: center; height: 88px; flex-shrink: 0; }
+        .hero-logo img { height: 32px; width: auto; }
+        .hero-stock { color: #fff; border-left: 1px solid rgba(255,255,255,.3); margin-left: 16px; padding-left: 16px; line-height: 1.2; }
+        .hero-stock span { display: block; font-size: 12px; opacity: .75; }
+        .hero-stock p { margin: 2px 0 0; font-size: 15px; font-weight: 600; }
+        .hero-actions { display: flex; align-items: center; gap: 24px; flex-shrink: 0; margin-left: auto; }
+        .hero-lang { color: #fff; font-size: 14px; letter-spacing: .02em; }
+        .hero-search { color: #fff; font-size: 16px; }
+
+        /* ── 首屏英雄区（背景/光效/文案照搬官网首页视觉）───────────────────── */
+        .hero { position: relative; width: 100%; height: 100vh; min-height: 620px; overflow: hidden; background: #000; }
+        .hero-bg, .hero-glow, .hero-swoosh { position: absolute; inset: 0; width: 100%; height: 100%; }
+        .hero-bg img, .hero-glow img, .hero-swoosh img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .hero-glow img   { mix-blend-mode: screen; opacity: .9; }
+        .hero-swoosh img { mix-blend-mode: screen; opacity: .8; }
+
+        /* 装饰性彩色光点，模拟原站的粒子效果 */
+        .hero-dots span { position: absolute; border-radius: 50%; animation: floaty 5s ease-in-out infinite; }
+        @@keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
+        .dot-green  { width: 9px;  height: 9px;  left: 3%;    top: 88%; background: #3ddc7a; box-shadow: 0 0 10px 2px rgba(61,220,122,.7);  animation-delay: .2s; }
+        .dot-pink   { width: 7px;  height: 7px;  left: 6.5%;  top: 92%; background: #ff5fb0; box-shadow: 0 0 10px 2px rgba(255,95,176,.7);   animation-delay: 1.1s; }
+        .dot-orange { width: 11px; height: 11px; left: 52%;   top: 9%;  background: #ff9a2e; box-shadow: 0 0 12px 3px rgba(255,154,46,.7);   animation-delay: .6s; }
+        .dot-blue1  { width: 8px;  height: 8px;  left: 48.5%; top: 18%; background: #3491fa; box-shadow: 0 0 10px 2px rgba(52,145,250,.7);   animation-delay: 1.6s; }
+        .dot-red    { width: 9px;  height: 9px;  left: 41%;   top: 27%; background: #f5222d; box-shadow: 0 0 10px 2px rgba(245,34,45,.7);    animation-delay: .9s; }
+        .dot-blue2  { width: 12px; height: 12px; left: 80%;   top: 73%; background: #3491fa; box-shadow: 0 0 14px 3px rgba(52,145,250,.7);   animation-delay: 0s; }
+
+        /* ── 粒子“C”标志：登录卡片和右侧文案之间的动态圆点 Logo ──────────────
+           hero-icon-anchor 是一张隐藏的白色剪影图，只用来告诉脚本“在哪里、画多大”；
+           真正看到的彩色圆点由 JS 读取它的像素后画在 hero-canvas 上（做法与官网一致）。 */
+        .hero-canvas { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+        .hero-icon-anchor {
+            position: absolute; left: 47%; top: 50%; transform: translate(-50%, -50%);
+            width: min(32vw, 460px); height: auto; visibility: hidden;
+        }
+
+        .hero-content { position: relative; z-index: 3; height: 100%; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; text-align: right; padding: 0 90px; }
+        .hero-wordmark { max-width: 300px; width: 100%; height: auto; opacity: 0; animation: fadeDown 1s ease both .3s; }
+        .hero-title   { color: #fff; font-size: 52px; font-weight: 600; margin-top: 14px; opacity: 0; animation: fadeUp 1s ease both .5s; }
+        .hero-tagline { color: rgba(255,255,255,.55); font-size: 18px; letter-spacing: .03em; margin-top: 10px; opacity: 0; animation: fadeUp 1s ease both .7s; }
+        @@keyframes fadeDown { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: translateY(0); } }
+        @@keyframes fadeUp   { from { opacity: 0; transform: translateY(16px); }  to { opacity: 1; transform: translateY(0); } }
+
+        /* ── 左侧登录面板：直接嵌在首屏里，玻璃质感贴合深色背景 ─────────────── */
+        .hero-login-wrap {
+            position: absolute; z-index: 4; left: 8%; top: 50%; transform: translateY(-50%);
+            width: 360px; max-width: calc(100% - 48px);
+        }
+        .login-card {
+            border-radius: 18px; border: 1px solid rgba(255,255,255,.16);
+            background: rgba(15, 22, 40, .55); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            box-shadow: 0 24px 64px rgba(0,0,0,.45); padding: 2.25rem 2rem;
+            /* 淡入动画放在卡片自身而不是外层定位容器上：外层要用 translateY(-50%) 做垂直居中，
+               如果动画也写在外层，keyframes 里的 transform:translateY(0) 收尾时会把 -50% 顶掉，
+               卡片就会从“居中”变成“顶边对齐到 50%”，实际观感是整体往下掉了半个卡片高。 */
+            opacity: 0; animation: fadeUp 1s ease both .3s;
+        }
+        .login-logo { width: 170px; max-width: 76%; height: auto; }
+        .login-card .login-title { color: #fff; font-weight: 600; margin-top: .9rem; }
+        .login-card .login-sub { color: rgba(255,255,255,.55); font-size: .8rem; margin-top: .4rem; }
+        .login-card label { color: rgba(255,255,255,.85); }
+        .login-card .form-check-label { color: rgba(255,255,255,.55); }
+        .login-forgot { color: #9dc4ff; text-decoration: none; }
+        .login-forgot:hover { color: #fff; text-decoration: underline; }
+        .login-card .form-control {
+            border-radius: 8px; border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.06); color: #fff; font-size: .9rem;
+        }
+        .login-card .form-control::placeholder { color: rgba(255,255,255,.4); }
+        .login-card .form-control:focus { border-color: #4d9bff; box-shadow: 0 0 0 3px rgba(77,155,255,.18); background: rgba(255,255,255,.08); color: #fff; }
+        .login-card .input-group-text { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.18); color: #9dc4ff; }
+        .btn-login { background: #0056b8; border: none; padding: .75rem; font-size: 1rem; letter-spacing: .04em; border-radius: 8px; transition: background .15s, transform .1s; }
+        .btn-login:hover { background: #4d9bff; transform: translateY(-1px); }
+        .login-foot { color: rgba(255,255,255,.4); font-size: .75rem; }
+        .alert { border: none; border-radius: 8px; }
+        .alert-danger  { background: rgba(255,95,110,.16); color: #ffb4bb; }
+        .alert-warning { background: rgba(255,180,80,.16); color: #ffcf8a; }
+
+        @@media (max-width: 992px) {
+            .hero-title { font-size: 36px; }
+            .hero-wordmark { max-width: 200px; }
+        }
+        @@media (max-width: 768px) {
+            .hero { min-height: 760px; }
+            .hero-content { position: static; padding: 130px 24px 0; align-items: center; text-align: center; }
+            .hero-login-wrap { position: static; transform: none; width: 100%; max-width: 420px; margin: 32px auto 40px; }
+            .hero-icon-anchor { display: none; }   /* 窄屏上下堆叠布局，中间没有空位放粒子 Logo */
+        }
+        @@media (max-width: 576px) {
+            .hero-nav-inner { padding: 0 16px; }
+            .hero-stock { display: none; }
+            .hero-title { font-size: 26px; }
+            .hero-tagline { font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+
+<header class="hero-nav">
+    <div class="hero-nav-inner">
+        <a href="/Login" class="hero-logo"><img src="~/img/home/nav-logo.png" alt="科瑞技术" /></a>
+        <div class="hero-stock"><span>股票代码</span><p>002957</p></div>
+        <div class="hero-actions">
+            <span class="hero-lang">EN</span>
+            <i class="bi bi-search hero-search"></i>
+        </div>
+    </div>
+</header>
+
+<section class="hero">
+    <div class="hero-bg"><img src="~/img/home/hero-bg.jpg" alt="" /></div>
+    <div class="hero-glow"><img src="~/img/home/hero-glow.png" alt="" /></div>
+    <div class="hero-swoosh"><img src="~/img/home/hero-swoosh.png" alt="" /></div>
+    <div class="hero-dots">
+        <span class="dot-green"></span>
+        <span class="dot-pink"></span>
+        <span class="dot-orange"></span>
+        <span class="dot-blue1"></span>
+        <span class="dot-red"></span>
+        <span class="dot-blue2"></span>
+    </div>
+    <canvas class="hero-canvas" id="dotCanvas"></canvas>
+    <img id="dotSource" class="hero-icon-anchor" src="~/img/home/hero-icon.png" alt="" />
+
+    <div class="hero-login-wrap">
+        <div class="login-card">
+            <div class="text-center mb-3">
+                <img src="~/img/logo-icon.png" alt="科瑞技术" class="login-logo" style="width:56px;max-width:56px;" />
+                <div class="login-title">考勤管理系统</div>
+                <p class="login-sub mb-0">请使用工号登录</p>
+            </div>
+
+            @if (Model.Denied)
+            {
+                <div class="alert alert-warning py-2 mb-3">
+                    <i class="bi bi-exclamation-triangle me-2"></i>您没有访问该页面的权限
+                </div>
+            }
+            @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+            {
+                <div class="alert alert-danger py-2 mb-3">
+                    <i class="bi bi-x-circle me-2"></i>@Model.ErrorMessage
+                </div>
+            }
+
+            <form method="post">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">工号</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-person"></i></span>
+                        <input asp-for="EmployeeNo" class="form-control form-control-lg"
+                               placeholder="请输入工号" autofocus autocomplete="username" />
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">密码</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-lock"></i></span>
+                        <input asp-for="Password" type="password" class="form-control form-control-lg"
+                               placeholder="请输入密码" autocomplete="current-password" />
+                    </div>
+                </div>
+                <div class="mb-4 form-check d-flex justify-content-between align-items-center">
+                    <div>
+                        <input asp-for="RememberMe" class="form-check-input" type="checkbox" id="rememberMe" />
+                        <label class="form-check-label" for="rememberMe">记住我（8 小时内免登录）</label>
+                    </div>
+                    <a href="/Account/ForgotPassword" class="login-forgot small">忘记密码？</a>
+                </div>
+                <button type="submit" class="btn btn-login btn-primary w-100 text-white rounded-3">
+                    <i class="bi bi-box-arrow-in-right me-2"></i>登 录
+                </button>
+            </form>
+            <div class="text-center mt-3 login-foot">© @DateTime.Now.Year 科瑞技术 · 版权所有</div>
+        </div>
+    </div>
+
+    <div class="hero-content">
+        <img src="~/img/home/hero-logo.png" class="hero-wordmark" alt="科瑞技术" />
+        <div class="hero-title">成就智造典范</div>
+        <div class="hero-tagline">COLIBRI, AUTOMATION AND BEYOND.</div>
+    </div>
+</section>
+
+<script>
+// 粒子“C”标志动画（原理与科瑞官网首页一致）：
+// 读取隐藏剪影图 hero-icon.png 的像素 → 每隔几个像素取一个不透明点作为目标位置 →
+// 每个目标位置生成一颗彩色圆点，从四周飞入归位，之后持续脉动、缓慢变色，鼠标靠近会被轻轻推开。
+(function () {
+    var canvas = document.getElementById('dotCanvas');
+    var img    = document.getElementById('dotSource');
+    var hero   = canvas.parentElement;
+    var ctx    = canvas.getContext('2d');
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    var W = 0, H = 0;
+    var dots = [], ambient = [];
+    var mouse = { x: -1e4, y: -1e4 };
+
+    // 颜色：大部分蓝/紫，少量橙和青，贴近官网的观感；hue 每帧缓慢漂移产生“流动”的色彩
+    function pickHue() {
+        var r = Math.random();
+        if (r < .58) return 205 + Math.random() * 70;   // 蓝 → 紫
+        if (r < .78) return 20  + Math.random() * 20;   // 橙
+        return 165 + Math.random() * 30;                 // 青绿
+    }
+
+    // 组成“C”的圆点
+    function Dot(tx, ty, r) {
+        var a = Math.random() * Math.PI * 2;
+        this.x  = reduceMotion ? tx : W / 2 + Math.cos(a) * W;   // 减弱动效时直接就位，不做飞入
+        this.y  = reduceMotion ? ty : H / 2 + Math.sin(a) * W;
+        this.tx = tx; this.ty = ty;
+        this.br = r; this.r = r;
+        this.a  = Math.random() * Math.PI * 2;
+        this.sx = .04 + Math.random() * .06;             // 飞入的收敛速度（各点不同，先后归位）
+        this.sy = .04 + Math.random() * .06;
+        this.o  = .35 + Math.random() * .65;
+        this.delay = reduceMotion ? 0 : Math.random() * 80;
+        this.hue = pickHue();
+    }
+    Dot.prototype.step = function () {
+        if (this.delay > 0) { this.delay--; return; }
+        this.a   += .1;
+        this.hue += .25;
+        this.x += (this.tx - this.x) * this.sx;
+        this.y += (this.ty - this.y) * this.sy;
+        this.r  = this.br + Math.cos(this.a) * this.br * .5;    // 呼吸式脉动
+        // 鼠标靠近目标点时，把圆点从目标位置推开一点，划过会“荡开”
+        var dx = this.tx - mouse.x, dy = this.ty - mouse.y;
+        if (dx * dx + dy * dy < 3600) { this.x += dx / 8; this.y += dy / 8; }
+        ctx.globalAlpha = this.o;
+        ctx.fillStyle = 'hsl(' + this.hue + ',100%,62%)';
+        ctx.beginPath(); ctx.arc(this.x, this.y, Math.max(this.r, .3), 0, 6.2832); ctx.fill();
+    };
+
+    // 少量在整个首屏漫游的“环境点”，丰富动态感
+    function Ambient() {
+        this.x = Math.random() * W; this.y = Math.random() * H;
+        this.r = 1 + Math.random() * 2.5;
+        this.a = Math.random() * Math.PI * 2;
+        this.s = .3 + Math.random() * .7;
+        this.hue = pickHue();
+    }
+    Ambient.prototype.step = function () {
+        if (!reduceMotion) {
+            this.a += Math.random() * .5 - .25;
+            this.x += Math.cos(this.a) * this.s;
+            this.y += Math.sin(this.a) * this.s;
+            if (this.x < 0) this.x = W; else if (this.x > W) this.x = 0;
+            if (this.y < 0) this.y = H; else if (this.y > H) this.y = 0;
+        }
+        this.hue += .2;
+        ctx.globalAlpha = .8;
+        ctx.fillStyle = 'hsl(' + this.hue + ',100%,60%)';
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.2832); ctx.fill();
+    };
+
+    // 读取剪影图像素，生成全部目标点
+    function sample() {
+        dots.length = 0;
+        W = canvas.width  = hero.clientWidth;
+        H = canvas.height = hero.clientHeight;
+
+        var rect = img.getBoundingClientRect();
+        if (!rect.width) return;                          // 窄屏下剪影被 display:none，跳过
+        var heroRect = hero.getBoundingClientRect();
+        var iw = Math.round(rect.width), ih = Math.round(rect.height);
+        var ox = rect.left - heroRect.left, oy = rect.top - heroRect.top;
+
+        var off = document.createElement('canvas');
+        off.width = iw; off.height = ih;
+        var octx = off.getContext('2d');
+        octx.drawImage(img, 0, 0, iw, ih);
+        var data = octx.getImageData(0, 0, iw, ih).data;
+
+        var skip = Math.max(6, Math.round(iw / 58));      // 采样间隔随尺寸走，点数基本恒定
+        for (var y = 0; y < ih; y += skip)
+            for (var x = 0; x < iw; x += skip)
+                if (data[(y * iw + x) * 4 + 3] > 0)       // 只取不透明像素（剪影本体）
+                    dots.push(new Dot(ox + x, oy + y, .8 + Math.random() * 2.6));
+
+        ambient.length = 0;
+        for (var i = 0; i < 10; i++) ambient.push(new Ambient());
+    }
+
+    function loop() {
+        ctx.clearRect(0, 0, W, H);
+        ctx.globalCompositeOperation = 'lighter';          // 圆点叠加处发亮，产生辉光感
+        for (var i = 0; i < dots.length; i++) dots[i].step();
+        for (var j = 0; j < ambient.length; j++) ambient[j].step();
+        requestAnimationFrame(loop);
+    }
+
+    hero.addEventListener('mousemove', function (e) {
+        var r = hero.getBoundingClientRect();
+        mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top;
+    });
+    hero.addEventListener('mouseleave', function () { mouse.x = mouse.y = -1e4; });
+
+    var resizeTimer;
+    window.addEventListener('resize', function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(sample, 150);
+    });
+
+    function start() { sample(); loop(); }
+    if (img.complete) start(); else img.onload = start;
+})();
+</script>
+
+</body>
+</html>

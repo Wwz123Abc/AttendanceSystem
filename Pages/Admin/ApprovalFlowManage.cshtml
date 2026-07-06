@@ -1,0 +1,223 @@
+@page
+@model AttendanceSystem.Pages.Admin.ApprovalFlowManageModel
+@{ ViewData["Title"] = "审批流程配置"; }
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-diagram-3 me-2 text-primary"></i>审批流程配置</h4>
+    <button class="btn btn-primary btn-sm" onclick="openAdd()">
+        <i class="bi bi-plus-lg me-1"></i>新建流程
+    </button>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-x-circle me-2"></i>@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>考勤组</th>
+                    <th>审批类型</th>
+                    <th>流程名称</th>
+                    <th>审批步骤</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var f in Model.Flows)
+                {
+                    var steps = System.Text.Json.JsonSerializer.Deserialize<List<System.Text.Json.JsonElement>>(f.StepsConfig) ?? [];
+                    <tr>
+                        <td>@f.AttendanceGroup?.GroupName</td>
+                        <td><span class="badge bg-info text-dark">@f.ApprovalType.ToDisplayName()</span></td>
+                        <td>@f.FlowName</td>
+                        <td>
+                            @for (int i = 0; i < steps.Count; i++)
+                            {
+                                var uid = steps[i].GetProperty("ApproverUserId").GetInt32();
+                                var approver = Model.Approvers.FirstOrDefault(a => a.Id == uid);
+                                if (i > 0) { <i class="bi bi-arrow-right text-muted mx-1"></i> }
+                                <span class="badge bg-secondary">第@(i+1)级：@(approver?.RealName ?? $"用户{uid}")</span>
+                            }
+                        </td>
+                        <td>
+                            @if (f.IsActive)
+                            { <span class="badge bg-success">启用</span> }
+                            else
+                            { <span class="badge bg-secondary">停用</span> }
+                        </td>
+                        <td>
+                            <button class="btn btn-outline-primary btn-sm"
+                                    onclick="openEdit(@f.Id,@f.AttendanceGroupId,'@f.ApprovalType','@f.FlowName',
+                                             '@string.Join(",", steps.Select(s => s.GetProperty("ApproverUserId").GetInt32()))')">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <form method="post" asp-page-handler="Toggle" class="d-inline">
+                                <input type="hidden" name="id" value="@f.Id" />
+                                <button type="submit" class="btn btn-sm @(f.IsActive ? "btn-outline-warning" : "btn-outline-success")">
+                                    <i class="bi bi-@(f.IsActive ? "pause" : "play")"></i>
+                                </button>
+                            </form>
+                            <form method="post" asp-page-handler="Delete" class="d-inline"
+                                  onsubmit="return confirm('确认删除此流程？')">
+                                <input type="hidden" name="id" value="@f.Id" />
+                                <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+                @if (!Model.Flows.Any())
+                {
+                    <tr><td colspan="6" class="empty-state"><i class="bi bi-inbox"></i>暂无流程配置，将使用员工直属上级进行审批</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 新建/编辑 Modal -->
+<div class="modal fade" id="flowModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="post" asp-page-handler="Save">
+                <input type="hidden" asp-for="EditId" id="editId" />
+                <div class="modal-header">
+                    <h5 class="modal-title" id="flowModalTitle">新建审批流程</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold">考勤组</label>
+                            <select asp-for="GroupId" id="fGroupId" class="form-select" required>
+                                @foreach (var g in Model.Groups)
+                                {
+                                    <option value="@g.Id">@g.GroupName</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold">审批类型</label>
+                            <select asp-for="ApprovalType" id="fType" class="form-select">
+                                <option value="Leave">请假</option>
+                                <option value="PunchReplenishment">补卡</option>
+                                <option value="Overtime">加班</option>
+                                <option value="BusinessTrip">出差</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-semibold">流程名称</label>
+                            <input asp-for="FlowName" id="fFlowName" class="form-control" required />
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold">审批顺序（按步骤从上到下）</label>
+                            <div class="mb-2">
+                                <select id="approverPicker" class="form-select w-auto d-inline-block">
+                                    @foreach (var u in Model.Approvers)
+                                    {
+                                        <option value="@u.Id">@u.RealName（@u.Role）</option>
+                                    }
+                                </select>
+                                <button type="button" class="btn btn-outline-secondary btn-sm ms-2" onclick="addStep()">
+                                    <i class="bi bi-plus-lg me-1"></i>添加审批人
+                                </button>
+                            </div>
+                            <div id="stepList" class="d-flex flex-wrap gap-2 mb-2 p-2 border rounded bg-light" style="min-height:50px">
+                                <!-- Steps will be added here dynamically -->
+                            </div>
+                            <input type="hidden" asp-for="ApproverIds" id="approverIds" />
+                            <small class="text-muted">点击审批人可移除；顺序即审批层级顺序</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary" onclick="return collectSteps()">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+const flowModal = new bootstrap.Modal(document.getElementById('flowModal'));
+// steps = 弹窗里当前正在编辑的这条审批流"按顺序排好的审批人列表"，每项是 {id: 用户编号, name: 姓名}。
+// 保存的时候（collectSteps）会把这个列表按顺序拼成 "5,3" 这样的字符串交给后端。
+let steps = [];
+
+function openAdd() {
+    document.getElementById('flowModalTitle').textContent = '新建审批流程';
+    document.getElementById('editId').value = 0;
+    document.getElementById('fGroupId').value = '';
+    document.getElementById('fType').value = 'Leave';
+    document.getElementById('fFlowName').value = '';
+    steps = [];
+    renderSteps();
+    flowModal.show();
+}
+
+function openEdit(id, gid, type, name, approverIds) {
+    document.getElementById('flowModalTitle').textContent = '编辑审批流程';
+    document.getElementById('editId').value = id;
+    document.getElementById('fGroupId').value = gid;
+    document.getElementById('fType').value = type;
+    document.getElementById('fFlowName').value = name;
+    steps = approverIds ? approverIds.split(',').map(id => {
+        const opt = document.querySelector(`#approverPicker option[value="${id}"]`);
+        return { id, name: opt ? opt.text : `用户${id}` };
+    }) : [];
+    renderSteps();
+    flowModal.show();
+}
+
+// 点"添加审批人"：把下拉框里选中的人加到 steps 列表末尾（也就是排在最后一级）；同一个人不能加两次
+function addStep() {
+    const sel = document.getElementById('approverPicker');
+    const id = sel.value;
+    const name = sel.options[sel.selectedIndex].text;
+    if (steps.some(s => s.id === id)) { alert('该审批人已添加'); return; }
+    steps.push({ id, name });
+    renderSteps();
+}
+
+// 点某个审批人标签上的 × ：把这个人从 steps 列表里删掉（idx 是它在列表里的位置）
+function removeStep(idx) {
+    steps.splice(idx, 1);
+    renderSteps();
+}
+
+// 把当前已添加的审批人列表(steps)画成一排"第1级：张三 ×"这样的小标签，标签之间用箭头图标隔开；
+// 点标签上的 × 会调 removeStep 把这个人从名单里去掉
+function renderSteps() {
+    const list = document.getElementById('stepList');
+    list.innerHTML = steps.map((s, i) =>
+        `<span class="badge bg-primary fs-6" style="cursor:pointer" onclick="removeStep(${i})" title="点击移除">
+            第${i+1}级：${s.name} &times;
+         </span>`
+    ).join(' <i class="bi bi-arrow-right"></i> ');
+}
+
+// 点"保存"提交表单之前会先调用这个函数：把 steps 列表转成 "5,3" 这样的字符串，
+// 填进真正要提交的隐藏字段(approverIds)里；如果一个审批人都没加，就拦下来不让提交
+function collectSteps() {
+    if (steps.length === 0) { alert('请至少添加一个审批人'); return false; }
+    document.getElementById('approverIds').value = steps.map(s => s.id).join(',');
+    return true;
+}
+</script>
+}

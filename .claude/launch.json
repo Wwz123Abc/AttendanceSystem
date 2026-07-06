@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "attendance-web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "AttendanceSystem.csproj",
+        "-p:StaticWebAssetsEnabled=false",
+        "--",
+        "--urls=http://localhost:50721",
+        "--environment=Development"
+      ],
+      "port": 50721
+    }
+  ]
+}

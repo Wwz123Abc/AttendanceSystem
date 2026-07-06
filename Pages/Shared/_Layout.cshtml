@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - 科瑞技术考勤管理系统</title>
+    <link rel="icon" type="image/png" href="~/img/logo-icon.png" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <style>
+        /* ══════════════════════════════════════════════════════════════════
+           设计令牌（Design Tokens）：全站统一的颜色/圆角/阴影/间距变量。
+           改这里的值 = 全站风格联动变化，不需要逐页改样式。
+           配色思路参考 Ant Design Pro / 飞书：浅中性背景 + 单一品牌蓝 + 柔和状态色。
+           ══════════════════════════════════════════════════════════════════ */
+        :root {
+            --brand:        #1456CC;   /* 品牌主色（延续原有蓝色系，更精炼） */
+            --brand-dark:   #0E3E97;   /* 品牌色悬浮/深色态 */
+            --brand-light:  #EAF1FE;   /* 品牌色浅底（选中态、标签背景） */
+            --brand-lighter:#F5F8FE;   /* 更浅的品牌底色（表格悬浮等） */
+
+            --bg-page:      #F2F4F7;   /* 页面背景 */
+            --bg-card:      #FFFFFF;
+            --bg-sidebar:   #0F2A52;   /* 侧边栏实色深蓝（替代原渐变） */
+
+            --text-1: #1D2129;  /* 标题 */
+            --text-2: #4E5969;  /* 正文 */
+            --text-3: #86909C;  /* 次要/说明文字 */
+            --text-4: #C9CDD4;  /* 占位/禁用 */
+
+            --border-1: #E5E6EB;
+            --border-2: #EEF0F3;
+
+            --success: #00A854; --success-bg: #E8FFF1; --success-text: #00873F;
+            --warning: #FF9A2E; --warning-bg: #FFF6E8; --warning-text: #D2690A;
+            --danger:  #F5222D; --danger-bg:  #FFECE8; --danger-text:  #CF1322;
+            --info:    #3491FA; --info-bg:    #E8F3FF; --info-text:    #1D6FD1;
+            --gray-bg: #F2F3F5; --gray-text:  #6B7785;
+
+            --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px;
+            --shadow-card:  0 1px 2px rgba(16,24,40,.04), 0 2px 10px rgba(16,24,40,.05);
+            --shadow-pop:   0 12px 32px rgba(16,24,40,.14);
+        }
+
+        /* ── 基础排版 ─────────────────────────────────────────────────── */
+        body {
+            background: var(--bg-page); margin: 0; color: var(--text-2);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                         "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: #D5D8DE; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #B8BDC7; }
+        ::-webkit-scrollbar-track { background: transparent; }
+
+        /* ── 侧边栏 ───────────────────────────────────────────────────── */
+        .sidebar { width: 224px; min-height: 100vh; background: var(--bg-sidebar); flex-shrink: 0; }
+        .sidebar-brand { color: #fff; padding: 1rem .9rem 1.1rem; border-bottom: 1px solid rgba(255,255,255,.08); }
+        .sidebar-logo { width: 100%; display: block; border-radius: 5px; }
+        .topbar-logo { height: 26px; display: block; border-radius: 4px; }
+        .kr-sub { font-size: .72rem; letter-spacing: .08em; }
+        .app-footer { text-align: center; color: #9aa3b2; font-size: .78rem; padding: .85rem 0 1rem; }
+        .sidebar .nav-link {
+            color: rgba(255,255,255,.68); padding: .5rem .85rem; border-radius: var(--radius-sm);
+            font-size: .875rem; display: flex; align-items: center; gap: .55rem; transition: background .15s, color .15s;
+        }
+        .sidebar .nav-link i { width: 1.1rem; text-align: center; font-size: .95rem; }
+        .sidebar .nav-link:hover { color: #fff; background: rgba(255,255,255,.08); }
+        .sidebar .nav-link.active { color: #fff; background: rgba(255,255,255,.12); font-weight: 600; box-shadow: inset 3px 0 0 #fff; }
+        .sidebar .nav-section { color: rgba(255,255,255,.32); font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .09em; padding: 1rem .9rem .3rem; }
+        .sidebar-user { padding: .9rem; border-top: 1px solid rgba(255,255,255,.08); }
+        .sidebar-user small { color: rgba(255,255,255,.5); }
+        .avatar-chip {
+            width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: .8rem; font-weight: 700; background: var(--brand-light); color: var(--brand);
+        }
+        .avatar-chip-dark { background: rgba(255,255,255,.14); color: #fff; }
+
+        /* ── 顶栏 ─────────────────────────────────────────────────────── */
+        .topbar {
+            background: var(--bg-card); border-bottom: 1px solid var(--border-2); padding: .6rem 1.5rem;
+            display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+            box-shadow: 0 1px 2px rgba(16,24,40,.03);
+        }
+        .notif-bell { position: relative; cursor: pointer; color: var(--text-3); font-size: 1.2rem; transition: color .15s; }
+        .notif-bell:hover { color: var(--brand); }
+        .notif-badge { position: absolute; top: -4px; right: -6px; background: var(--danger); color: #fff; border-radius: 50%; font-size: .6rem; min-width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; padding: 0 3px; }
+        .notif-dropdown { position: absolute; right: 0; top: 130%; width: 340px; background: var(--bg-card); border: 1px solid var(--border-2); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); z-index: 1050; display: none; overflow: hidden; }
+        .notif-dropdown.show { display: block; }
+        .notif-item { padding: .75rem 1rem; border-bottom: 1px solid var(--border-2); cursor: pointer; transition: background .15s; }
+        .notif-item:hover { background: var(--bg-page); }
+        .notif-item:last-child { border-bottom: none; }
+        .notif-item.unread { border-left: 3px solid var(--brand); background: var(--brand-lighter); }
+        .notif-title { font-size: .875rem; font-weight: 600; color: var(--text-1); }
+        .notif-content { font-size: .8rem; color: var(--text-3); margin-top: .2rem; }
+        .notif-time { font-size: .75rem; color: var(--text-4); }
+
+        /* ── 主内容区 / 页面标题 ──────────────────────────────────────── */
+        .main-content { flex: 1; padding: 1.5rem 1.75rem 2rem; min-width: 0; }
+        .page-header { margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-2); }
+        .page-header h4 { font-weight: 600; font-size: 1.2rem; color: var(--text-1); margin: 0; display: flex; align-items: center; }
+        .page-header h4 i { color: var(--brand); }
+        .page-header p, .page-header .text-muted { color: var(--text-3) !important; font-size: .8125rem; margin-top: .25rem !important; }
+
+        /* ── 卡片 ─────────────────────────────────────────────────────── */
+        .card { border: 1px solid var(--border-2); box-shadow: var(--shadow-card); border-radius: var(--radius-lg); }
+        .card-header { background: var(--bg-card); border-bottom: 1px solid var(--border-2); font-weight: 600; color: var(--text-1); font-size: .9rem; padding: .8rem 1.1rem; }
+
+        /* ── 统计卡片（修复原 border-start-* 组合类在 Bootstrap 5.3 中不存在、色条不显示的问题）── */
+        .stat-card { border: 1px solid var(--border-2); border-left-width: 3px; border-radius: var(--radius-md); cursor: default; }
+        .stat-card .stat-value { font-size: 1.85rem; font-weight: 700; letter-spacing: -.01em; }
+        .border-start-primary   { border-left-color: var(--brand)   !important; }
+        .border-start-success   { border-left-color: var(--success) !important; }
+        .border-start-danger    { border-left-color: var(--danger)  !important; }
+        .border-start-warning   { border-left-color: var(--warning) !important; }
+        .border-start-info      { border-left-color: var(--info)    !important; }
+        .border-start-secondary { border-left-color: var(--text-4)  !important; }
+
+        /* ── 表格 ─────────────────────────────────────────────────────── */
+        .table thead th { background: #FAFBFC; font-size: .8125rem; font-weight: 600; color: var(--text-3); border-bottom: 1px solid var(--border-1); padding: .7rem 1rem; white-space: nowrap; }
+        .table td { font-size: .875rem; color: var(--text-2); vertical-align: middle; padding: .65rem 1rem; }
+        .table > :not(caption) > * > * { border-bottom-width: 1px; border-bottom-color: var(--border-2); }
+        .table-hover > tbody > tr:hover > * { background-color: var(--brand-lighter); }
+
+        /* ── 状态标签：Bootstrap 原生实心 badge 改为「浅底 + 同色文字 + 细边框」的柔和 tag 样式 ── */
+        .badge { font-size: .76rem; font-weight: 500; padding: .3em .65em; border-radius: 4px; letter-spacing: .01em; }
+        .badge.bg-success   { background-color: var(--success-bg) !important; color: var(--success-text) !important; border: 1px solid rgba(0,168,84,.22); }
+        .badge.bg-danger    { background-color: var(--danger-bg)  !important; color: var(--danger-text)  !important; border: 1px solid rgba(245,34,45,.2); }
+        .badge.bg-warning   { background-color: var(--warning-bg) !important; color: var(--warning-text) !important; border: 1px solid rgba(255,154,46,.25); }
+        .badge.bg-info      { background-color: var(--info-bg)    !important; color: var(--info-text)    !important; border: 1px solid rgba(52,145,250,.22); }
+        .badge.bg-primary   { background-color: var(--brand-light)!important; color: var(--brand)        !important; border: 1px solid rgba(20,86,204,.2); }
+        .badge.bg-secondary { background-color: var(--gray-bg)    !important; color: var(--gray-text)    !important; border: 1px solid var(--border-1); }
+        .badge.bg-dark      { background-color: #F2F3F5 !important; color: #272E3B !important; border: 1px solid var(--border-1); }
+        .badge.bg-light     { border: 1px solid var(--border-1) !important; }
+        .badge[style*="background"] { color: #fff; border: none; }  /* 班次自定义颜色标签，强制白字保证对比度 */
+
+        /* ── 按钮 ─────────────────────────────────────────────────────────────
+           之前只有 primary 系列跟着设计令牌走，success/danger/warning/info/secondary/dark
+           这些按钮全是 Bootstrap 原生色，和同语义的柔和徽章（.badge.bg-*）颜色对不上，
+           整个系统里“按钮”和“标签”看起来像两套配色。这里把全部按钮变体统一接到同一套色板，
+           并给主要操作加一点悬浮反馈，让点击感更跟手。 ────────────────────────────── */
+        .btn {
+            border-radius: var(--radius-sm); font-weight: 500;
+            transition: background-color .15s, border-color .15s, color .15s, box-shadow .15s, transform .1s;
+        }
+        .btn-sm { font-size: .8rem; }
+        .btn-lg { border-radius: var(--radius-md); font-weight: 600; }
+
+        .btn-primary   { background: var(--brand);   border-color: var(--brand); }
+        .btn-primary:hover, .btn-primary:focus     { background: var(--brand-dark);  border-color: var(--brand-dark); }
+        .btn-success   { background: var(--success); border-color: var(--success); }
+        .btn-success:hover, .btn-success:focus     { background: var(--success-text); border-color: var(--success-text); }
+        .btn-danger    { background: var(--danger);  border-color: var(--danger); }
+        .btn-danger:hover, .btn-danger:focus       { background: var(--danger-text);  border-color: var(--danger-text); }
+        .btn-warning   { background: var(--warning); border-color: var(--warning); color: #fff; }
+        .btn-warning:hover, .btn-warning:focus     { background: var(--warning-text); border-color: var(--warning-text); color: #fff; }
+        .btn-info      { background: var(--info);    border-color: var(--info); color: #fff; }
+        .btn-info:hover, .btn-info:focus           { background: var(--info-text);    border-color: var(--info-text);    color: #fff; }
+        .btn-secondary { background: var(--gray-text); border-color: var(--gray-text); }
+        .btn-secondary:hover, .btn-secondary:focus { background: var(--text-2);        border-color: var(--text-2); }
+
+        .btn-outline-primary   { color: var(--brand);        border-color: var(--brand); }
+        .btn-outline-primary:hover   { background: var(--brand);   border-color: var(--brand); }
+        .btn-outline-success   { color: var(--success-text); border-color: var(--success); }
+        .btn-outline-success:hover   { background: var(--success); border-color: var(--success); color: #fff; }
+        .btn-outline-danger    { color: var(--danger-text);  border-color: var(--danger); }
+        .btn-outline-danger:hover    { background: var(--danger);  border-color: var(--danger);  color: #fff; }
+        .btn-outline-warning   { color: var(--warning-text); border-color: var(--warning); }
+        .btn-outline-warning:hover   { background: var(--warning); border-color: var(--warning); color: #fff; }
+        .btn-outline-info      { color: var(--info-text);    border-color: var(--info); }
+        .btn-outline-info:hover      { background: var(--info);    border-color: var(--info);    color: #fff; }
+        .btn-outline-secondary { color: var(--gray-text); border-color: var(--border-1); }
+        .btn-outline-secondary:hover { background: var(--gray-bg); border-color: var(--text-4);  color: var(--text-2); }
+        .btn-outline-dark      { color: var(--text-1); border-color: var(--border-1); }
+        .btn-outline-dark:hover      { background: var(--text-1); border-color: var(--text-1);   color: #fff; }
+        .btn-outline-light      { color: #fff; border-color: rgba(255,255,255,.35); }
+        .btn-outline-light:hover      { background: rgba(255,255,255,.15); border-color: rgba(255,255,255,.5); color: #fff; }
+        .btn-link { color: var(--brand); }
+        .btn-link:hover { color: var(--brand-dark); }
+
+        /* 主要操作（新增/确认/危险类）悬浮时轻轻上浮 + 加阴影，和日历格子等交互元素的手感保持一致 */
+        .btn-primary:not(:disabled):hover, .btn-success:not(:disabled):hover, .btn-danger:not(:disabled):hover {
+            transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16,24,40,.14);
+        }
+        .btn:disabled, .btn.disabled { transform: none; box-shadow: none; }
+
+        /* ── 表单 ─────────────────────────────────────────────────────── */
+        .form-control, .form-select { border-color: var(--border-1); border-radius: var(--radius-sm); font-size: .875rem; }
+        .form-control:focus, .form-select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(20,86,204,.12); }
+        .form-label { font-weight: 500; font-size: .8125rem; color: var(--text-2); }
+        .form-check-input:checked { background-color: var(--brand); border-color: var(--brand); }
+        .form-check-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(20,86,204,.12); }
+        .input-group-text { background: var(--bg-page); border-color: var(--border-1); color: var(--text-3); }
+
+        /* ── 弹窗 / 提示 ──────────────────────────────────────────────── */
+        .modal-content { border: none; border-radius: var(--radius-lg); box-shadow: 0 16px 48px rgba(16,24,40,.18); }
+        .modal-header { border-bottom: 1px solid var(--border-2); padding: 1rem 1.25rem; }
+        .modal-header .modal-title { font-weight: 600; font-size: 1.05rem; color: var(--text-1); }
+        .modal-footer { border-top: 1px solid var(--border-2); padding: .85rem 1.25rem; }
+        .alert { border: none; border-radius: var(--radius-md); font-size: .875rem; }
+        .alert-success { background: var(--success-bg); color: var(--success-text); }
+        .alert-danger  { background: var(--danger-bg);  color: var(--danger-text); }
+        .alert-warning { background: var(--warning-bg); color: var(--warning-text); }
+        .alert-info    { background: var(--info-bg);    color: var(--info-text); }
+
+        /* ── 空状态：统一各列表页"暂无数据/暂无记录"这类占位提示的样式──────────
+           之前有的页面只是一行灰字，有的页面自己加了个图标，图标大小、间距还都不一样，
+           看起来像好几套风格。现在统一成"图标 + 文字"，全站列表页都是同一个观感。 ── */
+        .empty-state { padding: 2.75rem 1rem; color: var(--text-3); text-align: center; }
+        .empty-state i { font-size: 2.25rem; display: block; margin-bottom: .5rem; color: var(--text-4); }
+
+        /* ── 分页 ─────────────────────────────────────────────────────── */
+        .pagination .page-link { border: none; color: var(--text-2); border-radius: var(--radius-sm); margin: 0 2px; font-size: .875rem; }
+        .pagination .page-item.active .page-link { background: var(--brand); color: #fff; }
+        .pagination .page-item.disabled .page-link { color: var(--text-4); background: transparent; }
+    </style>
+    @await RenderSectionAsync("Styles", required: false)
+</head>
+<body>
+@{
+    var currentUser = Context.Items["CurrentUser"] as AttendanceSystem.Middlewares.CurrentUser;
+    bool isAuth = User.Identity?.IsAuthenticated == true;
+    string currentPath = Context.Request.Path.Value ?? "";
+}
+@if (isAuth && currentUser != null)
+{
+    <div class="d-flex">
+        <nav class="sidebar d-flex flex-column">
+            <div class="sidebar-brand">
+                <img src="~/img/logo.png" alt="科瑞技术" class="sidebar-logo" />
+                <div class="kr-sub text-center mt-2" style="color:rgba(255,255,255,.6)">考勤管理系统</div>
+            </div>
+            <ul class="nav flex-column px-2 py-2 gap-1 flex-grow-1">
+                <li><span class="nav-section">考勤</span></li>
+                <li>
+                    <a class="nav-link @(currentPath.StartsWith("/Attendance/PunchCard") ? "active" : "")"
+                       href="/Attendance/PunchCard">
+                        <i class="bi bi-clock-history"></i>我的打卡
+                    </a>
+                </li>
+                <li>
+                    <a class="nav-link @(currentPath.StartsWith("/Attendance/MyRecord") ? "active" : "")"
+                       href="/Attendance/MyRecord">
+                        <i class="bi bi-journal-text"></i>我的记录
+                    </a>
+                </li>
+                <li>
+                    <a class="nav-link @(currentPath.StartsWith("/Attendance/MyCalendar") ? "active" : "")"
+                       href="/Attendance/MyCalendar">
+                        <i class="bi bi-calendar3"></i>我的考勤日历
+                    </a>
+                </li>
+
+                <li><span class="nav-section">申请</span></li>
+                <li>
+                    <a class="nav-link @(currentPath.StartsWith("/Approval/ApplySubmit") ? "active" : "")"
+                       href="/Approval/ApplySubmit">
+                        <i class="bi bi-file-earmark-plus"></i>提交申请
+                    </a>
+                </li>
+                @if (currentUser.CanApprove)
+                {
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Approval/PendingApproval") ? "active" : "")"
+                           href="/Approval/PendingApproval">
+                            <i class="bi bi-check2-circle"></i>待我审批
+                        </a>
+                    </li>
+                }
+
+                @if (currentUser.IsAdmin || currentUser.IsClerk)
+                {
+                    <li><span class="nav-section">管理</span></li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/Dashboard") ? "active" : "")"
+                           href="/Admin/Dashboard">
+                            <i class="bi bi-speedometer2"></i>数据看板
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Report/MonthlyReport") ? "active" : "")"
+                           href="/Report/MonthlyReport">
+                            <i class="bi bi-file-earmark-bar-graph"></i>月度报表
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/UserManage") ? "active" : "")"
+                           href="/Admin/UserManage">
+                            <i class="bi bi-people"></i>员工管理
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/DepartmentManage") ? "active" : "")"
+                           href="/Admin/DepartmentManage">
+                            <i class="bi bi-diagram-3"></i>部门管理
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/ShiftManage") ? "active" : "")"
+                           href="/Admin/ShiftManage">
+                            <i class="bi bi-calendar3"></i>班值排班
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/GroupManage") ? "active" : "")"
+                           href="/Admin/GroupManage">
+                            <i class="bi bi-building"></i>考勤组管理
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/HolidayManage") ? "active" : "")"
+                           href="/Admin/HolidayManage">
+                            <i class="bi bi-calendar-x"></i>假期设置
+                        </a>
+                    </li>
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/ApprovalFlowManage") ? "active" : "")"
+                           href="/Admin/ApprovalFlowManage">
+                            <i class="bi bi-diagram-3"></i>审批流程
+                        </a>
+                    </li>
+                }
+            </ul>
+            <div class="sidebar-user">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <div class="avatar-chip avatar-chip-dark">@(string.IsNullOrEmpty(currentUser.RealName) ? "?" : currentUser.RealName[..1])</div>
+                    <div class="flex-grow-1" style="min-width:0">
+                        <div class="text-white fw-semibold small text-truncate">@currentUser.RealName</div>
+                        <small class="text-truncate d-block">@currentUser.EmployeeNo</small>
+                    </div>
+                </div>
+                <div class="d-flex gap-1">
+                    <a href="/Account/ChangePassword" class="btn btn-outline-light btn-sm flex-fill">
+                        <i class="bi bi-key me-1"></i>改密码
+                    </a>
+                    <a href="/Logout" class="btn btn-outline-light btn-sm flex-fill">
+                        <i class="bi bi-box-arrow-left me-1"></i>退出
+                    </a>
+                </div>
+            </div>
+        </nav>
+        <div class="d-flex flex-column flex-grow-1" style="min-width:0">
+            <!-- topbar with brand + notification bell -->
+            <div class="topbar">
+                <div class="d-flex align-items-center gap-2">
+                    <img src="~/img/logo.png" alt="科瑞技术" class="topbar-logo" />
+                    <span class="text-muted small d-none d-md-inline">考勤管理系统</span>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="notif-bell" id="notifBell" onclick="toggleNotifDropdown()">
+                        <i class="bi bi-bell"></i>
+                        <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+                        <div class="notif-dropdown" id="notifDropdown">
+                            <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom">
+                                <span class="fw-semibold">通知</span>
+                                <button class="btn btn-link btn-sm p-0 text-decoration-none" onclick="markAllRead(event)">全部已读</button>
+                            </div>
+                            <div id="notifList" style="max-height:320px;overflow-y:auto">
+                                <div class="text-center text-muted py-3 small">暂无未读通知</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="avatar-chip">@(string.IsNullOrEmpty(currentUser.RealName) ? "?" : currentUser.RealName[..1])</div>
+                        <span class="text-muted small d-none d-sm-inline">@currentUser.RealName</span>
+                    </div>
+                </div>
+            </div>
+            <main class="main-content">
+                @RenderBody()
+            </main>
+            <footer class="app-footer">© @DateTime.Now.Year 科瑞技术 · 考勤管理系统</footer>
+        </div>
+    </div>
+
+    <script>
+    // ── 右上角"小铃铛"通知功能 ───────────────────────────────────────────────
+    // notifOpen 记录通知下拉框现在是"打开"还是"关闭"，点一下铃铛就反过来切换一次
+    let notifOpen = false;
+
+    // 点铃铛：切换下拉框的开关状态；打开的时候顺便去后台拉一次最新通知
+    function toggleNotifDropdown() {
+        notifOpen = !notifOpen;
+        document.getElementById('notifDropdown').classList.toggle('show', notifOpen);
+        if (notifOpen) loadNotifications();
+    }
+
+    // 监听整个页面的点击：只要点的地方不在铃铛/下拉框范围内，就把下拉框关掉。
+    // 这样实现"点击外面自动收起"的效果，不用给每个别的元素单独绑定事件。
+    document.addEventListener('click', e => {
+        if (!document.getElementById('notifBell').contains(e.target)) {
+            notifOpen = false;
+            document.getElementById('notifDropdown').classList.remove('show');
+        }
+    });
+
+    // 向后台要"我的未读通知"列表，拿到后拼成 HTML 显示在下拉框里，
+    // 并且把铃铛右上角的数字气泡（badge）更新成未读条数
+    async function loadNotifications() {
+        try {
+            const r = await fetch('/api/notifications');
+            const data = await r.json();
+            const badge = document.getElementById('notifBadge');
+            const list  = document.getElementById('notifList');
+
+            badge.textContent = data.count > 99 ? '99+' : data.count;       // 超过99条就显示"99+"，不然数字太长挤不下
+            badge.style.display = data.count > 0 ? 'flex' : 'none';         // 没有未读就把这个红色气泡隐藏掉
+
+            if (data.items.length === 0) {
+                list.innerHTML = '<div class="text-center text-muted py-3 small">暂无未读通知</div>';
+                return;
+            }
+
+            // 把每条通知拼成一小块 HTML（标题+时间+内容），点击后调用 readNotif 标记已读
+            list.innerHTML = data.items.map(n => `
+                <div class="notif-item unread" onclick="readNotif(${n.id}, '${n.notificationType}', ${n.relatedId})">
+                    <div class="d-flex justify-content-between">
+                        <div class="notif-title">${n.title}</div>
+                        <div class="notif-time">${n.createdAt}</div>
+                    </div>
+                    <div class="notif-content">${n.content}</div>
+                </div>`).join('');
+        } catch (e) { console.error(e); }
+    }
+
+    // 点某一条通知：先告诉后台"这条我看过了"（标记已读），
+    // 如果是"审批相关"的通知就直接带去待审批页面，方便马上处理；不然就只是刷新一下通知列表
+    async function readNotif(id, type, relatedId) {
+        await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
+        if (type === 'ApprovalPending' || type === 'ApprovalResult')
+            location.href = '/Approval/PendingApproval';
+        else
+            loadNotifications();
+    }
+
+    // "全部已读"按钮：把所有未读通知一次性标记成已读
+    // e.stopPropagation() 是为了防止这次点击又被上面"点击空白处关闭下拉框"的监听逻辑抢先处理掉
+    async function markAllRead(e) {
+        e.stopPropagation();
+        await fetch('/api/notifications/read-all', { method: 'POST' });
+        loadNotifications();
+    }
+
+    // 页面一打开就先拉一次通知；之后每隔 60 秒自动再拉一次，
+    // 这样即使用户一直不点铃铛，未读数字气泡也能及时更新，不用手动刷新页面
+    loadNotifications();
+    setInterval(loadNotifications, 60000);
+    </script>
+}
+else
+{
+    @RenderBody()
+}
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+@if (ViewData["AutoRefresh"] is int refreshSeconds && refreshSeconds > 0)
+{
+    <text>
+    <script>
+    // 定时自动刷新当前页以获取最新数据；打开弹窗或正在输入时自动暂停，避免打断操作
+    (function () {
+        const intervalSec = @refreshSeconds;
+        setInterval(function () {
+            if (document.querySelector('.modal.show')) return;
+            const ae = document.activeElement;
+            if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
+            location.reload();
+        }, intervalSec * 1000);
+    })();
+    </script>
+    </text>
+}
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

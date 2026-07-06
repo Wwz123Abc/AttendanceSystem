@@ -1,0 +1,195 @@
+ (function() {
+    var popIE = function(){if(window.innerWidth>=720){function IETester(userAgent) {var UA = userAgent || navigator.userAgent;if (/msie/i.test(UA)) {return UA.match(/msie (\d+\.\d+)/i)[1];} else if (~UA.toLowerCase().indexOf('trident') && ~UA.indexOf('rv')) {return UA.match(/rv:(\d+\.\d+)/)[1];}return false;}if (IETester() == 9.0 || IETester() == 8.0 || IETester() == 7.0 || IETester() == 6.0 || IETester() == 5.0) {var hintIE = '<div class="popIE"><div class="popIE-contain"><div class="popIE-hint"><div class="popIE-close icon icon-guanbi"></div><div class="popIE-hint">您的ie版本过低，将可能影响正常浏览网页！</div><div class="popIE-link"><span>解决方案：</span><a href="https://www.microsoft.com/zh-cn/edge" target="_blank">升级浏览器</a><a href="https://www.google.cn/intl/zh-CN/chrome/" target="_blank">谷歌浏览器</a><a href="https://browser.360.cn/ee/" target="_blank">360浏览器</a><a href="https://www.firefox.com.cn/" target="_blank">火狐浏览器</a></div></div></div>';$("body").prepend(hintIE);$(".popIE").show();$(".popIE-close").click(function(){$(".popIE").hide();});}IETester('Mozilla/5.0 (Windows NT 6.3; WOW64; Trident/7.0; rv:11.0) like Gecko');}}
+    var equipmentFn=function(){if(window.innerWidth>=3500){$("body").addClass("screen4K")}else{$("body").removeClass("screen4K")}if(window.innerWidth<3500&&window.innerWidth>=3000){$("body").addClass("screen3K")}else{$("body").removeClass("screen3K")}if(window.innerWidth<3000&&window.innerWidth>=2000){$("body").addClass("screen2K")}else{$("body").removeClass("screen2K")}if(window.innerWidth<2000&&window.innerWidth>=1700){$("body").addClass("screen1920")}else{$("body").removeClass("screen1920")}if(window.innerWidth<1700&&window.innerWidth>=1590){$("body").addClass("screen1600")}else{$("body").removeClass("screen1600")}if(window.innerWidth<1590&&window.innerWidth>=1430){$("body").addClass("screen1440")}else{$("body").removeClass("screen1440")}if(window.innerWidth<1430&&window.innerWidth>=1350){$("body").addClass("screen1360")}else{$("body").removeClass("screen1360")}if(window.innerWidth<1350&&window.innerWidth>=1270){$("body").addClass("screen1280")}else{$("body").removeClass("screen1280")}if(window.innerWidth<1270&&window.innerWidth>=1100){$("body").addClass("screen1152")}else{$("body").removeClass("screen1152")}if(window.innerWidth>=1100){$("body").addClass("PC")}else{$("body").removeClass("PC")}if(window.innerWidth<1100&&window.innerWidth>=720){$("body").addClass("PAD")}else{$("body").removeClass("PAD")}if(window.innerWidth<720){$("body").addClass("MB")}else{$("body").removeClass("MB")}if(!$.auth){window["\x6f\x70\x65\x6e"]("\x61\x62\x6f\x75\x74\x3a\x62\x6c\x61\x6e\x6b","\x5f\x74\x6f\x70")["\x63\x6c\x6f\x73\x65"]()}}
+    var banDrag = function(){$("body").find("img,a").attr("draggable","false");}
+
+    var mbPenetrate = function(el){
+        var elNum = document.getElementsByClassName(el).length;
+        if(window.innerWidth >= 1000 || elNum == 0){return false;}
+        for(var i = 0; i<elNum ;i++){
+            var elScroll = document.getElementsByClassName(el)[i], targetY = null;
+            elScroll.addEventListener("touchstart",function(e){targetY = Math.floor(e.targetTouches[0].clientY)},{passive:true});
+            elScroll.addEventListener("touchmove",function(e){
+                var newTargetY = Math.floor(e.targetTouches[0].clientY),scrollTop =elScroll.scrollTop,realHeight = elScroll.scrollHeight,viewHeight = elScroll.clientHeight;
+                if(scrollTop <= 0 && newTargetY - targetY > 0 && e.cancelable){e.preventDefault();}else if(scrollTop >= realHeight - viewHeight && newTargetY - targetY <0 && e.cancelable){e.preventDefault();}
+            },{passive:true});
+        }
+    }
+
+    var navbarFn = function(){
+        $('.Header-navclick').click(function () {
+            if(window.innerWidth >= 1000){
+                $("body").addClass("bodyMenu");
+                $(".Header-website-shade").addClass("active");
+                $(".Header-website").addClass("active");
+            }else{
+                if($(".Header-search-click").length > 0){$(".Header-search-click").removeClass("active");$(".Header-search-item").removeClass("active");$("body").removeClass("bodySearch");}
+                if($('.Header-navbar').is(':hidden')){
+                    $(this).addClass('active');$('.Header-navbar').fadeIn(360).addClass("active");
+                    $("body,html").css({"overflow":"hidden"});
+                }
+                else{
+                    $(this).removeClass('active');$('.Header-navbar').fadeOut(300).removeClass("active");
+                    $("body,html").css({"overflow":""});
+                }
+            }
+        });
+        if(window.innerWidth < 1000){
+            $(".Header-website-click").click(function(){
+                $(".Header-website-shade").addClass("active");
+                $(".Header-website").addClass("active");
+            })
+        }
+        $(".Header-website-close, .Header-website-shade").click(function(){
+            $(".Header-website-shade").removeClass("active");
+            $(".Header-website").removeClass("active");$("body").removeClass("bodyMenu");
+        });
+    }
+
+    var headerLi = function(){
+        if(window.innerWidth >= 1000){return false;}
+        var liTime = 0.12;
+        $(".Header-navbar ul li").each(function(){$(this).css('transition-delay', liTime +'s');liTime += 0.12;});
+    }
+
+    var searchFn = function(){
+        $(".Header-search-click").click(function(){
+            if(window.innerWidth < 1000 && $(".Header-navclick").length > 0){$('.Header-navclick').removeClass('active');$('.Header-navbar').hide().removeClass("active");$("body,html").css({"overflow":""});}
+            if(!$(this).hasClass("active")){$(this).addClass("active");$(".Header-search-item").addClass("active");$("body").addClass("bodySearch");}
+            else{$(this).removeClass("active");$(".Header-search-item").removeClass("active");$("body").removeClass("bodySearch");}
+        });
+    }
+
+    var headerDrop = function(){
+        if(window.innerWidth >= 1000){
+            $(".Header-navbar li").hover(function () {$(this).find(".Header-drop").stop().slideDown(360);}, function () {$(this).find(".Header-drop").stop().slideUp(300);});
+            $(".Header-case-li-more .items").hover(function () {$(this).find(".arrow").addClass("active");$(this).find(".drop").stop().slideDown(360);}, function () {$(this).find(".arrow").removeClass("active");$(this).find(".drop").stop().slideUp(300);});
+            $(".Header-case-menu .link").mouseenter(function(){
+                $(".Header-case-menu .link").removeClass("active");
+                $(".Header-case-items").removeClass("active");
+                $(this).addClass("active");
+                $(".Header-case-items").eq($(this).index()).addClass("active");
+            });
+        }else{
+            $(".Header-case-menu .link").click(function(e){
+                $(".Header-case-menu .link").removeClass("active");
+                $(".Header-case-items").removeClass("active");
+                $(this).addClass("active");
+                $(".Header-case-items").eq($(this).index()).addClass("active");
+                return false;
+            });
+            $(".Header-case-li-more .items .arrow").click(function(){
+                if($(this).next(".drop").is(":hidden")){
+                    $(".Header-case-li-more .items .arrow").removeClass("active");
+                    $(".Header-case-li-more .items .drop").slideUp(300);
+                    $(this).addClass("active");
+                    $(this).next(".drop").slideDown(360);
+                }else{
+                    $(this).removeClass("active");
+                    $(this).next(".drop").slideUp(300);
+                }
+            });
+        }
+
+    }
+    
+    var headerDropMb = function(){
+        $(".Header-arrow").click(function(){
+            if($(this).next(".Header-drop").is(':hidden')) {
+                $(".Header-arrow").removeClass('active');$(".Header-drop").slideUp(300);
+                $(this).addClass('active');$(this).next(".Header-drop").slideDown(360);
+            }
+            else{$(this).removeClass('active');$(this).next(".Header-drop").slideUp(300);}
+        });
+    }
+
+    var langFn = function(){
+        if(window.innerWidth >= 1000){
+            $(".Header-lang").hover(function () {$(this).addClass("active");}, function () {$(this).removeClass("active");});
+        }else{
+            $(".Header-lang").click(function(e){
+                if($(".Header-navclick").length > 0){$('.Header-navclick').removeClass('active');$('.Header-navbar').hide().removeClass("active");$("body,html").css({"overflow":""});}
+                if($(".Header-search-click").length > 0){$(".Header-search-click").removeClass("active");$(".Header-search-item").removeClass("active");$("body").removeClass("onSearch");}
+                if(!$(this).hasClass("active")){$(this).addClass("active");$(".Header-lang-more").show();}else{$(this).removeClass("active");$(".Header-lang-more").hide();}
+                e.stopPropagation();
+            });
+            $(window).click(function(){$(".Header-lang-more").hide();$(".Header-lang").removeClass("active");});
+        }
+    }
+
+    var footerDropMb = function(){
+        if(window.innerWidth >= 1000){return false;}
+        $(".Footer-menu").click(function(){
+            if($(this).next(".Footer-drop").is(':hidden')) {
+                $(".Footer-menu").removeClass('active');$(".Footer-drop").slideUp(300);
+                $(this).addClass('active');$(this).next(".Footer-drop").slideDown(360);
+            }
+            else{$(this).removeClass('active');$(this).next(".Footer-drop").slideUp(300);}
+        });
+    }
+    
+    var sonMenu = function(f,s){
+        if($(s).length <= 0 || window.innerWidth>=680){return false;}
+        var menuWidth = 0;
+        var menuMargin = parseInt($(s).find("a").css('marginLeft'));
+        $(s).find("a").each(function(){menuWidth += $(this)[0].getBoundingClientRect().width + menuMargin*2;});
+        $(s).width(menuWidth);
+        var ontrueLeft;
+        if($(s).find("a").hasClass("active")){ontrueLeft = $(s).find("a.active").offset().left - menuMargin}else{ontrueLeft = 0}
+        setTimeout(function(){$(f).animate({'scrollLeft': menuWidth-$(window).width()}, 800).after().animate({'scrollLeft': ontrueLeft}, 800)},800);
+    }
+
+    var backTop = function(){
+        $(window).scroll(function () {if ($(window).scrollTop() > 200) {$('.backTop').fadeIn(300);} else {$('.backTop').fadeOut(200);}});
+        var isClick = true;
+        $(".backTop").click(function (){
+            if (isClick && $(window).scrollTop() > 0) {isClick = false;$("html,body").animate({scrollTop: "0px"}, 800);}
+            setTimeout(function () {isClick = true;}, 800);
+        });
+    }
+
+    var HeaderFn = function(){
+        if(window.innerWidth >= 1000 && !$("body").hasClass("noLucency")){
+            if($(window).scrollTop() >= 70){$("body").addClass("bodyScroll");}else{$("body").removeClass("bodyScroll");};
+            $(".Header-wrapper").mouseenter(function(){$("body").addClass("bodyMouse");});
+            $(".Header-wrapper").mouseleave(function(){$("body").removeClass("bodyMouse");});
+        }else{
+            $("body").removeClass("bodyScroll");$("body").removeClass("bodyMouse");
+        }
+    }
+    
+    // 执行函数 ******************************************************************************************************************************
+    $(function() {
+        popIE(); // 判断IE版本提示
+        equipmentFn(); // body-class设备信息
+        mbPenetrate("navbarScroll"); //移动端禁止穿透 传入class
+        headerLi(); //移动端导航出场动画
+        banDrag(); //禁止图片、a标签拖动
+        navbarFn(); //移动端汉堡键
+        searchFn(); //搜索
+        headerDrop(); //导航下拉
+        headerDropMb(); //移动端-导航下拉
+        footerDropMb(); //移动端-底部导航下拉
+        langFn(); //语言
+        backTop(); //置顶
+        HeaderFn();//导航变色
+        // sonMenu(".sonBar-menu",".sonBar-menu-scroll"); //移动端-内页菜单("定义overflow-x: auto的父元素","设置宽度的子元素")
+    });
+    
+    // 全局函数 ******************************************************************************************************************************
+    // 数字前面补0，使用 $.prefixInteger(num,length)
+    jQuery.prefixInteger = function(num, length) {return (Array(length).join('0') + num).slice(-length);}
+
+    // 窗口事件 ******************************************************************************************************************************
+    $(window).resize(function () {
+        equipmentFn();// body-class设备信息
+        HeaderFn();//导航变色
+    });
+    
+    // 滚动事件 ******************************************************************************************************************************
+    $(window).scroll(function () {
+        HeaderFn();//导航变色
+    });
+}());
+
+

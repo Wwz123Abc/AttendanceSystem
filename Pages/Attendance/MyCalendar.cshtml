@@ -1,0 +1,282 @@
+@page
+@model AttendanceSystem.Pages.Attendance.MyCalendarModel
+@{
+    ViewData["Title"] = "我的考勤日历";
+
+    // 上一月 / 下一月 / 回到本月 的年月
+    var cur      = new DateOnly(Model.Year, Model.Month, 1);
+    var prev     = cur.AddMonths(-1);
+    var next     = cur.AddMonths(1);
+    var today    = DateOnly.FromDateTime(DateTime.Today);
+    var isThisMo = Model.Year == today.Year && Model.Month == today.Month;
+
+    // 按颜色分桶：正常/异常/休假类/无数据（占位空格 or 还没到的日期）
+    string DayBucket(AttendanceSystem.Models.Enums.AttendanceStatus? status) => status switch
+    {
+        null => "empty",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Normal        => "green",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Overtime      => "green",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Late          => "red",
+        AttendanceSystem.Models.Enums.AttendanceStatus.EarlyLeave    => "red",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Absent        => "red",
+        AttendanceSystem.Models.Enums.AttendanceStatus.NotPunched    => "red",
+        AttendanceSystem.Models.Enums.AttendanceStatus.OnLeave       => "blue",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Holiday       => "blue",
+        AttendanceSystem.Models.Enums.AttendanceStatus.BusinessTrip  => "blue",
+        _ => "empty"
+    };
+
+    // 没有考勤记录的那天，是不是“非工作日”（周末 / 法定节假日 / 公司休息日）：调班补班日要上班，不算。
+    // 有这个标记的天，日历上会灰色显示并标出原因（比如“国庆节”“周末”），不再和“还没到的日子”一样是一片空白。
+    bool IsRestDay(MyCalendarModel.CalendarCell cell)
+        => cell.Holiday is { Type: not AttendanceSystem.Models.Enums.HolidayType.CompensatoryWorkDay }
+           || (cell.Holiday is null && cell.Date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday);
+
+    // 非工作日显示的原因文字：优先用假期名称，普通周末就显示“周末”
+    string RestDayLabel(MyCalendarModel.CalendarCell cell)
+        => cell.Holiday?.Name ?? "周末";
+
+    // 把日历数据打包成 JS 能读的字典，key=日期文字，点某一天时直接从这里取详情，不用再发请求
+    var detailsJson = System.Text.Json.JsonSerializer.Serialize(
+        Model.Cells.Where(c => c != null).ToDictionary(
+            c => c!.Date.ToString("yyyy-MM-dd"),
+            c => new
+            {
+                dateText   = c!.Date.ToString("yyyy-MM-dd"),
+                bucket     = DayBucket(c.Record?.AttendanceStatus),
+                // 没打卡记录、又是休息日（周末/节假日）时，哪怕当天挂着一条排班，也优先说明“为什么这天没数据”，
+                // 而不是显示一个容易让人误以为“这天要上班”的排班名
+                statusText = c.Record?.StatusText ?? (IsRestDay(c) ? RestDayLabel(c) : (c.Shift != null ? "有排班" : "无记录")),
+                clockIn    = c.Record?.ClockInText ?? "--",
+                clockOut   = c.Record?.ClockOutText ?? "--",
+                hours      = c.Record != null ? c.Record.ActualWorkHours.ToString("F1") : "--",
+                overtime   = c.Record != null && c.Record.OvertimeHours > 0 ? c.Record.OvertimeHours.ToString("F1") : "",
+                late       = c.Record != null && c.Record.LateMinutes > 0 ? c.Record.LateMinutes.ToString() : "",
+                early      = c.Record != null && c.Record.EarlyLeaveMinutes > 0 ? c.Record.EarlyLeaveMinutes.ToString() : "",
+                note       = c.Record?.ApprovalNote ?? "",
+                shiftName  = c.Shift?.ShiftName ?? "",
+                shiftTime  = c.Shift != null ? $"{c.Shift.WorkStartText} ~ {c.Shift.WorkEndText}" : "",
+                hasData    = c.Record != null || (c.Shift != null && !IsRestDay(c))
+            }));
+}
+
+<style>
+    .cal-table { width: 100%; border-collapse: separate; border-spacing: 6px; table-layout: fixed; }
+    .cal-table th { color: var(--text-3); font-size: .8rem; font-weight: 600; padding-bottom: 4px; text-align: center; }
+    .cal-cell {
+        height: 76px; border-radius: var(--radius-md); border: 1px solid var(--border-2);
+        padding: .4rem .5rem; vertical-align: top; background: #fff; transition: box-shadow .12s, transform .12s;
+    }
+    .cal-cell.has-data { cursor: pointer; }
+    .cal-cell.has-data:hover { box-shadow: var(--shadow-pop); transform: translateY(-1px); }
+    .cal-cell.blank { background: transparent; border: none; }
+    .cal-cell.green  { background: var(--success-bg); border-color: rgba(0,168,84,.25); }
+    .cal-cell.red    { background: var(--danger-bg);  border-color: rgba(245,34,45,.2); }
+    .cal-cell.blue   { background: var(--info-bg);    border-color: rgba(52,145,250,.22); }
+    .cal-cell.gray   { background: var(--gray-bg);    border-color: var(--border-1); }
+    .cal-cell .cal-daynum { font-weight: 700; font-size: .95rem; color: var(--text-1); }
+    .cal-cell.today .cal-daynum {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: #fff; font-size: .8rem;
+    }
+    .cal-cell .cal-status { font-size: .72rem; margin-top: 2px; }
+    .cal-cell.green .cal-status { color: var(--success-text); }
+    .cal-cell.red   .cal-status { color: var(--danger-text); }
+    .cal-cell.blue  .cal-status { color: var(--info-text); }
+    .cal-cell.gray  .cal-status { color: var(--gray-text); }
+    .cal-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+    .cal-jump select { padding-top: .15rem; padding-bottom: .15rem; }
+</style>
+
+<div class="page-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <h4><i class="bi bi-calendar3 me-2 text-primary"></i>我的考勤日历</h4>
+    <div class="d-flex align-items-center gap-3">
+        <div class="d-flex align-items-center gap-1">
+            <span class="cal-legend-dot" style="background:var(--success-text)"></span><small class="text-muted me-2">正常</small>
+            <span class="cal-legend-dot" style="background:var(--danger-text)"></span><small class="text-muted me-2">异常</small>
+            <span class="cal-legend-dot" style="background:var(--info-text)"></span><small class="text-muted me-2">休假/出差</small>
+            <span class="cal-legend-dot" style="background:var(--gray-text)"></span><small class="text-muted">周末/节假日</small>
+        </div>
+    </div>
+</div>
+
+@if (Model.Summary is { } s)
+{
+    <!-- 本月概况：一眼看出这个月出勤情况，不用再切去"我的记录"页 -->
+    <div class="row g-2 mb-3">
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-2 stat-card border-start-success">
+                <div class="fw-bold text-success">@s.ActualWorkdays<small class="text-muted">/@s.ExpectedWorkdays</small></div>
+                <div class="text-muted small">实到/应到</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-2 stat-card border-start-warning">
+                <div class="fw-bold text-warning">@s.LateCount</div>
+                <div class="text-muted small">迟到次数</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-2 stat-card border-start-danger">
+                <div class="fw-bold text-danger">@s.AbsentDays</div>
+                <div class="text-muted small">旷工天数</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-2 stat-card border-start-info">
+                <div class="fw-bold text-info">@s.LeaveDays.ToString("0.#")</div>
+                <div class="text-muted small">请假天数</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-2 stat-card border-start-primary">
+                <div class="fw-bold text-primary">@s.TotalWorkHours.ToString("F1")</div>
+                <div class="text-muted small">总工时(h)</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-2">
+                <div class="fw-bold">@s.TotalOvertimeHours.ToString("F1")</div>
+                <div class="text-muted small">加班(h)</div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <a href="?year=@prev.Year&month=@prev.Month" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-chevron-left"></i> 上月
+        </a>
+        <div class="d-flex align-items-center gap-2">
+            <form method="get" class="d-flex align-items-center gap-1 cal-jump">
+                <select name="year" class="form-select form-select-sm" style="width:90px" onchange="this.form.submit()">
+                    @for (int y = today.Year; y >= today.Year - 2; y--)
+                    {
+                        <option value="@y" selected="@(y == Model.Year)">@y 年</option>
+                    }
+                </select>
+                <select name="month" class="form-select form-select-sm" style="width:78px" onchange="this.form.submit()">
+                    @for (int m = 1; m <= 12; m++)
+                    {
+                        <option value="@m" selected="@(m == Model.Month)">@m 月</option>
+                    }
+                </select>
+            </form>
+            @if (!isThisMo)
+            {
+                <a href="?year=@today.Year&month=@today.Month" class="btn btn-outline-primary btn-sm py-0 px-2">回到本月</a>
+            }
+        </div>
+        <a href="?year=@next.Year&month=@next.Month" class="btn btn-outline-secondary btn-sm">
+            下月 <i class="bi bi-chevron-right"></i>
+        </a>
+    </div>
+    <div class="card-body">
+        <table class="cal-table">
+            <thead>
+                <tr>
+                    <th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th><th>日</th>
+                </tr>
+            </thead>
+            <tbody>
+                @{
+                    var weeks = Model.Cells
+                        .Select((cell, idx) => new { cell, idx })
+                        .GroupBy(x => x.idx / 7)
+                        .Select(g => g.Select(x => x.cell).ToList())
+                        .ToList();
+                }
+                @foreach (var week in weeks)
+                {
+                    <tr>
+                        @foreach (var cell in week)
+                        {
+                            if (cell is null)
+                            {
+                                <td class="cal-cell blank"></td>
+                            }
+                            else
+                            {
+                                // 没打卡记录、又是休息日（周末/节假日）→ 灰色标注原因；哪怕当天挂着排班也不例外
+                                // （避免一条误挂在假期上的排班，让人误以为节假日这天要上班）
+                                var isRest   = cell.Record is null && IsRestDay(cell);
+                                var hasData  = cell.Record != null || (cell.Shift != null && !isRest);
+                                var bucket   = cell.Record != null ? DayBucket(cell.Record.AttendanceStatus) : (isRest ? "gray" : "empty");
+                                var isToday  = cell.Date == today;
+                                var cellClass = $"cal-cell {bucket} {(hasData ? "has-data" : "")} {(isToday ? "today" : "")}";
+                                if (hasData)
+                                {
+                                    <td class="@cellClass" onclick="showDay('@cell.Date.ToString("yyyy-MM-dd")')">
+                                        <div class="cal-daynum">@cell.Date.Day</div>
+                                        @if (cell.Record != null)
+                                        {
+                                            <div class="cal-status">@cell.Record.StatusText</div>
+                                        }
+                                        else if (cell.Shift != null)
+                                        {
+                                            <div class="cal-status text-muted">@cell.Shift.ShiftName</div>
+                                        }
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td class="@cellClass">
+                                        <div class="cal-daynum">@cell.Date.Day</div>
+                                        @if (isRest)
+                                        {
+                                            <div class="cal-status">@RestDayLabel(cell)</div>
+                                        }
+                                    </td>
+                                }
+                            }
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 某天详情 Modal -->
+<div class="modal fade" id="dayModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dayModalTitle">考勤明细</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="dayModalBody"></div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+const CALENDAR_DETAILS = @Html.Raw(detailsJson);
+const dayModal = new bootstrap.Modal(document.getElementById('dayModal'));
+
+function showDay(dateStr) {
+    const d = CALENDAR_DETAILS[dateStr];
+    if (!d) return;
+
+    document.getElementById('dayModalTitle').textContent = dateStr + ' 考勤明细';
+
+    let rows = `
+        <dt class="col-4">考勤状态</dt><dd class="col-8">${d.statusText}</dd>
+        <dt class="col-4">上班打卡</dt><dd class="col-8">${d.clockIn}</dd>
+        <dt class="col-4">下班打卡</dt><dd class="col-8">${d.clockOut}</dd>
+        <dt class="col-4">实际工时</dt><dd class="col-8">${d.hours === '--' ? '--' : d.hours + ' 小时'}</dd>`;
+
+    if (d.overtime) rows += `<dt class="col-4">加班时长</dt><dd class="col-8">${d.overtime} 小时</dd>`;
+    if (d.late)     rows += `<dt class="col-4">迟到</dt><dd class="col-8 text-danger">${d.late} 分钟</dd>`;
+    if (d.early)     rows += `<dt class="col-4">早退</dt><dd class="col-8 text-danger">${d.early} 分钟</dd>`;
+    if (d.shiftName) rows += `
+        <dt class="col-4">当天排班</dt><dd class="col-8">${d.shiftName}（${d.shiftTime}）</dd>`;
+    if (d.note) rows += `<dt class="col-4">备注</dt><dd class="col-8 text-muted">${d.note}</dd>`;
+
+    document.getElementById('dayModalBody').innerHTML = `<dl class="row mb-0">${rows}</dl>`;
+    dayModal.show();
+}
+</script>
+}

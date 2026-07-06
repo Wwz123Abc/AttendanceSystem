@@ -1,0 +1,240 @@
+@page
+@model AttendanceSystem.Pages.Admin.DashboardModel
+@{
+    ViewData["Title"] = "数据看板";
+    ViewData["AutoRefresh"] = 30;   // 每 30 秒自动刷新今日实时统计
+    var s = Model.Stats;
+}
+
+<style>
+    .stat-card-click { cursor: pointer; transition: box-shadow .15s, transform .15s; }
+    .stat-card-click:hover { box-shadow: var(--shadow-pop); transform: translateY(-2px); }
+    .stat-icon {
+        width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center; font-size: 1.05rem;
+    }
+    .stat-icon-primary   { background: var(--brand-light); color: var(--brand); }
+    .stat-icon-success   { background: var(--success-bg);  color: var(--success-text); }
+    .stat-icon-danger    { background: var(--danger-bg);   color: var(--danger-text); }
+    .stat-icon-warning   { background: var(--warning-bg);  color: var(--warning-text); }
+    .stat-icon-info      { background: var(--info-bg);     color: var(--info-text); }
+    .stat-icon-secondary { background: var(--gray-bg);     color: var(--gray-text); }
+    .quick-nav-item {
+        display: flex; align-items: center; gap: .75rem; padding: .7rem .85rem;
+        border-radius: var(--radius-md); border: 1px solid var(--border-2); color: var(--text-1);
+        text-decoration: none; transition: background .15s, border-color .15s;
+    }
+    .quick-nav-item:hover { background: var(--brand-lighter); border-color: var(--brand-light); color: var(--text-1); }
+    .quick-nav-item .stat-icon { width: 34px; height: 34px; font-size: .95rem; }
+    .quick-nav-item .qn-label { font-size: .875rem; font-weight: 500; flex: 1; }
+    .quick-nav-item .bi-chevron-right { color: var(--text-4); }
+</style>
+
+<div class="page-header">
+    <h4><i class="bi bi-speedometer2 me-2 text-primary"></i>数据看板</h4>
+    <p class="text-muted mb-0">@DateTime.Today.ToString("yyyy年MM月dd日") 今日考勤实时统计 · 点击卡片可查看具体人员</p>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-2">
+        <div class="card stat-card stat-card-click border-start-primary py-3 px-3"
+             onclick="openDrilldown('total', '总人数')">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="stat-value text-primary">@s.TotalEmployees</div>
+                    <div class="text-muted small mt-1">总人数</div>
+                </div>
+                <div class="stat-icon stat-icon-primary"><i class="bi bi-people-fill"></i></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card stat-card-click border-start-success py-3 px-3"
+             onclick="openDrilldown('present', '已出勤')">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="stat-value text-success">@s.PresentCount</div>
+                    <div class="text-muted small mt-1">已出勤</div>
+                </div>
+                <div class="stat-icon stat-icon-success"><i class="bi bi-check-circle-fill"></i></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card stat-card-click border-start-danger py-3 px-3"
+             onclick="openDrilldown('absent', '缺勤')">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="stat-value text-danger">@s.AbsentCount</div>
+                    <div class="text-muted small mt-1">缺勤</div>
+                </div>
+                <div class="stat-icon stat-icon-danger"><i class="bi bi-x-circle-fill"></i></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card stat-card-click border-start-warning py-3 px-3"
+             onclick="openDrilldown('late', '迟到')">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="stat-value text-warning">@s.LateCount</div>
+                    <div class="text-muted small mt-1">迟到</div>
+                </div>
+                <div class="stat-icon stat-icon-warning"><i class="bi bi-alarm-fill"></i></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card stat-card-click border-start-info py-3 px-3"
+             onclick="openDrilldown('onleave', '请假')">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="stat-value text-info">@s.OnLeaveCount</div>
+                    <div class="text-muted small mt-1">请假</div>
+                </div>
+                <div class="stat-icon stat-icon-info"><i class="bi bi-calendar2-week-fill"></i></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card stat-card-click border-start-secondary py-3 px-3"
+             onclick="openDrilldown('notpunched', '未打卡')">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="stat-value text-secondary">@s.NotPunchedCount</div>
+                    <div class="text-muted small mt-1">未打卡</div>
+                </div>
+                <div class="stat-icon stat-icon-secondary"><i class="bi bi-question-circle-fill"></i></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">出勤率</div>
+            <div class="card-body text-center py-4">
+                @{
+                    var rate = s.TotalEmployees > 0 ? (double)s.PresentCount / s.TotalEmployees * 100 : 0;
+                }
+                <div class="display-4 fw-bold text-success">@rate.ToString("F1")%</div>
+                <div class="text-muted small">@s.PresentCount / @s.TotalEmployees 人出勤</div>
+                <div class="progress mt-3" style="height:10px;border-radius:var(--radius-sm);background:var(--gray-bg)">
+                    <div class="progress-bar bg-success" style="width:@rate%;border-radius:var(--radius-sm)"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">快速导航</div>
+            <div class="card-body">
+                <div class="d-flex flex-column gap-2">
+                    <a href="/Admin/UserManage" class="quick-nav-item">
+                        <div class="stat-icon stat-icon-primary"><i class="bi bi-people"></i></div>
+                        <span class="qn-label">员工管理</span>
+                        <i class="bi bi-chevron-right"></i>
+                    </a>
+                    <a href="/Report/MonthlyReport" class="quick-nav-item">
+                        <div class="stat-icon stat-icon-success"><i class="bi bi-file-earmark-bar-graph"></i></div>
+                        <span class="qn-label">月度报表</span>
+                        <i class="bi bi-chevron-right"></i>
+                    </a>
+                    <a href="/Admin/HolidayManage" class="quick-nav-item">
+                        <div class="stat-icon stat-icon-secondary"><i class="bi bi-calendar-x"></i></div>
+                        <span class="qn-label">假期设置</span>
+                        <i class="bi bi-chevron-right"></i>
+                    </a>
+                    <a href="/Approval/PendingApproval" class="quick-nav-item">
+                        <div class="stat-icon stat-icon-warning"><i class="bi bi-check2-circle"></i></div>
+                        <span class="qn-label">待审批</span>
+                        <i class="bi bi-chevron-right"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 点开统计卡片查看具体人员 -->
+<div class="modal fade" id="drilldownModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="drilldownTitle">人员名单</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div id="drilldownLoading" class="text-center text-muted py-4">加载中…</div>
+                <div class="table-responsive d-none" id="drilldownTableWrap">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>工号</th><th>姓名</th><th>部门</th>
+                                <th>上班打卡</th><th>下班打卡</th><th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="drilldownBody"></tbody>
+                    </table>
+                </div>
+                <div id="drilldownEmpty" class="empty-state d-none"><i class="bi bi-inbox"></i>暂无人员</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+let drilldownModal;
+document.addEventListener('DOMContentLoaded', () => {
+    drilldownModal = new bootstrap.Modal(document.getElementById('drilldownModal'));
+});
+
+async function openDrilldown(category, title) {
+    document.getElementById('drilldownTitle').textContent = title + ' - 人员名单';
+    document.getElementById('drilldownLoading').classList.remove('d-none');
+    document.getElementById('drilldownTableWrap').classList.add('d-none');
+    document.getElementById('drilldownEmpty').classList.add('d-none');
+    document.getElementById('drilldownBody').innerHTML = '';
+    drilldownModal.show();
+
+    try {
+        const resp = await fetch(`?handler=Drilldown&category=${category}`);
+        const json = await resp.json();
+        document.getElementById('drilldownLoading').classList.add('d-none');
+
+        if (!json.success || !json.data || json.data.length === 0) {
+            document.getElementById('drilldownEmpty').classList.remove('d-none');
+            return;
+        }
+
+        document.getElementById('drilldownBody').innerHTML = json.data.map(p => `
+            <tr>
+                <td class="small text-muted">${escapeHtml(p.employeeNo)}</td>
+                <td class="fw-semibold">${escapeHtml(p.realName)}</td>
+                <td class="small">${escapeHtml(p.deptName)}</td>
+                <td class="small">${escapeHtml(p.clockIn)}</td>
+                <td class="small">${escapeHtml(p.clockOut)}</td>
+                <td><span class="badge ${p.badge}">${escapeHtml(p.statusText)}</span></td>
+            </tr>`).join('');
+        document.getElementById('drilldownTableWrap').classList.remove('d-none');
+    } catch (e) {
+        document.getElementById('drilldownLoading').classList.add('d-none');
+        document.getElementById('drilldownEmpty').classList.remove('d-none');
+        document.getElementById('drilldownEmpty').textContent = '加载失败，请重试';
+    }
+}
+
+// 把后台返回的文字（姓名、部门名等）原样塞进 HTML 之前，先过一遍这个函数处理一下。
+// 原因：如果员工姓名或备注里刚好包含 <script> 这种尖括号内容，直接拼进网页会被浏览器当成
+// 真正的 HTML/代码执行，可能被人利用来搞破坏（这在安全上叫"XSS 攻击"）。
+// 这个函数的做法：先把文字塞进一个看不见的 <div> 的"纯文本"属性里，
+// 再把它当成 HTML 读出来——这样浏览器会自动把尖括号等特殊字符转义成安全的写法。
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s ?? '';
+    return d.innerHTML;
+}
+</script>
+}

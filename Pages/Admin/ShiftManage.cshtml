@@ -1,0 +1,354 @@
+@page
+@model AttendanceSystem.Pages.Admin.ShiftManageModel
+@{
+    ViewData["Title"] = "班值排班";
+    // 各“提交表单”里回传的“选中考勤组”隐藏字段（保持多选上下文）
+    var ctxGroupsHidden = string.Join("", Model.SelectedGroupIds.Select(id =>
+        $"<input type=\"hidden\" name=\"CtxGroupIds\" value=\"{id}\" />"));
+    // GET 表单里保持选中组的隐藏字段
+    var getGroupsHidden = string.Join("", Model.SelectedGroupIds.Select(id =>
+        $"<input type=\"hidden\" name=\"groupIds\" value=\"{id}\" />"));
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-calendar3 me-2 text-primary"></i>班值排班</h4>
+    <button class="btn btn-primary btn-sm" onclick="openAddShift()">
+        <i class="bi bi-plus-lg me-1"></i>新增班次
+    </button>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-x-circle me-2"></i>@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<!-- 考勤组多选 -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="d-flex align-items-end gap-3 flex-wrap">
+            <input type="hidden" name="viewStart" value="@Model.ViewStart.ToString("yyyy-MM-dd")" />
+            <input type="hidden" name="viewEnd" value="@Model.ViewEnd.ToString("yyyy-MM-dd")" />
+            <div style="min-width:300px">
+                <label class="form-label fw-semibold mb-1">考勤组（可搜索、多选）</label>
+                <input type="text" class="form-control form-control-sm mb-1" placeholder="输入名称筛选考勤组…"
+                       oninput="filterGroups(this.value)" />
+                <div style="max-height:190px;overflow:auto;border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:.4rem">
+                    @foreach (var g in Model.Groups)
+                    {
+                        <div class="form-check grp-item mb-0" data-name="@g.GroupName.ToLower()">
+                            <input class="form-check-input" type="checkbox" name="groupIds" value="@g.Id" id="gsel@g.Id"
+                                   @(Model.SelectedGroupIds.Contains(g.Id) ? "checked" : "") />
+                            <label class="form-check-label small" for="gsel@g.Id">@g.GroupName</label>
+                        </div>
+                    }
+                    @if (!Model.Groups.Any())
+                    {
+                        <div class="text-muted small">暂无考勤组</div>
+                    }
+                </div>
+            </div>
+            <div>
+                <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-arrow-repeat me-1"></i>载入所选组</button>
+                <div class="form-text mb-0">勾选一个或多个组后点“载入”；载入后可在“批量排班”里跨组勾人一起排。</div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row g-3">
+    <!-- 班次列表 -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">班次定义（所选组）</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr><th>班次</th><th>所属组</th><th>上/下班</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var s in Model.Shifts)
+                        {
+                            <tr>
+                                <td>
+                                    <span class="badge" style="background:@s.Color">@s.ShiftName</span>
+                                    @if (s.IsCrossDay) { <small class="text-muted">夜班/跨天</small> }
+                                </td>
+                                <td class="small text-muted">@s.AttendanceGroup?.GroupName</td>
+                                <td class="small">@s.WorkStartTime.ToString("HH:mm")~@s.WorkEndTime.ToString("HH:mm")</td>
+                                <td>
+                                    <button class="btn btn-outline-primary btn-sm"
+                                            onclick="openEditShift(@s.Id,@s.AttendanceGroupId,'@s.ShiftName',
+                                                     '@s.WorkStartTime.ToString("HH:mm")','@s.WorkEndTime.ToString("HH:mm")',
+                                                     @s.LateToleranceMinutes,@s.EarlyLeaveToleranceMinutes,
+                                                     @s.EarliestClockInMinutes,@s.OvertimeThresholdMinutes,
+                                                     @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,'@s.Color')">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
+                                    <form method="post" asp-page-handler="DeleteShift" class="d-inline"
+                                          onsubmit="return confirm('确认停用班次「@s.ShiftName」？')">
+                                        @Html.Raw(ctxGroupsHidden)
+                                        <input type="hidden" name="id" value="@s.Id" />
+                                        <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                        @if (!Model.Shifts.Any())
+                        {
+                            <tr><td colspan="4" class="empty-state"><i class="bi bi-inbox"></i>所选考勤组暂无班次</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量排班 -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">批量排班（可跨组混排）</div>
+            <div class="card-body">
+                <form method="post" asp-page-handler="Assign">
+                    @Html.Raw(ctxGroupsHidden)
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">选择班次</label>
+                        <select asp-for="AssignShiftId" class="form-select">
+                            <option value="">-- 选择班次 --</option>
+                            @foreach (var s in Model.Shifts)
+                            {
+                                <option value="@s.Id">@s.ShiftName（@s.AttendanceGroup?.GroupName · @s.WorkStartTime.ToString("HH:mm")-@s.WorkEndTime.ToString("HH:mm")）</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">开始日期</label>
+                            <input asp-for="AssignStart" type="date" class="form-control" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">结束日期</label>
+                            <input asp-for="AssignEnd" type="date" class="form-control" />
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <div class="form-check mb-0">
+                                <input asp-for="AssignAll" class="form-check-input" type="checkbox" id="assignAll"
+                                       onchange="toggleEmployeeSelect(this.checked)" />
+                                <label class="form-check-label fw-semibold" for="assignAll">所选组全部成员</label>
+                            </div>
+                            <div id="pickTools" class="small">
+                                <a href="javascript:void(0)" onclick="checkAll(true)">全选</a> /
+                                <a href="javascript:void(0)" onclick="checkAll(false)">清空</a>
+                            </div>
+                        </div>
+                        <div id="employeeSelect" style="max-height:260px;overflow:auto;border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:.5rem">
+                            @foreach (var grp in Model.Members.GroupBy(m => m.GroupName))
+                            {
+                                <div class="fw-semibold small text-primary mt-1 border-bottom pb-1">@grp.Key</div>
+                                @foreach (var m in grp)
+                                {
+                                    <div class="form-check">
+                                        <input class="form-check-input member-chk" type="checkbox"
+                                               name="AssignUserIds" value="@m.UserId" id="mem@m.UserId" />
+                                        <label class="form-check-label small" for="mem@m.UserId">@m.RealName（@m.EmployeeNo）</label>
+                                    </div>
+                                }
+                            }
+                            @if (!Model.Members.Any())
+                            {
+                                <div class="text-muted small">所选考勤组暂无成员</div>
+                            }
+                        </div>
+                        <small class="text-muted">勾选任意组里的人一起排班（工作调动/混排）；或勾选上方“所选组全部成员”。</small>
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">
+                        <i class="bi bi-calendar-check me-1"></i>确认排班
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 已排班情况 -->
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-people me-2"></i>已排班情况（所选组）</span>
+        <form method="get" class="d-flex align-items-center gap-2 mb-0">
+            @Html.Raw(getGroupsHidden)
+            <label class="form-label mb-0 small text-nowrap">日期范围：</label>
+            <input type="date" name="viewStart" value="@Model.ViewStart.ToString("yyyy-MM-dd")" class="form-control form-control-sm w-auto" />
+            <span>~</span>
+            <input type="date" name="viewEnd" value="@Model.ViewEnd.ToString("yyyy-MM-dd")" class="form-control form-control-sm w-auto" />
+            <button type="submit" class="btn btn-outline-primary btn-sm">查询</button>
+        </form>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th style="width:150px">日期</th>
+                    <th style="width:140px">班次</th>
+                    <th style="width:60px">人数</th>
+                    <th>排班人员</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var a in Model.Assignments)
+                {
+                    <tr>
+                        <td>@a.WorkDate.ToString("yyyy-MM-dd") <small class="text-muted">@a.WeekText</small></td>
+                        <td><span class="badge" style="background:@a.Color">@a.ShiftName</span></td>
+                        <td>@a.People.Count</td>
+                        <td class="small">@string.Join("、", a.People)</td>
+                    </tr>
+                }
+                @if (!Model.Assignments.Any())
+                {
+                    <tr><td colspan="4" class="empty-state"><i class="bi bi-inbox"></i>所选日期范围内暂无排班记录</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 新增/编辑班次 Modal -->
+<div class="modal fade" id="shiftModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" asp-page-handler="SaveShift">
+                @Html.Raw(ctxGroupsHidden)
+                <input type="hidden" asp-for="ShiftId" id="shiftId" />
+                <div class="modal-header">
+                    <h5 class="modal-title" id="shiftModalTitle">新增班次</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <label class="form-label fw-semibold">所属考勤组</label>
+                            <select asp-for="GroupId" id="shiftGroupId" class="form-select">
+                                @foreach (var g in Model.Groups)
+                                { <option value="@g.Id">@g.GroupName</option> }
+                            </select>
+                        </div>
+                        <div class="col-8">
+                            <label class="form-label fw-semibold">班次名称</label>
+                            <input asp-for="ShiftName" id="fSName" class="form-control" required />
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label fw-semibold">标识颜色</label>
+                            <input asp-for="ShiftColor" id="fSColor" type="color" class="form-control form-control-color w-100" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">上班时间</label>
+                            <input asp-for="WorkStart" id="fWS" type="time" class="form-control" required />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">下班时间</label>
+                            <input asp-for="WorkEnd" id="fWE" type="time" class="form-control" required />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">迟到容忍（分钟）</label>
+                            <input asp-for="LateTol" id="fLT" type="number" min="0" max="60" class="form-control" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">早退容忍（分钟）</label>
+                            <input asp-for="EarlyTol" id="fET" type="number" min="0" max="60" class="form-control" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">加班起算（分钟）</label>
+                            <input asp-for="OtThresh" id="fOT" type="number" min="0" max="120" class="form-control" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">标准工时（小时）</label>
+                            <input asp-for="StdHours" id="fSH" type="number" step="0.5" min="1" max="24" class="form-control" />
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input asp-for="CrossDay" id="fCross" class="form-check-input" type="checkbox" />
+                                <label class="form-check-label" for="fCross">跨天班次（夜班）</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+const shiftModal = new bootstrap.Modal(document.getElementById('shiftModal'));
+// 页面左侧默认选中的第一个考勤组，新增班次时用它做"所属考勤组"下拉的默认值，省得每次都要手选
+const FIRST_GROUP = @(Model.SelectedGroupIds.FirstOrDefault());
+
+// 点"新增班次"：把弹窗里所有输入框清空/恢复成默认值（上次编辑班次留下的旧内容不能带过来）
+function openAddShift() {
+    document.getElementById('shiftModalTitle').textContent = '新增班次';
+    document.getElementById('shiftId').value = 0;   // 0 表示"新增"，OnPostSaveShiftAsync 靠这个区分新增还是修改
+    document.getElementById('shiftGroupId').value = FIRST_GROUP || '';
+    document.getElementById('fSName').value = '';
+    document.getElementById('fWS').value = '09:00';
+    document.getElementById('fWE').value = '18:00';
+    document.getElementById('fLT').value = 5;
+    document.getElementById('fET').value = 5;
+    document.getElementById('fOT').value = 30;
+    document.getElementById('fSH').value = 8;
+    document.getElementById('fCross').checked = false;
+    document.getElementById('fSColor').value = '#1890ff';
+    shiftModal.show();
+}
+
+// 点某个班次的"编辑"：把这个班次现有的各项值填进弹窗表单，方便直接在原有基础上改
+function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color) {
+    document.getElementById('shiftModalTitle').textContent = '编辑班次';
+    document.getElementById('shiftId').value = id;   // 非 0，OnPostSaveShiftAsync 据此判断是"修改"
+    document.getElementById('shiftGroupId').value = gid;
+    document.getElementById('fSName').value = name;
+    document.getElementById('fWS').value = ws;
+    document.getElementById('fWE').value = we;
+    document.getElementById('fLT').value = lt;
+    document.getElementById('fET').value = et;
+    document.getElementById('fOT').value = ot;
+    document.getElementById('fSH').value = sh;
+    document.getElementById('fCross').checked = cross;
+    document.getElementById('fSColor').value = color;
+    shiftModal.show();
+}
+
+// 排班表单里"是否所选组全部成员"这个开关：勾上就不用再一个个选人了，
+// 所以把下面"逐人挑选"的名单区域和"全选/清空"按钮都藏起来，减少不必要的操作
+function toggleEmployeeSelect(allSelected) {
+    document.getElementById('employeeSelect').style.display = allSelected ? 'none' : 'block';
+    document.getElementById('pickTools').style.display = allSelected ? 'none' : 'block';
+}
+// "全选"/"清空"按钮：把员工名单里的每个复选框都统一勾上或去掉勾
+function checkAll(v) {
+    document.querySelectorAll('.member-chk').forEach(c => c.checked = v);
+}
+// 搜索过滤考勤组（勾选状态不受影响，隐藏的已勾选项仍会一起提交）
+function filterGroups(q) {
+    q = (q || '').trim().toLowerCase();
+    document.querySelectorAll('.grp-item').forEach(el => {
+        const name = el.getAttribute('data-name') || '';
+        el.style.display = (q === '' || name.includes(q)) ? '' : 'none';
+    });
+}
+</script>
+}

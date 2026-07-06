@@ -1,0 +1,150 @@
+@page
+@model AttendanceSystem.Pages.Admin.HolidayManageModel
+@{
+    ViewData["Title"] = "假期设置";
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-calendar-x me-2 text-primary"></i>假期设置</h4>
+    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
+        <i class="bi bi-plus me-1"></i>添加假期
+    </button>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+
+<!-- 年份筛选 -->
+<div class="card mb-3">
+    <div class="card-body py-3">
+        <form method="get" class="d-flex align-items-center gap-3">
+            <label class="fw-semibold mb-0">年份</label>
+            <select name="year" class="form-select form-select-sm" style="width:100px">
+                @for (int y = DateTime.Today.Year + 1; y >= DateTime.Today.Year - 1; y--)
+                {
+                    <option value="@y" selected="@(y == Model.Year)">@y 年</option>
+                }
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="bi bi-search me-1"></i>查询
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">@Model.Year 年 假期列表（共 @Model.Holidays.Count 条）</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>日期</th><th>假期名称</th><th>类型</th>
+                        <th>适用范围</th><th>说明</th><th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.Holidays.Any())
+                    {
+                        <tr><td colspan="6" class="empty-state"><i class="bi bi-inbox"></i>暂无假期设置</td></tr>
+                    }
+                    @foreach (var h in Model.Holidays)
+                    {
+                        <tr>
+                            <td class="fw-semibold">@h.HolidayDate.ToString("MM-dd")</td>
+                            <td>@h.HolidayName</td>
+                            <td>
+                                <span class="badge @TypeBadge(h.HolidayType)">@TypeText(h.HolidayType)</span>
+                            </td>
+                            <td class="small">@(h.AttendanceGroup?.GroupName ?? "全公司")</td>
+                            <td class="small text-muted">@h.Description</td>
+                            <td>
+                                <form method="post" asp-page-handler="Delete" class="d-inline"
+                                      onsubmit="return confirm('确认删除该假期？')">
+                                    <input type="hidden" name="id" value="@h.Id" />
+                                    <input type="hidden" name="Year" value="@Model.Year" />
+                                    <button type="submit" class="btn btn-outline-danger btn-sm">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 添加假期 Modal -->
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">添加假期</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" asp-page-handler="Add">
+                <input type="hidden" name="Year" value="@Model.Year" />
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">假期名称 <span class="text-danger">*</span></label>
+                        <input asp-for="HolidayName" class="form-control" required placeholder="如：元旦、春节..." />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">日期 <span class="text-danger">*</span></label>
+                        <input asp-for="HolidayDate" type="date" class="form-control" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">假期类型</label>
+                        <select asp-for="HolidayType" class="form-select">
+                            <option value="LegalHoliday">法定节假日</option>
+                            <option value="CompanyRestDay">公司休息日</option>
+                            <option value="CompensatoryWorkDay">调班补班日</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">适用考勤组（空=全公司）</label>
+                        <select asp-for="GroupId" class="form-select">
+                            <option value="">全公司</option>
+                            @foreach (var g in Model.Groups)
+                            { <option value="@g.Id">@g.GroupName</option> }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">说明</label>
+                        <textarea asp-for="Description" class="form-control" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@functions {
+    string TypeText(AttendanceSystem.Models.Enums.HolidayType t) => t switch
+    {
+        AttendanceSystem.Models.Enums.HolidayType.LegalHoliday       => "法定节假日",
+        AttendanceSystem.Models.Enums.HolidayType.CompanyRestDay      => "公司休息日",
+        AttendanceSystem.Models.Enums.HolidayType.CompensatoryWorkDay => "调班补班日",
+        _                                                             => "其他"
+    };
+    string TypeBadge(AttendanceSystem.Models.Enums.HolidayType t) => t switch
+    {
+        AttendanceSystem.Models.Enums.HolidayType.LegalHoliday  => "bg-danger",
+        AttendanceSystem.Models.Enums.HolidayType.CompanyRestDay => "bg-info",
+        _                                                        => "bg-warning"
+    };
+}

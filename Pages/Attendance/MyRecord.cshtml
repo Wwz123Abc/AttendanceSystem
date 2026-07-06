@@ -1,0 +1,153 @@
+@page
+@model AttendanceSystem.Pages.Attendance.MyRecordModel
+@{
+    ViewData["Title"] = "我的记录";
+    var s = Model.Summary;
+}
+
+<div class="page-header">
+    <h4><i class="bi bi-journal-text me-2 text-primary"></i>我的考勤记录</h4>
+</div>
+
+<!-- 月份筛选 -->
+<div class="card mb-4">
+    <div class="card-body py-3">
+        <form method="get" class="d-flex align-items-center gap-3 flex-wrap">
+            <label class="fw-semibold mb-0">年份</label>
+            <select name="year" class="form-select form-select-sm" style="width:100px">
+                @for (int y = DateTime.Today.Year; y >= DateTime.Today.Year - 2; y--)
+                {
+                    <option value="@y" selected="@(y == Model.Year)">@y 年</option>
+                }
+            </select>
+            <label class="fw-semibold mb-0">月份</label>
+            <select name="month" class="form-select form-select-sm" style="width:90px">
+                @for (int m = 1; m <= 12; m++)
+                {
+                    <option value="@m" selected="@(m == Model.Month)">@m 月</option>
+                }
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="bi bi-search me-1"></i>查询
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- 月度汇总 -->
+@if (s != null)
+{
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-3 stat-card border-start-success">
+                <div class="fw-bold text-success fs-4">@s.ActualWorkdays</div>
+                <div class="text-muted small">实到天数</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-3 stat-card border-start-warning">
+                <div class="fw-bold text-warning fs-4">@s.LateCount</div>
+                <div class="text-muted small">迟到次数</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-3 stat-card border-start-danger">
+                <div class="fw-bold text-danger fs-4">@s.AbsentDays</div>
+                <div class="text-muted small">缺勤天数</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-3 stat-card border-start-info">
+                <div class="fw-bold text-info fs-4">@s.TotalWorkHours.ToString("F1")</div>
+                <div class="text-muted small">总工时(h)</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-3 stat-card border-start-primary">
+                <div class="fw-bold text-primary fs-4">@s.TotalOvertimeHours.ToString("F1")</div>
+                <div class="text-muted small">加班(h)</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="card text-center py-3">
+                <div class="fw-bold fs-4">@s.LeaveDays.ToString("F1")</div>
+                <div class="text-muted small">请假天数</div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 明细表格 -->
+<div class="card">
+    <div class="card-header">
+        @Model.Year 年 @Model.Month 月 考勤明细（共 @Model.Records.Count 条）
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>日期</th>
+                        <th>星期</th>
+                        <th>上班</th>
+                        <th>下班</th>
+                        <th>状态</th>
+                        <th>工时(h)</th>
+                        <th>迟到</th>
+                        <th>早退</th>
+                        <th>加班(h)</th>
+                        <th>备注</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.Records.Any())
+                    {
+                        <tr><td colspan="10" class="empty-state"><i class="bi bi-inbox"></i>暂无记录</td></tr>
+                    }
+                    @foreach (var r in Model.Records)
+                    {
+                        <!-- r.IsHoliday 目前恒为 false（这个字段全系统都没被赋值过），所以这行"节假日灰底"样式实际上不会生效 -->
+                        <tr class="@(r.IsHoliday ? "table-light" : "")">
+                            <td>@r.WorkDateText</td>
+                            <td>
+                                <span class="@(r.WorkDate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday ? "text-danger" : "")">
+                                    @r.DayOfWeekText
+                                </span>
+                            </td>
+                            <td class="@(r.ClockInText == "--" ? "text-muted" : "")">@r.ClockInText</td>
+                            <td class="@(r.ClockOutText == "--" ? "text-muted" : "")">@r.ClockOutText</td>
+                            <td>
+                                <span class="badge bg-@StatusColor(r.AttendanceStatus)">@r.StatusText</span>
+                            </td>
+                            <td>@(r.ActualWorkHours > 0 ? r.ActualWorkHours.ToString("F1") : "--")</td>
+                            <td class="@(r.LateMinutes > 0 ? "text-danger" : "text-muted")">
+                                @(r.LateMinutes > 0 ? $"{r.LateMinutes}分" : "--")
+                            </td>
+                            <td class="@(r.EarlyLeaveMinutes > 0 ? "text-warning" : "text-muted")">
+                                @(r.EarlyLeaveMinutes > 0 ? $"{r.EarlyLeaveMinutes}分" : "--")
+                            </td>
+                            <td class="@(r.OvertimeHours > 0 ? "text-info" : "text-muted")">
+                                @(r.OvertimeHours > 0 ? r.OvertimeHours.ToString("F1") : "--")
+                            </td>
+                            <td class="text-muted small">@r.ApprovalNote</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@functions {
+    string StatusColor(AttendanceSystem.Models.Enums.AttendanceStatus status) => status switch
+    {
+        AttendanceSystem.Models.Enums.AttendanceStatus.Normal     => "success",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Late       => "warning",
+        AttendanceSystem.Models.Enums.AttendanceStatus.EarlyLeave => "warning",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Absent     => "danger",
+        AttendanceSystem.Models.Enums.AttendanceStatus.OnLeave    => "info",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Overtime   => "primary",
+        AttendanceSystem.Models.Enums.AttendanceStatus.BusinessTrip => "info",
+        _                                                          => "secondary"
+    };
+}

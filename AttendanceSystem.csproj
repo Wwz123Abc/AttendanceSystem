@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AttendanceSystem</RootNamespace>
+    <AssemblyName>AttendanceSystem</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <!-- 嵌套的 AppBoxCore.EFCore 是独立项目，不应被本项目当成源码编译进来 -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);AppBoxCore.EFCore\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- EF Core 9.0.9 + MariaDB/MySQL（Pomelo 9.0.0）-->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.9" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.9">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
+
+    <!-- Excel 导出 -->
+    <PackageReference Include="NPOI" Version="2.7.5" />
+
+    <!-- 日志 -->
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+  </ItemGroup>
+
+</Project>

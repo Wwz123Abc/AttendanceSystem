@@ -1,0 +1,224 @@
+@page
+@model AttendanceSystem.Pages.Approval.PendingApprovalModel
+@{
+    ViewData["Title"] = "待我审批";
+    ViewData["AutoRefresh"] = 30;   // 每 30 秒自动刷新待审批列表（弹窗打开时自动暂停）
+}
+
+<div class="page-header">
+    <h4><i class="bi bi-check2-circle me-2 text-primary"></i>待我审批</h4>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.Message))
+{
+    <div class="alert @(Model.IsSuccess ? "alert-success" : "alert-danger") alert-dismissible fade show">
+        @Model.Message
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="card">
+    <div class="card-header">待审批列表（共 @Model.PendingItems.Count 条）</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>单号</th>
+                        <th>申请人</th>
+                        <th>部门</th>
+                        <th>类型</th>
+                        <th>提交时间</th>
+                        <th>原因</th>
+                        <th style="width:180px">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.PendingItems.Any())
+                    {
+                        <tr><td colspan="7" class="empty-state"><i class="bi bi-inbox"></i>暂无待审批记录</td></tr>
+                    }
+                    @foreach (var item in Model.PendingItems)
+                    {
+                        <tr>
+                            <td class="small text-muted">@item.RequestNo</td>
+                            <td>
+                                @item.ApplicantName
+                                <span class="text-muted small d-block">@item.ApplicantEmployeeNo</span>
+                            </td>
+                            <td class="small">@item.DeptName</td>
+                            <td><span class="badge bg-secondary">@item.ApprovalTypeText</span></td>
+                            <td class="small">@item.SubmittedAtText</td>
+                            <td class="small text-truncate" style="max-width:120px">@item.Reason</td>
+                            <td>
+                                <button class="btn btn-outline-info btn-sm me-1"
+                                        data-bs-toggle="modal" data-bs-target="#detailModal"
+                                        data-id="@item.Id">
+                                    <i class="bi bi-eye"></i>
+                                </button>
+                                <button class="btn btn-success btn-sm me-1"
+                                        data-bs-toggle="modal" data-bs-target="#approveModal"
+                                        data-id="@item.Id" data-action="approve">
+                                    通过
+                                </button>
+                                <button class="btn btn-danger btn-sm"
+                                        data-bs-toggle="modal" data-bs-target="#approveModal"
+                                        data-id="@item.Id" data-action="reject">
+                                    驳回
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 审批操作 Modal -->
+<div class="modal fade" id="approveModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="approveModalTitle">审批确认</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post">
+                <div class="modal-body">
+                    <input type="hidden" asp-for="RequestId" id="modalRequestId" />
+                    <div class="mb-3">
+                        <label class="form-label">审批意见（可选）</label>
+                        <textarea asp-for="Comment" class="form-control" rows="3" placeholder="请填写审批意见..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" id="approveBtn" asp-page-handler="Approve" class="btn btn-success">确认通过</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 详情 Modal -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">申请详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="detailBody">
+                <!-- 由 JS 填充 -->
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+// "通过"和"驳回"这两个按钮共用同一个弹窗(approveModal)，不是各做一个弹窗。
+// 点哪个按钮，就把按钮上标的数据（data-id=处理哪张申请单、data-action=通过还是驳回）读出来，
+// 现改这个弹窗的标题、按钮文字/颜色、以及提交时要打到哪个后台接口(Approve 还是 Reject)。
+const approveModal = document.getElementById('approveModal');
+approveModal.addEventListener('show.bs.modal', function(e) {
+    const btn = e.relatedTarget;   // relatedTarget = 触发弹窗打开的那个按钮
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    document.getElementById('modalRequestId').value = id;
+    document.getElementById('approveModalTitle').textContent = action === 'approve' ? '确认通过申请' : '确认驳回申请';
+    const submitBtn = document.getElementById('approveBtn');
+    submitBtn.textContent = action === 'approve' ? '确认通过' : '确认驳回';
+    submitBtn.className = action === 'approve' ? 'btn btn-success' : 'btn btn-danger';
+    submitBtn.formAction = action === 'approve' ? '?handler=Approve' : '?handler=Reject';
+});
+
+const APPROVAL_DETAILS = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
+    Model.PendingItems.ToDictionary(i => i.Id, i => new
+    {
+        no       = i.RequestNo,
+        type     = i.ApprovalTypeText,
+        name     = i.ApplicantName,
+        empNo    = i.ApplicantEmployeeNo,
+        dept     = i.DeptName ?? "",
+        reason   = i.Reason ?? "",
+        time     = i.SubmittedAtText,
+        // 请假
+        leaveType  = i.LeaveTypeText ?? "",
+        leaveStart = i.LeaveStartTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
+        leaveEnd   = i.LeaveEndTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
+        leaveHours = i.LeaveDurationHours?.ToString("0.##") ?? "",
+        // 补卡
+        punchDate  = i.PunchDate?.ToString("yyyy-MM-dd") ?? "",
+        punchType  = i.PunchType == AttendanceSystem.Models.Enums.PunchType.ClockIn ? "上班打卡"
+                   : i.PunchType == AttendanceSystem.Models.Enums.PunchType.ClockOut ? "下班打卡" : "",
+        punchTime  = i.PunchTime?.ToString("HH:mm") ?? "",
+        // 加班
+        otStart = i.OvertimeStartTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
+        otEnd   = i.OvertimeEndTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
+        otHours = i.OvertimeDurationHours?.ToString("0.##") ?? "",
+        // 出差
+        tripDest  = i.BusinessTripDestination ?? "",
+        tripStart = i.BusinessTripStartTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
+        tripEnd   = i.BusinessTripEndTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
+        tripDays  = i.BusinessTripDurationDays?.ToString("0.##") ?? "",
+        attachments = i.AttachmentUrls
+    })));
+
+// "查看详情"弹窗：点眼睛图标时，直接从上面已经准备好的 APPROVAL_DETAILS 字典里
+// 按申请单 Id 取出对应那条数据来显示，不用再单独向后台发一次请求要数据（页面加载时已经带过来了）。
+const detailModal = document.getElementById('detailModal');
+detailModal.addEventListener('show.bs.modal', function(e) {
+    const d = APPROVAL_DETAILS[e.relatedTarget.dataset.id];
+    if (!d) { document.getElementById('detailBody').innerHTML = '加载失败'; return; }
+
+    let rows = `
+        <dt class="col-4">单号</dt><dd class="col-8">${d.no}</dd>
+        <dt class="col-4">申请类型</dt><dd class="col-8">${d.type}</dd>
+        <dt class="col-4">申请人</dt><dd class="col-8">${d.name}（${d.empNo}）</dd>
+        <dt class="col-4">部门</dt><dd class="col-8">${d.dept || '—'}</dd>`;
+
+    // 按类型展示具体日期/时间
+    if (d.leaveStart) {
+        rows += `
+        <dt class="col-4">假期类型</dt><dd class="col-8">${d.leaveType}</dd>
+        <dt class="col-4">请假起止</dt><dd class="col-8">${d.leaveStart} ~ ${d.leaveEnd}</dd>
+        <dt class="col-4">请假时长</dt><dd class="col-8">${d.leaveHours} 小时</dd>`;
+    }
+    if (d.punchDate) {
+        rows += `
+        <dt class="col-4">补卡日期</dt><dd class="col-8">${d.punchDate}</dd>
+        <dt class="col-4">补卡类型</dt><dd class="col-8">${d.punchType}</dd>
+        <dt class="col-4">补卡时间</dt><dd class="col-8">${d.punchTime}</dd>`;
+    }
+    if (d.otStart) {
+        rows += `
+        <dt class="col-4">加班起止</dt><dd class="col-8">${d.otStart} ~ ${d.otEnd}</dd>
+        <dt class="col-4">加班时长</dt><dd class="col-8">${d.otHours} 小时</dd>`;
+    }
+    if (d.tripStart) {
+        rows += `
+        <dt class="col-4">出差目的地</dt><dd class="col-8">${d.tripDest || '未填写'}</dd>
+        <dt class="col-4">出差起止</dt><dd class="col-8">${d.tripStart} ~ ${d.tripEnd}</dd>
+        <dt class="col-4">出差天数</dt><dd class="col-8">${d.tripDays} 天</dd>`;
+    }
+
+    rows += `
+        <dt class="col-4">申请原因</dt><dd class="col-8">${d.reason || '无'}</dd>
+        <dt class="col-4">提交时间</dt><dd class="col-8">${d.time}</dd>`;
+
+    // 附件材料（审批人可点击查看）
+    let att = '';
+    if (d.attachments && d.attachments.length) {
+        att = '<dt class="col-4">附件材料</dt><dd class="col-8">' +
+            d.attachments.map((u, idx) =>
+                `<a href="${u}" target="_blank" class="d-block"><i class="bi bi-paperclip me-1"></i>附件${idx + 1}（${u.split('/').pop()}）</a>`
+            ).join('') + '</dd>';
+    } else {
+        att = '<dt class="col-4">附件材料</dt><dd class="col-8 text-muted">无</dd>';
+    }
+
+    document.getElementById('detailBody').innerHTML = `<dl class="row mb-0">${rows}${att}</dl>`;
+});
+</script>
+}

@@ -1,0 +1,68 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.RazorPages;
+using AttendanceSystem.Services.Interfaces;
+
+namespace AttendanceSystem.Pages.Account;
+
+/// <summary>
+/// 忘记密码找回页（未登录可访问）：输入工号+手机号 → 钉钉工作通知收验证码 → 输验证码+新密码完成重置。
+/// </summary>
+[AllowAnonymous]
+public class ForgotPasswordModel(IPasswordResetService resetService) : PageModel
+{
+    [BindProperty] public string EmployeeNo      { get; set; } = string.Empty;
+    [BindProperty] public string Phone           { get; set; } = string.Empty;
+    [BindProperty] public string Code            { get; set; } = string.Empty;
+    [BindProperty] public string NewPassword     { get; set; } = string.Empty;
+    [BindProperty] public string ConfirmPassword { get; set; } = string.Empty;
+
+    /// <summary>是否已经进入"输入验证码+新密码"这一步（验证码已发出）。</summary>
+    public bool CodeSent { get; set; }
+    /// <summary>密码是否已重置成功。</summary>
+    public bool Done { get; set; }
+
+    public string? ErrorMessage   { get; set; }
+    public string? SuccessMessage { get; set; }
+
+    public void OnGet() { }
+
+    /// <summary>点"获取验证码"/"重新发送"时执行。</summary>
+    public async Task<IActionResult> OnPostSendCodeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(EmployeeNo) || string.IsNullOrWhiteSpace(Phone))
+        {
+            ErrorMessage = "请输入工号和手机号";
+            return Page();
+        }
+
+        var (ok, msg) = await resetService.RequestCodeAsync(EmployeeNo.Trim(), Phone.Trim());
+        CodeSent = ok;   // 发送成功才进入第二步；失败则停留在第一步让用户核对信息重试
+        if (ok) SuccessMessage = msg; else ErrorMessage = msg;
+        return Page();
+    }
+
+    /// <summary>点"重置密码"时执行。</summary>
+    public async Task<IActionResult> OnPostResetAsync()
+    {
+        CodeSent = true;   // 无论结果如何都停留在第二步表单，不要退回第一步
+
+        if (string.IsNullOrWhiteSpace(Code) || string.IsNullOrWhiteSpace(NewPassword))
+        {
+            ErrorMessage = "请输入验证码和新密码";
+            return Page();
+        }
+        if (NewPassword != ConfirmPassword)
+        {
+            ErrorMessage = "两次输入的密码不一致";
+            return Page();
+        }
+
+        var (ok, msg) = await resetService.ResetPasswordAsync(
+            EmployeeNo.Trim(), Phone.Trim(), Code.Trim(), NewPassword);
+
+        if (ok) { Done = true; SuccessMessage = msg; }
+        else    { ErrorMessage = msg; }
+        return Page();
+    }
+}

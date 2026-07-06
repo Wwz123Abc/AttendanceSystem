@@ -1,0 +1,12 @@
+@* 这个文件是给所有网页(.cshtml)统一"预先导入"的设置，只需要写一次，每个页面就都能直接用，
+   不用每个页面文件顶部都重复写一遍。
+   @using = 提前告诉每个页面"这几个位置的类可以直接用名字，不用写一长串路径"。
+   @addTagHelper = 打开 ASP.NET Core 自带的一批网页标签增强功能（比如 asp-for、asp-page-handler 这种写法）。 *@
+@using AttendanceSystem
+@using AttendanceSystem.Models.Entities
+@using AttendanceSystem.Models.Enums
+@using AttendanceSystem.Models.DTOs
+@using AttendanceSystem.Middlewares
+@using System.Security.Claims
+@namespace AttendanceSystem.Pages
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers

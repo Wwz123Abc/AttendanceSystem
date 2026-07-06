@@ -1,0 +1,201 @@
+@page
+@model AttendanceSystem.Pages.Attendance.PunchCardModel
+@{
+    ViewData["Title"] = "我的打卡";
+    var rec = Model.TodayRecord;
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-clock-history me-2 text-primary"></i>我的打卡</h4>
+    <span class="text-muted small">@DateTime.Today.ToString("yyyy年MM月dd日 dddd")</span>
+</div>
+
+@if (Model.ShowMessage)
+{
+    <div class="alert @(Model.IsSuccess ? "alert-success" : "alert-danger") alert-dismissible fade show">
+        <i class="bi @(Model.IsSuccess ? "bi-check-circle" : "bi-exclamation-circle") me-2"></i>@Model.Message
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div id="locationAlert" class="alert alert-warning d-none">
+    <i class="bi bi-geo-alt me-2"></i><span id="locationStatus">正在获取位置...</span>
+</div>
+
+<div class="row g-4">
+    <!-- 打卡操作卡片 -->
+    <div class="col-md-5">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-fingerprint"></i> 今日打卡
+            </div>
+            <div class="card-body text-center py-4">
+                <div class="mb-3">
+                    <span class="display-4 fw-bold text-primary" id="currentTime">--:--:--</span>
+                    <div class="text-muted small mt-1">当前时间</div>
+                </div>
+
+                <div id="locationInfo" class="mb-3 small text-muted d-none">
+                    <i class="bi bi-geo-alt-fill text-success me-1"></i>
+                    <span id="locationText">位置已获取</span>
+                </div>
+
+                <div class="d-flex gap-3 justify-content-center mt-4">
+                    <form method="post" asp-page-handler="Punch" id="clockInForm">
+                        <input type="hidden" name="punchType" value="ClockIn" />
+                        <input type="hidden" asp-for="Latitude" id="latIn" />
+                        <input type="hidden" asp-for="Longitude" id="lngIn" />
+                        <button type="submit" class="btn btn-success btn-lg px-4"
+                                @(rec?.ClockInTime != null ? "disabled" : "")>
+                            <i class="bi bi-door-open me-2"></i>上班打卡
+                        </button>
+                    </form>
+                    <form method="post" asp-page-handler="Punch" id="clockOutForm">
+                        <input type="hidden" name="punchType" value="ClockOut" />
+                        <input type="hidden" asp-for="Latitude" id="latOut" />
+                        <input type="hidden" asp-for="Longitude" id="lngOut" />
+                        <button type="submit" class="btn btn-warning btn-lg px-4"
+                                @(rec?.ClockInTime == null || rec?.ClockOutTime != null ? "disabled" : "")>
+                            <i class="bi bi-door-closed me-2"></i>下班打卡
+                        </button>
+                    </form>
+                </div>
+
+                @if (rec?.ClockInTime != null)
+                {
+                    <div class="mt-3 text-success small">
+                        <i class="bi bi-check-circle me-1"></i>上班已打卡：@rec.ClockInTime?.ToString("HH:mm")
+                    </div>
+                }
+                @if (rec?.ClockOutTime != null)
+                {
+                    <div class="text-warning small">
+                        <i class="bi bi-check-circle me-1"></i>下班已打卡：@rec.ClockOutTime?.ToString("HH:mm")
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- 今日状态卡片 -->
+    <div class="col-md-7">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-info-circle"></i> 今日考勤状态
+            </div>
+            <div class="card-body">
+                @if (rec != null)
+                {
+                    <dl class="row mb-0">
+                        <dt class="col-4 text-muted fw-normal">状态</dt>
+                        <dd class="col-8">
+                            <span class="badge bg-@StatusColor(rec.AttendanceStatus) fs-6">
+                                @rec.StatusText
+                            </span>
+                        </dd>
+                        <dt class="col-4 text-muted fw-normal">上班时间</dt>
+                        <dd class="col-8 fw-semibold">@rec.ClockInText</dd>
+                        <dt class="col-4 text-muted fw-normal">下班时间</dt>
+                        <dd class="col-8 fw-semibold">@rec.ClockOutText</dd>
+                        <dt class="col-4 text-muted fw-normal">实际工时</dt>
+                        <dd class="col-8">@(rec.ActualWorkHours > 0 ? $"{rec.ActualWorkHours:F1} 小时" : "--")</dd>
+                        @if (rec.LateMinutes > 0)
+                        {
+                            <dt class="col-4 text-muted fw-normal">迟到</dt>
+                            <dd class="col-8 text-danger">@rec.LateMinutes 分钟</dd>
+                        }
+                        @if (rec.EarlyLeaveMinutes > 0)
+                        {
+                            <dt class="col-4 text-muted fw-normal">早退</dt>
+                            <dd class="col-8 text-warning">@rec.EarlyLeaveMinutes 分钟</dd>
+                        }
+                        @if (rec.OvertimeHours > 0)
+                        {
+                            <dt class="col-4 text-muted fw-normal">加班</dt>
+                            <dd class="col-8 text-info">@rec.OvertimeHours 小时</dd>
+                        }
+                        @if (!string.IsNullOrEmpty(rec.ApprovalNote))
+                        {
+                            <dt class="col-4 text-muted fw-normal">审批备注</dt>
+                            <dd class="col-8">@rec.ApprovalNote</dd>
+                        }
+                    </dl>
+                }
+                else
+                {
+                    <div class="empty-state">
+                        <i class="bi bi-clock"></i>今日暂无打卡记录，请及时打卡
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@functions {
+    string StatusColor(AttendanceSystem.Models.Enums.AttendanceStatus status) => status switch
+    {
+        AttendanceSystem.Models.Enums.AttendanceStatus.Normal      => "success",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Late        => "warning",
+        AttendanceSystem.Models.Enums.AttendanceStatus.EarlyLeave  => "warning",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Absent      => "danger",
+        AttendanceSystem.Models.Enums.AttendanceStatus.OnLeave     => "info",
+        AttendanceSystem.Models.Enums.AttendanceStatus.Overtime    => "primary",
+        AttendanceSystem.Models.Enums.AttendanceStatus.BusinessTrip => "info",
+        _                                                           => "secondary"
+    };
+}
+
+@section Scripts {
+<script>
+// 页面上那个大大的"当前时间"数字：每秒钟刷新一次，看起来像个实时时钟
+function updateTime() {
+    const now = new Date();
+    document.getElementById('currentTime').textContent =
+        now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+}
+updateTime();               // 页面一打开先显示一次，不用等第一秒过去
+setInterval(updateTime, 1000);   // 之后每 1000 毫秒（1 秒）刷新一次
+
+// ── 获取浏览器定位，用于"定位打卡"（如果考勤组开启了这个功能，后台会校验打卡地点距离）──
+let gpsLat = null, gpsLng = null;   // 拿到的经纬度先存在这两个变量里，还没拿到时是 null
+
+// 把拿到的经纬度，填进"上班打卡"和"下班打卡"两个表单里各自隐藏的经纬度输入框
+// （这样不管点哪个按钮提交，表单里都带着当前的定位信息）
+function updateGpsFields() {
+    ['In','Out'].forEach(t => {
+        const lf = document.getElementById('lat' + t);
+        const lg = document.getElementById('lng' + t);
+        if (lf) lf.value = gpsLat ?? '';
+        if (lg) lg.value = gpsLng ?? '';
+    });
+}
+
+// 浏览器支持定位功能才尝试获取（比如老旧浏览器可能不支持，就直接跳过，不影响正常打卡）
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+        // 成功拿到位置：记下经纬度、填进表单、在页面上显示"位置已获取"提示
+        pos => {
+            gpsLat = pos.coords.latitude.toFixed(6);    // 保留 6 位小数，精度足够（约 0.1 米级别）
+            gpsLng = pos.coords.longitude.toFixed(6);
+            updateGpsFields();
+            const info = document.getElementById('locationInfo');
+            info.classList.remove('d-none');
+            document.getElementById('locationText').textContent =
+                `${gpsLat}, ${gpsLng}（精度 ±${Math.round(pos.coords.accuracy)}m）`;
+        },
+        // 拿不到位置（最常见是用户拒绝了浏览器的定位权限弹窗）：
+        // 提示一下，但不阻止打卡——只是后台会跳过"打卡地点是否在允许范围内"这项校验
+        err => {
+            const alert = document.getElementById('locationAlert');
+            const status = document.getElementById('locationStatus');
+            if (err.code === 1) {
+                status.textContent = '位置权限被拒绝，定位打卡将跳过围栏验证';
+                alert.classList.remove('d-none');
+            }
+        },
+        { timeout: 8000, maximumAge: 60000 }   // 最多等 8 秒；60 秒内的旧定位结果也可以直接用，不用每次都重新定位
+    );
+}
+</script>
+}

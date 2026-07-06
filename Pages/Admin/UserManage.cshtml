@@ -1,0 +1,524 @@
+@page
+@using AttendanceSystem.Models.Enums
+@model AttendanceSystem.Pages.Admin.UserManageModel
+@{
+    ViewData["Title"] = "员工管理";
+
+    // 构造保留其它筛选条件的链接
+    string Q(int? deptId, bool unassigned, string? status, string? keyword, int p = 1, string? role = null)
+    {
+        role ??= Model.RoleFilter;   // 不传就沿用当前的角色筛选，切部门/状态/翻页时不会把角色筛选清掉
+        var parts = new List<string>();
+        if (unassigned) parts.Add("unassigned=true");
+        else if (deptId.HasValue) parts.Add("deptId=" + deptId.Value);
+        if (!string.IsNullOrEmpty(status)) parts.Add("status=" + status);
+        if (!string.IsNullOrEmpty(role)) parts.Add("role=" + role);
+        if (!string.IsNullOrEmpty(keyword)) parts.Add("keyword=" + Uri.EscapeDataString(keyword));
+        if (p > 1) parts.Add("p=" + p);
+        return parts.Count == 0 ? "?" : "?" + string.Join("&", parts);
+    }
+
+    // 每次提交都回传的“当前筛选上下文”隐藏字段（供服务端操作后保持筛选）
+    var kwEnc = System.Net.WebUtility.HtmlEncode(Model.Keyword ?? "");
+    var stEnc = System.Net.WebUtility.HtmlEncode(Model.StatusFilter ?? "");
+    var roleEnc = System.Net.WebUtility.HtmlEncode(Model.RoleFilter ?? "");
+    var ctxHidden =
+        $"<input type=\"hidden\" name=\"CtxDeptId\" value=\"{Model.SelectedDeptId}\" />" +
+        $"<input type=\"hidden\" name=\"CtxUnassigned\" value=\"{Model.Unassigned.ToString().ToLower()}\" />" +
+        $"<input type=\"hidden\" name=\"CtxStatus\" value=\"{stEnc}\" />" +
+        $"<input type=\"hidden\" name=\"CtxRole\" value=\"{roleEnc}\" />" +
+        $"<input type=\"hidden\" name=\"CtxKeyword\" value=\"{kwEnc}\" />" +
+        $"<input type=\"hidden\" name=\"CtxPage\" value=\"{Model.PageIndex}\" />";
+
+    bool allActive = !Model.Unassigned && Model.SelectedDeptId == null;
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-people me-2 text-primary"></i>员工管理</h4>
+    <button class="btn btn-primary btn-sm" onclick="openAdd()"><i class="bi bi-person-plus me-1"></i>新增员工</button>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+
+<!-- 钉钉对接 -->
+<div class="card mb-3 border-primary-subtle">
+    <div class="card-body py-3">
+        <div class="d-flex flex-wrap align-items-end gap-3">
+            <span class="fw-semibold"><i class="bi bi-link-45deg me-1 text-primary"></i>钉钉对接</span>
+            <form method="post" asp-page-handler="ImportDingTalk" class="mb-0"
+                  onsubmit="return confirm('将从钉钉通讯录整批导入员工（自动建好 userid 映射）。确认继续？')">
+                @Html.Raw(ctxHidden)
+                <button type="submit" class="btn btn-success btn-sm"><i class="bi bi-cloud-download me-1"></i>从钉钉导入员工</button>
+            </form>
+            <form method="post" asp-page-handler="AutoMapDingTalk" class="mb-0"
+                  onsubmit="return confirm('将按工号从钉钉反查 userid，回填到未映射的员工。确认继续？')">
+                @Html.Raw(ctxHidden)
+                <button type="submit" class="btn btn-outline-primary btn-sm">自动映射 userid</button>
+            </form>
+            <span class="vr"></span>
+            <form method="post" asp-page-handler="SyncDingTalk" class="d-flex align-items-end gap-2 mb-0"
+                  onsubmit="return confirm('将从钉钉拉取所选日期范围的打卡结果并落库。确认继续？')">
+                @Html.Raw(ctxHidden)
+                <div><label class="form-label small mb-1">从</label>
+                    <input asp-for="SyncFrom" type="date" class="form-control form-control-sm" style="max-width:150px" /></div>
+                <div><label class="form-label small mb-1">到</label>
+                    <input asp-for="SyncTo" type="date" class="form-control form-control-sm" style="max-width:150px" /></div>
+                <button type="submit" class="btn btn-primary btn-sm">立即同步打卡</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex gap-3 align-items-start">
+
+    <!-- ── 左侧：部门筛选树 ────────────────────────────────────────────── -->
+    <div class="card" style="width:260px;flex-shrink:0">
+        <div class="card-header d-flex justify-content-between align-items-center py-2">
+            <span><i class="bi bi-diagram-3 me-1"></i>部门</span>
+            <a href="/Admin/DepartmentManage" class="btn btn-outline-primary btn-sm py-0 px-2" title="前往部门管理">
+                <i class="bi bi-gear"></i> 管理
+            </a>
+        </div>
+        <div class="px-3 pt-2 pb-1 text-muted" style="font-size:.72rem">点击部门显示该部门及下级的全部人员</div>
+        <div class="list-group list-group-flush" style="max-height:70vh;overflow:auto">
+            <a href="@Q(null, false, Model.StatusFilter, Model.Keyword)"
+               class="list-group-item list-group-item-action d-flex justify-content-between align-items-center @(allActive ? "active" : "")">
+                <span><i class="bi bi-building me-1"></i>全公司</span>
+                <span class="badge @(allActive ? "bg-light text-primary" : "bg-secondary")">@Model.TotalEmployees</span>
+            </a>
+            @foreach (var n in Model.DeptTree)
+            {
+                var on = Model.SelectedDeptId == n.Id;
+                <div class="list-group-item list-group-item-action p-0 dept-node @(on ? "active" : "")"
+                     data-id="@n.Id" data-parent="@(n.ParentId?.ToString() ?? "")"
+                     style="@(n.Depth > 0 ? "display:none" : "")">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="d-flex align-items-center" style="padding:.4rem .3rem .4rem @(0.4 + n.Depth * 1.0)rem;min-width:0;flex:1">
+                            @if (n.HasChildren)
+                            {
+                                <i class="bi bi-chevron-right tree-toggle me-1" style="cursor:pointer;flex-shrink:0"
+                                   onclick="deptToggle(event, @n.Id, this)"></i>
+                            }
+                            else
+                            {
+                                <span class="me-1" style="display:inline-block;width:1rem;flex-shrink:0"></span>
+                            }
+                            <a href="@Q(n.Id, false, Model.StatusFilter, Model.Keyword)"
+                               class="text-decoration-none text-truncate @(on ? "text-white" : "text-body")" style="flex:1">
+                                <i class="bi bi-folder me-1"></i>@n.Name
+                            </a>
+                        </span>
+                        <span class="badge @(on ? "bg-light text-primary" : "bg-light text-muted") me-2" style="flex-shrink:0">@n.MemberCount</span>
+                    </div>
+                </div>
+            }
+            <a href="@Q(null, true, Model.StatusFilter, Model.Keyword)"
+               class="list-group-item list-group-item-action d-flex justify-content-between align-items-center @(Model.Unassigned ? "active" : "")">
+                <span><i class="bi bi-question-circle me-1"></i>未分配</span>
+                <span class="badge @(Model.Unassigned ? "bg-light text-primary" : "bg-secondary")">@Model.UnassignedCount</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- ── 右侧：员工列表 ──────────────────────────────────────────────── -->
+    <div class="flex-grow-1" style="min-width:0">
+
+        <!-- 工具条：搜索 + 状态筛选 -->
+        <div class="card mb-3">
+            <div class="card-body py-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <form method="get" class="d-flex gap-2">
+                    @if (Model.Unassigned) { <input type="hidden" name="unassigned" value="true" /> }
+                    else if (Model.SelectedDeptId.HasValue) { <input type="hidden" name="deptId" value="@Model.SelectedDeptId" /> }
+                    @if (!string.IsNullOrEmpty(Model.StatusFilter)) { <input type="hidden" name="status" value="@Model.StatusFilter" /> }
+                    @if (!string.IsNullOrEmpty(Model.RoleFilter)) { <input type="hidden" name="role" value="@Model.RoleFilter" /> }
+                    <input type="text" name="keyword" value="@Model.Keyword" class="form-control form-control-sm"
+                           style="max-width:200px" placeholder="姓名 / 工号" />
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i>搜索</button>
+                    @if (!string.IsNullOrEmpty(Model.Keyword))
+                    {
+                        <a href="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, null)" class="btn btn-outline-secondary btn-sm">清除</a>
+                    }
+                </form>
+                <div class="d-flex gap-2 align-items-center">
+                    <div class="btn-group btn-group-sm flex-shrink-0" role="group">
+                        <a href="@Q(Model.SelectedDeptId, Model.Unassigned, null, Model.Keyword)"
+                           class="btn text-nowrap @(string.IsNullOrEmpty(Model.StatusFilter) ? "btn-primary" : "btn-outline-primary")">全部</a>
+                        <a href="@Q(Model.SelectedDeptId, Model.Unassigned, "active", Model.Keyword)"
+                           class="btn text-nowrap @(Model.StatusFilter == "active" ? "btn-success" : "btn-outline-success")">在职</a>
+                        <a href="@Q(Model.SelectedDeptId, Model.Unassigned, "disabled", Model.Keyword)"
+                           class="btn text-nowrap @(Model.StatusFilter == "disabled" ? "btn-secondary" : "btn-outline-secondary")">已停用</a>
+                        <a href="@Q(Model.SelectedDeptId, Model.Unassigned, "blacklisted", Model.Keyword)"
+                           class="btn text-nowrap @(Model.StatusFilter == "blacklisted" ? "btn-dark" : "btn-outline-dark")">黑名单</a>
+                    </div>
+                    <select class="form-select form-select-sm" style="max-width:120px"
+                            onchange="if(this.value) location.href=this.value">
+                        <option value="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, 1, "")"
+                                selected="@string.IsNullOrEmpty(Model.RoleFilter)">全部角色</option>
+                        <option value="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, 1, "Admin")"
+                                selected="@(Model.RoleFilter == "Admin")">管理员</option>
+                        <option value="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, 1, "Clerk")"
+                                selected="@(Model.RoleFilter == "Clerk")">文员</option>
+                        <option value="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, 1, "Supervisor")"
+                                selected="@(Model.RoleFilter == "Supervisor")">主管</option>
+                        <option value="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, 1, "TeamLeader")"
+                                selected="@(Model.RoleFilter == "TeamLeader")">班组长</option>
+                        <option value="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, 1, "Employee")"
+                                selected="@(Model.RoleFilter == "Employee")">员工</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>员工列表（共 @Model.Total 人）</span>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-success btn-sm" onclick="doBatch('BatchActivate','确认批量启用所选员工？（黑名单员工会被跳过）')">批量启用</button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="doBatch('BatchDeactivate','确认批量停用所选员工？停用后无法登录。')">批量停用</button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0 align-middle">
+                        <thead>
+                            <tr>
+                                <th style="width:40px"><input type="checkbox" id="checkAll" onclick="toggleAll(this)" /></th>
+                                <th>姓名</th><th>工号</th><th>部门</th><th>角色</th>
+                                <th>用工性质</th>
+                                <th>手机</th><th>状态</th><th style="width:230px">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!Model.Users.Any())
+                            {
+                                <tr><td colspan="9" class="empty-state"><i class="bi bi-inbox"></i>暂无数据</td></tr>
+                            }
+                            @foreach (var u in Model.Users)
+                            {
+                                <tr>
+                                    <td><input type="checkbox" class="row-check" value="@u.Id" /></td>
+                                    <td>@u.RealName</td>
+                                    <td class="fw-semibold">@u.EmployeeNo</td>
+                                    <td class="small">@(u.Department?.DeptName ?? "—")</td>
+                                    <td><span class="badge bg-secondary">@u.Role.ToDisplayName()</span></td>
+                                    <td>
+                                        @if (u.Role == UserRole.Admin)
+                                        { <span class="badge bg-primary">正式工</span> }
+                                        else
+                                        { <span class="badge bg-light text-muted">临时工</span> }
+                                    </td>
+                                    <td class="small">@u.Phone</td>
+                                    <td>
+                                        @switch (u.Status)
+                                        {
+                                            case EmployeeStatus.Active:      <span class="badge bg-success">在职</span>      break;
+                                            case EmployeeStatus.Disabled:    <span class="badge bg-secondary">已停用</span>   break;
+                                            case EmployeeStatus.Blacklisted: <span class="badge bg-dark">黑名单</span>       break;
+                                        }
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-outline-primary btn-sm mb-1"
+                                                onclick="openEdit(@System.Text.Json.JsonSerializer.Serialize(new {
+                                                    id = u.Id, employeeNo = u.EmployeeNo, realName = u.RealName,
+                                                    role = u.Role.ToString(), deptId = u.DepartmentId, groupId = u.AttendanceGroupId,
+                                                    superId = u.SupervisorUserId, position = u.Position ?? "",
+                                                    phone = u.Phone ?? "",
+                                                    hireDate = u.HireDate?.ToString("yyyy-MM-dd") ?? "",
+                                                    dingTalkUserId = u.DingTalkUserId ?? ""
+                                                }))">编辑</button>
+                                        @if (u.Status == EmployeeStatus.Active)
+                                        {
+                                            <button class="btn btn-outline-warning btn-sm mb-1" onclick="doAction('Deactivate',@u.Id,'确认停用该员工？停用后无法登录。')">停用</button>
+                                        }
+                                        else if (u.Status == EmployeeStatus.Disabled)
+                                        {
+                                            <button class="btn btn-outline-success btn-sm mb-1" onclick="doAction('Activate',@u.Id,'确认启用该员工？')">启用</button>
+                                        }
+                                        @if (u.IsBlacklisted)
+                                        {
+                                            <button class="btn btn-outline-secondary btn-sm mb-1" onclick="doAction('RemoveBlacklist',@u.Id,'确认将该员工移出黑名单？（仍为已停用状态）')">移出黑名单</button>
+                                        }
+                                        else
+                                        {
+                                            <button class="btn btn-outline-dark btn-sm mb-1" onclick="doAction('Blacklist',@u.Id,'确认拉黑该员工？将禁止登录，且其工号永不再被使用。')">拉黑</button>
+                                        }
+                                        <button class="btn btn-outline-secondary btn-sm mb-1"
+                                                onclick="openResetPwd(@u.Id, @System.Text.Json.JsonSerializer.Serialize(u.RealName))">重置密码</button>
+                                        <button class="btn btn-outline-danger btn-sm mb-1" onclick="doAction('Delete',@u.Id,'确认彻底删除该员工？将同时删除其考勤/审批/通知等全部数据，且不可恢复！')">删除</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            @{
+                var totalPages = (int)Math.Ceiling(Model.Total / (double)AttendanceSystem.Pages.Admin.UserManageModel.PageSize);
+                var cur = Model.PageIndex < 1 ? 1 : Model.PageIndex;
+                var winFrom = Math.Max(1, cur - 2);
+                var winTo = Math.Min(totalPages, cur + 2);
+            }
+            @if (totalPages > 1)
+            {
+                <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span class="text-muted small">共 @Model.Total 人 · 第 @cur / @totalPages 页</span>
+                    <nav>
+                        <ul class="pagination pagination-sm mb-0">
+                            <li class="page-item @(cur <= 1 ? "disabled" : "")">
+                                <a class="page-link" href="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, cur - 1)">上一页</a>
+                            </li>
+                            @for (var pg = winFrom; pg <= winTo; pg++)
+                            {
+                                <li class="page-item @(pg == cur ? "active" : "")">
+                                    <a class="page-link" href="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, pg)">@pg</a>
+                                </li>
+                            }
+                            <li class="page-item @(cur >= totalPages ? "disabled" : "")">
+                                <a class="page-link" href="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, Model.Keyword, cur + 1)">下一页</a>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<!-- 统一的“行内/批量操作”隐藏表单 -->
+<form method="post" id="actionForm" class="d-none">
+    @Html.Raw(ctxHidden)
+    <input type="hidden" name="id" id="actId" />
+    <input type="hidden" name="BatchIds" id="actBatchIds" />
+</form>
+
+<!-- 新增/编辑 Modal -->
+<div class="modal fade" id="userModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="userModalTitle">新增员工</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" id="userForm">
+                @Html.Raw(ctxHidden)
+                <input type="hidden" asp-for="EditUserId" id="fEditUserId" />
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">工号 <span class="text-danger">*</span></label>
+                            <input asp-for="EmployeeNo" class="form-control" id="fEmployeeNo" required />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">姓名 <span class="text-danger">*</span></label>
+                            <input asp-for="RealName" class="form-control" id="fRealName" required />
+                        </div>
+                        <div class="col-md-6" id="pwdRow">
+                            <label class="form-label">初始密码</label>
+                            <input class="form-control bg-light" value="123456（系统统一设置）" disabled />
+                            <div class="form-text">新员工初始密码统一为 <b>123456</b>，员工登录后可自行修改。</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">角色</label>
+                            <select asp-for="Role" class="form-select" id="fRole">
+                                <option value="Employee">员工</option>
+                                <option value="TeamLeader">班组长</option>
+                                <option value="Supervisor">主管</option>
+                                <option value="Clerk">文员</option>
+                                <option value="Admin">管理员</option>
+                            </select>
+                            <div class="form-text">本系统只有"管理员"是正式工，其余角色均为临时工。</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">部门</label>
+                            <select asp-for="DeptId" class="form-select" id="fDeptId">
+                                <option value="">请选择</option>
+                                @foreach (var d in Model.Departments)
+                                { <option value="@d.Id">@d.DeptName</option> }
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">考勤组</label>
+                            <select asp-for="GroupId" class="form-select" id="fGroupId">
+                                <option value="">请选择</option>
+                                @foreach (var g in Model.Groups)
+                                { <option value="@g.Id">@g.GroupName</option> }
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">直属上级</label>
+                            <select asp-for="SuperId" class="form-select" id="fSuperId">
+                                <option value="">无</option>
+                                @foreach (var sup in Model.Supervisors)
+                                { <option value="@sup.Id">@sup.RealName（@sup.EmployeeNo）</option> }
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">岗位</label>
+                            <input asp-for="Position" class="form-control" id="fPosition" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">手机 <span class="text-danger" id="fPhoneReq">*</span></label>
+                            <input asp-for="Phone" class="form-control" id="fPhone" type="tel" maxlength="11"
+                                   pattern="^1[3-9]\d{9}$" title="请输入正确格式的手机号（11 位中国大陆手机号）" />
+                            <div class="form-text">新建员工需填写手机号，用于以后"忘记密码"自助找回。</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">入职日期</label>
+                            <input asp-for="HireDate" type="date" class="form-control" id="fHireDate" />
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary" id="userSubmitBtn">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 重置密码 Modal -->
+<div class="modal fade" id="resetPwdModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">重置密码</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" asp-page-handler="ResetPassword" id="resetPwdForm">
+                @Html.Raw(ctxHidden)
+                <input type="hidden" name="id" id="rpId" />
+                <div class="modal-body">
+                    <p class="mb-3">员工：<span id="rpName" class="fw-semibold"></span></p>
+                    <label class="form-label">新密码</label>
+                    <input asp-for="ResetPasswordValue" class="form-control" id="rpValue"
+                           placeholder="留空则由系统随机生成一个新密码" minlength="6" autocomplete="new-password" />
+                    <div class="form-text">可手动指定新密码（至少 6 位）；留空则和以前一样随机生成。</div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">确认重置</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+// 当前左侧选中的部门（新增员工时作为默认部门）
+const SELECTED_DEPT = @(Model.SelectedDeptId?.ToString() ?? "null");
+
+function toggleAll(cb) { document.querySelectorAll('.row-check').forEach(c => c.checked = cb.checked); }
+
+// ── 左侧部门树：默认折叠，点箭头展开/收起（点名字仍是筛选，不受影响）────────
+function deptToggle(ev, id, icon) {
+    ev.preventDefault(); ev.stopPropagation();
+    const expanded = icon.classList.contains('bi-chevron-down');
+    icon.classList.toggle('bi-chevron-down', !expanded);
+    icon.classList.toggle('bi-chevron-right', expanded);
+    deptSetChildren(id, !expanded);
+}
+function deptSetChildren(parentId, visible) {
+    document.querySelectorAll(`.dept-node[data-parent="${parentId}"]`).forEach(el => {
+        el.style.display = visible ? '' : 'none';
+        const cid = el.getAttribute('data-id');
+        const ic  = el.querySelector('.tree-toggle');
+        if (!visible) deptSetChildren(cid, false);
+        else          deptSetChildren(cid, ic ? ic.classList.contains('bi-chevron-down') : true);
+    });
+}
+// 打开页面时若正筛选某个深层部门，自动展开到它（否则它会被折叠隐藏，看不到选中态）
+document.addEventListener('DOMContentLoaded', () => {
+    if (SELECTED_DEPT === null) return;
+    const cur = document.querySelector(`.dept-node[data-id="${SELECTED_DEPT}"]`);
+    let pid = cur ? cur.getAttribute('data-parent') : '';
+    while (pid) {
+        const p = document.querySelector(`.dept-node[data-id="${pid}"]`);
+        if (!p) break;
+        const ic = p.querySelector('.tree-toggle');
+        if (ic) { ic.classList.remove('bi-chevron-right'); ic.classList.add('bi-chevron-down'); }
+        document.querySelectorAll(`.dept-node[data-parent="${pid}"]`).forEach(c => c.style.display = '');
+        pid = p.getAttribute('data-parent');
+    }
+});
+
+// 行内单个操作：通过统一隐藏表单提交（自动带上当前筛选上下文）
+function doAction(handler, id, confirmMsg) {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    const f = document.getElementById('actionForm');
+    f.action = '?handler=' + handler;
+    document.getElementById('actId').value = id;
+    document.getElementById('actBatchIds').value = '';
+    f.submit();
+}
+// 批量操作：收集勾选的员工 id
+function doBatch(handler, confirmMsg) {
+    const ids = [...document.querySelectorAll('.row-check:checked')].map(c => c.value);
+    if (ids.length === 0) { alert('请先勾选员工'); return; }
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    const f = document.getElementById('actionForm');
+    f.action = '?handler=' + handler;
+    document.getElementById('actId').value = 0;
+    document.getElementById('actBatchIds').value = ids.join(',');
+    f.submit();
+}
+
+// 新增
+function openAdd() {
+    document.getElementById('userModalTitle').textContent = '新增员工';
+    document.getElementById('userForm').action = '?handler=Create';
+    document.getElementById('userSubmitBtn').textContent = '创建';
+    document.getElementById('fEditUserId').value = 0;
+    document.getElementById('pwdRow').style.display = '';
+    ['fEmployeeNo','fRealName','fPosition','fPhone','fHireDate']
+        .forEach(id => document.getElementById(id).value = '');
+    document.getElementById('fRole').value = 'Employee';
+    document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
+    document.getElementById('fGroupId').value = '';
+    document.getElementById('fSuperId').value = '';
+    document.getElementById('fPhone').required = true;             // 新建必须填手机号
+    document.getElementById('fPhoneReq').style.display = '';
+    new bootstrap.Modal(document.getElementById('userModal')).show();
+}
+
+// 重置密码：弹窗填写（留空=随机生成，和以前的行为一致）
+function openResetPwd(id, name) {
+    document.getElementById('rpId').value = id;
+    document.getElementById('rpName').textContent = name;
+    document.getElementById('rpValue').value = '';
+    new bootstrap.Modal(document.getElementById('resetPwdModal')).show();
+}
+
+// 编辑
+function openEdit(data) {
+    document.getElementById('userModalTitle').textContent = '编辑员工 - ' + data.realName;
+    document.getElementById('userForm').action = '?handler=Update';
+    document.getElementById('userSubmitBtn').textContent = '保存';
+    document.getElementById('fEditUserId').value = data.id;
+    document.getElementById('pwdRow').style.display = 'none';
+    document.getElementById('fEmployeeNo').value = data.employeeNo;
+    document.getElementById('fRealName').value   = data.realName;
+    document.getElementById('fRole').value       = data.role;
+    document.getElementById('fDeptId').value     = data.deptId || '';
+    document.getElementById('fGroupId').value    = data.groupId || '';
+    document.getElementById('fSuperId').value    = data.superId || '';
+    document.getElementById('fPosition').value   = data.position;
+    document.getElementById('fPhone').value      = data.phone;
+    document.getElementById('fPhone').required   = false;          // 编辑老员工不强制补填手机号
+    document.getElementById('fPhoneReq').style.display = 'none';
+    document.getElementById('fHireDate').value   = data.hireDate;
+    new bootstrap.Modal(document.getElementById('userModal')).show();
+}
+</script>
+}

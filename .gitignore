@@ -1,0 +1,19 @@
+bin/
+obj/
+publish/
+publish.tar.gz
+.vs/
+logs/
+wwwroot/uploads/
+
+# appsettings.json 里是真实的数据库密码和钉钉密钥，不能上传
+# 仓库里放的是不含真实密钥的 appsettings.Example.json，仅供参考
+appsettings.json
+appsettings.*.json
+!appsettings.Example.json
+
+*.user
+
+# Claude Code 本机权限设置，因人而异，不用同步
+.claude/settings.local.json
+

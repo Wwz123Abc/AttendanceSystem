@@ -1,0 +1,6 @@
+用例 ID,模块,用例名称,优先级,前置条件,测试步骤,预期结果
+A-01,登录/登出,各角色正常登录,P0,系统已启动；对应角色测试账号已创建且 IsActive=true,"1. 访问根路径 /
+2. 输入正确工号和密码
+3. 可选勾选「记住我」
+4. 点击登录
+5. 分别用 Admin/Clerk/Supervisor/TeamLeader/Employee 重复","跳转登录页；登录成功写入 Cookie（8小时有效）；Admin/Clerk→/Admin/Dashboard，Supervisor/TeamLeader→/Approval/PendingApproval，Employee→/Attendance/PunchCard"

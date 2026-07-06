@@ -1,0 +1,98 @@
+@page
+@model AttendanceSystem.Pages.Report.MonthlyReportModel
+@{
+    ViewData["Title"] = "月度报表";
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-file-earmark-bar-graph me-2 text-primary"></i>月度考勤报表</h4>
+    <a asp-page-handler="ExportSummary" asp-route-year="@Model.Year" asp-route-month="@Model.Month"
+       class="btn btn-success btn-sm">
+        <i class="bi bi-download me-1"></i>导出汇总表
+    </a>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body py-3">
+        <form method="get" class="d-flex align-items-center gap-3 flex-wrap">
+            <label class="fw-semibold mb-0">年份</label>
+            <select name="year" class="form-select form-select-sm" style="width:100px">
+                @for (int y = DateTime.Today.Year; y >= DateTime.Today.Year - 2; y--)
+                {
+                    <option value="@y" selected="@(y == Model.Year)">@y 年</option>
+                }
+            </select>
+            <label class="fw-semibold mb-0">月份</label>
+            <select name="month" class="form-select form-select-sm" style="width:90px">
+                @for (int m = 1; m <= 12; m++)
+                {
+                    <option value="@m" selected="@(m == Model.Month)">@m 月</option>
+                }
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="bi bi-search me-1"></i>查询
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        @Model.Year 年 @Model.Month 月 部门考勤汇总（共 @Model.Summaries.Count 人）
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>工号</th>
+                        <th>姓名</th>
+                        <th>部门</th>
+                        <th>应出勤</th>
+                        <th>实出勤</th>
+                        <th>夜班</th>
+                        <th>迟到</th>
+                        <th>早退</th>
+                        <th>缺勤</th>
+                        <th>请假(天)</th>
+                        <th>加班(h)</th>
+                        <th>总工时(h)</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.Summaries.Any())
+                    {
+                        <tr><td colspan="13" class="empty-state"><i class="bi bi-inbox"></i>暂无数据</td></tr>
+                    }
+                    @foreach (var s in Model.Summaries)
+                    {
+                        <tr>
+                            <td class="small text-muted">@s.EmployeeNo</td>
+                            <td class="fw-semibold">@s.RealName</td>
+                            <td class="small">@s.DeptName</td>
+                            <td>@s.ExpectedWorkdays</td>
+                            <td class="@(s.ActualWorkdays < s.ExpectedWorkdays ? "text-danger" : "text-success")">@s.ActualWorkdays</td>
+                            <td class="@(s.NightShiftDays > 0 ? "text-info fw-semibold" : "text-muted")">@s.NightShiftDays</td>
+                            <td class="@(s.LateCount > 0 ? "text-warning" : "")">@s.LateCount</td>
+                            <td class="@(s.EarlyLeaveCount > 0 ? "text-warning" : "")">@s.EarlyLeaveCount</td>
+                            <td class="@(s.AbsentDays > 0 ? "text-danger" : "")">@s.AbsentDays</td>
+                            <td>@s.LeaveDays.ToString("F1")</td>
+                            <td>@s.TotalOvertimeHours.ToString("F1")</td>
+                            <td>@s.TotalWorkHours.ToString("F1")</td>
+                            <td>
+                                <a asp-page-handler="ExportDetail"
+                                   asp-route-userId="@s.UserId"
+                                   asp-route-year="@Model.Year"
+                                   asp-route-month="@Model.Month"
+                                   class="btn btn-outline-primary btn-sm">
+                                    <i class="bi bi-download"></i> 明细
+                                </a>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
