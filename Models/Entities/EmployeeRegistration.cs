@@ -23,6 +23,30 @@ public class EmployeeRegistration
     [Required, MaxLength(18)]
     public string IdNumber { get; set; } = string.Empty;    // 员工自己填的身份证号
 
+    /// <summary>岗位（员工自己从固定选项里选，如"电气熟手""普工"等，管理员确认时可再调整）。</summary>
+    [MaxLength(100)]
+    public string? Position { get; set; }
+
+    /// <summary>劳务公司（对应正式员工账号上的"合同公司"字段，即实际签合同、发工资的公司主体）。</summary>
+    [MaxLength(100)]
+    public string? ContractCompany { get; set; }
+
+    /// <summary>家庭住址</summary>
+    [MaxLength(200)]
+    public string? HomeAddress { get; set; }
+
+    /// <summary>紧急联系人姓名（不是本人，出意外时用来联系家属/朋友）</summary>
+    [MaxLength(50)]
+    public string? EmergencyContactName { get; set; }
+
+    /// <summary>紧急联系人电话</summary>
+    [MaxLength(20)]
+    public string? EmergencyContactPhone { get; set; }
+
+    /// <summary>身份证照片的访问地址（员工提交登记时上传，确认建号时会带到正式员工资料里）。</summary>
+    [MaxLength(500)]
+    public string? IdCardPhotoUrl { get; set; }
+
     public RegistrationStatus Status { get; set; } = RegistrationStatus.Pending;  // 处理状态
 
     public DateTime SubmittedAt { get; set; } = DateTime.Now;   // 员工提交时间

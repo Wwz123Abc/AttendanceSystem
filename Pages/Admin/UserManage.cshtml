@@ -377,7 +377,12 @@
                                             <div class="d-flex flex-nowrap gap-1">
                                                 <button class="btn btn-primary btn-sm"
                                                         onclick="openConfirm(@System.Text.Json.JsonSerializer.Serialize(new {
-                                                            id = r.Id, realName = r.RealName, phone = r.Phone, idNumber = r.IdNumber
+                                                            id = r.Id, realName = r.RealName, phone = r.Phone, idNumber = r.IdNumber,
+                                                            position = r.Position ?? "", contractCompany = r.ContractCompany ?? "",
+                                                            homeAddress = r.HomeAddress ?? "",
+                                                            emergencyContactName = r.EmergencyContactName ?? "",
+                                                            emergencyContactPhone = r.EmergencyContactPhone ?? "",
+                                                            idCardPhotoUrl = r.IdCardPhotoUrl ?? ""
                                                         }))">确认录入</button>
                                                 <button class="btn btn-outline-danger btn-sm"
                                                         onclick="openRejectReg(@r.Id, @System.Text.Json.JsonSerializer.Serialize(r.RealName))">驳回</button>
@@ -686,16 +691,22 @@ function openConfirm(data) {
     document.getElementById('pwdRow').style.display = '';
     document.getElementById('fEmployeeNo').value = '';
     document.getElementById('fRealName').value   = data.realName;
-    document.getElementById('fPosition').value   = '';
+    document.getElementById('fPosition').value   = data.position || '';
     document.getElementById('fPhone').value      = data.phone;
     document.getElementById('fIdNumber').value   = data.idNumber;
-    document.getElementById('fContractCompany').value = '';
+    document.getElementById('fContractCompany').value = data.contractCompany || '';
     document.getElementById('fHireDate').value   = '';
-    document.getElementById('fHomeAddress').value = '';
-    document.getElementById('fEmergencyContactName').value = '';
-    document.getElementById('fEmergencyContactPhone').value = '';
-    document.getElementById('fIdCardPhoto').value = '';
-    document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';
+    document.getElementById('fHomeAddress').value = data.homeAddress || '';
+    document.getElementById('fEmergencyContactName').value = data.emergencyContactName || '';
+    document.getElementById('fEmergencyContactPhone').value = data.emergencyContactPhone || '';
+    document.getElementById('fIdCardPhoto').value = '';   // 文件框留空=沿用员工登记时已上传的照片（服务端会自动带过去）
+    if (data.idCardPhotoUrl) {
+        document.getElementById('fIdCardPhotoPreviewWrap').style.display = '';
+        document.getElementById('fIdCardPhotoPreview').src = data.idCardPhotoUrl;
+        document.getElementById('fIdCardPhotoPreviewLink').href = data.idCardPhotoUrl;
+    } else {
+        document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';
+    }
     document.getElementById('fRole').value       = 'Employee';
     document.getElementById('fDeptId').value     = SELECTED_DEPT !== null ? SELECTED_DEPT : '';
     document.getElementById('fGroupId').value    = '';

@@ -140,7 +140,12 @@ public class UserManageModel(
         {
             ValidateContact(requirePhone: true);
             var newUser = BuildUser();
-            newUser.IdCardPhotoUrl = await SaveIdCardPhotoAsync(newUser.EmployeeNo, null);
+            // 如果是在"确认录入"某条扫码登记，员工自己提交时可能已经上传过身份证照片；
+            // 管理员这次没有重新上传的话，就沿用登记里那张，避免让员工再扫一次码补传
+            string? regPhotoUrl = null;
+            if (RegistrationId.HasValue)
+                regPhotoUrl = (await db.EmployeeRegistrations.FindAsync(RegistrationId.Value))?.IdCardPhotoUrl;
+            newUser.IdCardPhotoUrl = await SaveIdCardPhotoAsync(newUser.EmployeeNo, regPhotoUrl);
             // 部门长期跟随了某个考勤组时，自动归入该组；部门没配跟随关系则维持表单里手动选的考勤组
             if (DeptId.HasValue)
             {

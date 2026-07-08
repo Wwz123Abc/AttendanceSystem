@@ -24,6 +24,9 @@ public class EmployeeRegistrationService(AttendanceDbContext db) : IEmployeeRegi
             throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
         if (!Regex.IsMatch(idNumber, @"^\d{17}[\dX]$"))
             throw new InvalidOperationException("请输入正确格式的身份证号（18 位）");
+        // 岗位是页面下拉框固定选项，这里再校验一遍，防止绕过页面直接提交乱填的值
+        if (!string.IsNullOrWhiteSpace(dto.Position) && !IEmployeeRegistrationService.AllowedPositions.Contains(dto.Position))
+            throw new InvalidOperationException("请选择正确的岗位选项");
 
         // 已经是在职员工了，不用再登记一遍，让员工直接联系管理员处理
         var alreadyEmployee = await db.Users.AnyAsync(u => u.Phone == phone || u.IdNumber == idNumber);
@@ -38,9 +41,15 @@ public class EmployeeRegistrationService(AttendanceDbContext db) : IEmployeeRegi
 
         db.EmployeeRegistrations.Add(new EmployeeRegistration
         {
-            RealName    = realName,
-            Phone       = phone,
-            IdNumber    = idNumber,
+            RealName              = realName,
+            Phone                 = phone,
+            IdNumber              = idNumber,
+            Position              = string.IsNullOrWhiteSpace(dto.Position)              ? null : dto.Position.Trim(),
+            ContractCompany       = string.IsNullOrWhiteSpace(dto.ContractCompany)       ? null : dto.ContractCompany.Trim(),
+            HomeAddress           = string.IsNullOrWhiteSpace(dto.HomeAddress)           ? null : dto.HomeAddress.Trim(),
+            EmergencyContactName  = string.IsNullOrWhiteSpace(dto.EmergencyContactName)  ? null : dto.EmergencyContactName.Trim(),
+            EmergencyContactPhone = string.IsNullOrWhiteSpace(dto.EmergencyContactPhone) ? null : dto.EmergencyContactPhone.Trim(),
+            IdCardPhotoUrl        = string.IsNullOrWhiteSpace(dto.IdCardPhotoUrl)        ? null : dto.IdCardPhotoUrl,
             Status      = RegistrationStatus.Pending,
             SubmittedAt = DateTime.Now
         });
@@ -55,10 +64,16 @@ public class EmployeeRegistrationService(AttendanceDbContext db) : IEmployeeRegi
             .OrderByDescending(r => r.SubmittedAt)
             .Select(r => new EmployeeRegistrationDto
             {
-                Id          = r.Id,
-                RealName    = r.RealName,
-                Phone       = r.Phone,
-                IdNumber    = r.IdNumber,
+                Id                    = r.Id,
+                RealName              = r.RealName,
+                Phone                 = r.Phone,
+                IdNumber              = r.IdNumber,
+                Position              = r.Position,
+                ContractCompany       = r.ContractCompany,
+                HomeAddress           = r.HomeAddress,
+                EmergencyContactName  = r.EmergencyContactName,
+                EmergencyContactPhone = r.EmergencyContactPhone,
+                IdCardPhotoUrl        = r.IdCardPhotoUrl,
                 Status      = r.Status,
                 StatusText  = r.Status.ToDisplayName(),
                 SubmittedAt = r.SubmittedAt
