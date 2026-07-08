@@ -28,9 +28,11 @@ public class AttendanceDbContext : DbContext
     public DbSet<MonthlyAttendanceSummary>  MonthlyAttendanceSummaries => Set<MonthlyAttendanceSummary>();
     public DbSet<ApprovalRequest>           ApprovalRequests           => Set<ApprovalRequest>();
     public DbSet<ApprovalStep>              ApprovalSteps              => Set<ApprovalStep>();
-    public DbSet<ApprovalFlow>              ApprovalFlows              => Set<ApprovalFlow>();
+    public DbSet<AttendanceGroupApprover>   AttendanceGroupApprovers   => Set<AttendanceGroupApprover>();
+    public DbSet<AttendanceGroupLocation>   AttendanceGroupLocations   => Set<AttendanceGroupLocation>();
     public DbSet<Holiday>                   Holidays                   => Set<Holiday>();
     public DbSet<Notification>              Notifications              => Set<Notification>();
+    public DbSet<EmployeeRegistration>      EmployeeRegistrations      => Set<EmployeeRegistration>();
 
     // 这个方法在“建立数据库模型”时被调用，用来配置表名、关系、索引、唯一约束等。
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -63,6 +65,7 @@ public class AttendanceDbContext : DbContext
         {
             e.HasIndex(u => u.EmployeeNo).IsUnique();   // 工号不能重复
             e.HasIndex(u => u.Phone);                   // 给手机号建索引，查得更快
+            e.HasIndex(u => u.IdNumber);                 // 给身份证号建索引，查重时更快
 
             // 上级被删 → 下属的“上级”字段清空（SetNull），不连带删下属
             e.HasOne(u => u.Supervisor)
@@ -83,12 +86,18 @@ public class AttendanceDbContext : DbContext
              .OnDelete(DeleteBehavior.SetNull);
         });
 
-        // ── Department：部门的父子关系（上级部门删除时把子部门的 ParentId 置空）──
+        // ── Department：部门的父子关系（上级部门删除时把子部门的 ParentId 置空）；
+        //    部门长期跟随的考勤组被删 → 只把这个跟随关系清空，部门本身保留 ──
         modelBuilder.Entity<Department>(e =>
         {
             e.HasOne(d => d.ParentDepartment)
              .WithMany(d => d.ChildDepartments)
              .HasForeignKey(d => d.ParentId)
+             .OnDelete(DeleteBehavior.SetNull);
+
+            e.HasOne(d => d.AttendanceGroup)
+             .WithMany(g => g.Departments)
+             .HasForeignKey(d => d.AttendanceGroupId)
              .OnDelete(DeleteBehavior.SetNull);
         });
 
@@ -152,12 +161,29 @@ public class AttendanceDbContext : DbContext
              .OnDelete(DeleteBehavior.Restrict);
         });
 
-        // ── ApprovalFlow：考勤组删了，其审批流配置一起删 ──
-        modelBuilder.Entity<ApprovalFlow>(e =>
+        // ── AttendanceGroupApprover：同一考勤组不能重复配同一个审批人；组删了，审批人名单一起删；
+        //    审批人用 Restrict（不允许直接删用户，避免误删正被引用的审批人）──
+        modelBuilder.Entity<AttendanceGroupApprover>(e =>
         {
-            e.HasOne(f => f.AttendanceGroup)
-             .WithMany(g => g.ApprovalFlows)
-             .HasForeignKey(f => f.AttendanceGroupId)
+            e.HasIndex(a => new { a.AttendanceGroupId, a.UserId }).IsUnique();
+
+            e.HasOne(a => a.AttendanceGroup)
+             .WithMany(g => g.Approvers)
+             .HasForeignKey(a => a.AttendanceGroupId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne(a => a.Approver)
+             .WithMany()
+             .HasForeignKey(a => a.UserId)
+             .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── AttendanceGroupLocation：考勤组删了，其打卡地点一起删 ──
+        modelBuilder.Entity<AttendanceGroupLocation>(e =>
+        {
+            e.HasOne(l => l.AttendanceGroup)
+             .WithMany(g => g.Locations)
+             .HasForeignKey(l => l.AttendanceGroupId)
              .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -165,6 +191,19 @@ public class AttendanceDbContext : DbContext
         modelBuilder.Entity<Holiday>(e =>
         {
             e.HasIndex(h => new { h.HolidayDate, h.AttendanceGroupId });
+        });
+
+        // ── EmployeeRegistration：按手机号/身份证号建索引，方便查重；确认后关联的正式账号如果被删，
+        //    只把关联字段清空，登记记录本身保留（当作审核历史，不跟着连带删除）──
+        modelBuilder.Entity<EmployeeRegistration>(e =>
+        {
+            e.HasIndex(r => r.Phone);
+            e.HasIndex(r => r.IdNumber);
+
+            e.HasOne(r => r.ConfirmedUser)
+             .WithMany()
+             .HasForeignKey(r => r.ConfirmedUserId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── Notification：员工删了，其通知一起删 ──
@@ -203,7 +242,6 @@ public class AttendanceDbContext : DbContext
             Id                 = 1,
             GroupName          = "总公司考勤组",
             CompanyName        = "总公司",
-            PunchRadiusMeters  = 500,
             EnableLocationPunch = false,
             LunchBreakMinutes  = 60,
             DinnerBreakMinutes = 30,

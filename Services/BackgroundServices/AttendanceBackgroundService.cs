@@ -84,10 +84,16 @@ public class AttendanceBackgroundService(
 
         var users = await db.Users.Where(u => u.IsActive).ToListAsync();
 
-        // 一次性把“今天的假期”和“今天已有的考勤记录”查出来放内存，循环里直接用，避免逐人查库（N+1）
+        // 一次性把“今天的假期”“今天已有的考勤记录”“今天的排班”查出来放内存，循环里直接用，避免逐人查库（N+1）
         var todayHolidays = await db.Holidays.Where(h => h.HolidayDate == today).ToListAsync();
         var recordByUser  = (await db.AttendanceRecords.Where(r => r.WorkDate == today).ToListAsync())
             .GroupBy(r => r.UserId).ToDictionary(g => g.Key, g => g.First());
+        // 今天排了班的人，连同班次一起取出来——用来判断"这个班次自己配置的每周休息日"是不是命中了今天
+        var todayAssignmentByUser = (await db.ShiftAssignments
+                .Include(a => a.ShiftSchedule)
+                .Where(a => a.WorkDate == today)
+                .ToListAsync())
+            .GroupBy(a => a.UserId).ToDictionary(g => g.Key, g => g.First());
 
         // 这个考勤组今天是不是休息日（法定/公司休息，但调班补班日不算休息）
         // 说明：这里判断“是不是节假日”的逻辑，和 AttendanceService.IsHolidayAsync 看起来很像，
@@ -109,7 +115,15 @@ public class AttendanceBackgroundService(
         foreach (var user in users)
         {
             if (IsRestDay(user.AttendanceGroupId)) continue;                          // 休息日不处理
-            if (isWeekend && !IsCompensatoryWorkday(user.AttendanceGroupId)) continue; // 普通周末不处理
+            var isCompDay = IsCompensatoryWorkday(user.AttendanceGroupId);
+            if (isWeekend && !isCompDay) continue;                                    // 普通周末不处理
+
+            // 补班日之外，如果今天排的班次自己配了"每周休息日"、命中了今天，也当休息处理
+            // （比如三班倒可能休二、三，不是标准的周六周日；但补班日是公司统一要求上班，优先级更高，不受这个影响）
+            if (!isCompDay &&
+                todayAssignmentByUser.TryGetValue(user.Id, out var todayAssignment) &&
+                todayAssignment.ShiftSchedule.IsRestDay(today.DayOfWeek))
+                continue;
 
             recordByUser.TryGetValue(user.Id, out var record);   // 取这个人今天的考勤记录（可能没有）
 

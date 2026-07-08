@@ -6,10 +6,6 @@
 
 <div class="page-header d-flex justify-content-between align-items-center">
     <h4><i class="bi bi-file-earmark-bar-graph me-2 text-primary"></i>月度考勤报表</h4>
-    <a asp-page-handler="ExportSummary" asp-route-year="@Model.Year" asp-route-month="@Model.Month"
-       class="btn btn-success btn-sm">
-        <i class="bi bi-download me-1"></i>导出汇总表
-    </a>
 </div>
 
 <div class="card mb-4">
@@ -31,6 +27,56 @@
             </select>
             <button type="submit" class="btn btn-primary btn-sm">
                 <i class="bi bi-search me-1"></i>查询
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-file-earmark-spreadsheet me-1"></i>模板格式月度汇总表（按公司要求的模板导出，含每日打卡明细）</div>
+    <div class="card-body py-3">
+        <form method="get" asp-page-handler="ExportTemplate">
+            @* GET 表单提交时，浏览器只会保留表单里的字段拼成新的查询字符串，action 地址里 asp-page-handler
+               生成的 "?handler=ExportTemplate" 会被整个丢弃——所以必须再放一个同名的隐藏字段，
+               "handler" 这个值才能真正跟着提交上去，不然点了按钮会悄悄回到默认的 OnGetAsync（看起来就像没反应）。 *@
+            <input type="hidden" name="handler" value="ExportTemplate" />
+            <input type="hidden" name="year" value="@Model.Year" />
+            <input type="hidden" name="month" value="@Model.Month" />
+            <div class="mb-2 small text-muted">
+                统计周期：@(Model.Month == 1 ? Model.Year - 1 : Model.Year)年@(Model.Month == 1 ? 12 : Model.Month - 1)月26日 至 @(Model.Year)年@(Model.Month)月25日（用上面选的"年份/月份"决定周期）
+            </div>
+            <label class="form-label fw-semibold mb-1">
+                导出范围
+                <small class="text-muted fw-normal">（勾选公司=连它下面所有部门一起导出，范围大；只勾具体部门=只导出这个部门，范围小；都不勾=导出全公司所有人）</small>
+            </label>
+            <div id="reportDeptTree" class="border rounded p-2 mb-2" style="max-height:240px;overflow-y:auto;">
+                @foreach (var d in Model.DeptTree)
+                {
+                    <div class="form-check" style="padding-left:@(1.5 + d.Depth * 1.2)rem">
+                        @if (d.RealDeptId.HasValue)
+                        {
+                            <input class="form-check-input dept-checkbox" type="checkbox"
+                                   name="deptIds" value="@d.RealDeptId" id="rdept_@d.NodeId"
+                                   data-id="@d.NodeId" data-parent="@d.ParentNodeId"
+                                   onchange="onReportDeptCheckboxChange(this)" />
+                            <label class="form-check-label" for="rdept_@d.NodeId">@d.Name</label>
+                        }
+                        else
+                        {
+                            <input class="form-check-input dept-checkbox" type="checkbox" id="rdept_@d.NodeId"
+                                   data-id="@d.NodeId" data-parent=""
+                                   onchange="onReportDeptCheckboxChange(this)" />
+                            <label class="form-check-label fw-bold" for="rdept_@d.NodeId"><i class="bi bi-building me-1"></i>@d.Name</label>
+                        }
+                    </div>
+                }
+                @if (!Model.DeptTree.Any())
+                {
+                    <div class="text-muted small">暂无部门，请先到"部门管理"创建部门</div>
+                }
+            </div>
+            <button type="submit" class="btn btn-success btn-sm">
+                <i class="bi bi-download me-1"></i>导出模板汇总表
             </button>
         </form>
     </div>
@@ -96,3 +142,18 @@
         </div>
     </div>
 </div>
+
+@section Scripts {
+    <script>
+        // 勾选/取消"公司/部门"合并树里的某一项时，连带把它所有下级节点（部门/子部门）也一起勾上/取消，
+        // 勾公司节点就相当于把它下面所有部门都选中，范围可以很大；只勾具体部门，范围就很小。
+        function onReportDeptCheckboxChange(checkbox) {
+            const checked = checkbox.checked;
+            const nodeId  = checkbox.dataset.id;
+            document.querySelectorAll(`#reportDeptTree .dept-checkbox[data-parent="${nodeId}"]`).forEach(child => {
+                child.checked = checked;
+                onReportDeptCheckboxChange(child);   // 递归处理下一级
+            });
+        }
+    </script>
+}

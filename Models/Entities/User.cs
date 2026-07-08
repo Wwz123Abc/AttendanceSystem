@@ -55,6 +55,14 @@ public class User
     [MaxLength(20)]
     public string? Phone { get; set; }                      // 手机号
 
+    /// <summary>身份证号（18 位）。多来自员工扫码自助登记时自己填写。</summary>
+    [MaxLength(18)]
+    public string? IdNumber { get; set; }
+
+    /// <summary>合同公司（员工实际签合同、发工资的公司主体，可能和所在部门的公司不是同一家）。</summary>
+    [MaxLength(100)]
+    public string? ContractCompany { get; set; }
+
     [MaxLength(100)]
     public string? Email { get; set; }                      // 邮箱
 

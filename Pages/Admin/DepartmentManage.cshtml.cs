@@ -8,9 +8,9 @@ using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Admin;
 
-/// <summary>部门管理页：单页树形表格，支持增删改、批量删除、添加子部门。新建部门时自动建对应考勤组。</summary>
+/// <summary>部门管理页：单页树形表格，支持增删改、批量删除、添加子部门。</summary>
 [Authorize(Policy = "ManagePolicy")]
-public class DepartmentManageModel(AttendanceDbContext db, IAttendanceGroupService groupService) : PageModel
+public class DepartmentManageModel(AttendanceDbContext db) : PageModel
 {
     /// <summary>树形展开后的扁平行（已按父子顺序排好，带层级深度）。</summary>
     public List<DeptRow> Rows { get; set; } = [];
@@ -96,8 +96,7 @@ public class DepartmentManageModel(AttendanceDbContext db, IAttendanceGroupServi
             };
             db.Departments.Add(dept);
             await db.SaveChangesAsync();
-            await groupService.EnsureDeptGroupAsync(dept.Id);   // 同步自动创建对应考勤组
-            SuccessMessage = $"部门「{DeptName.Trim()}」创建成功（已自动生成对应考勤组）";
+            SuccessMessage = $"部门「{DeptName.Trim()}」创建成功";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
 

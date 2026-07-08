@@ -16,7 +16,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     : IApprovalService
 {
     /// <summary>
-    /// 提交申请：算请假/加班时长 → 生成申请单(带单号) → 按审批流建审批节点 → 通知第一个审批人。
+    /// 提交申请：算请假/加班时长 → 生成申请单(带单号) → 建审批节点(员工自选审批人/直属上级/兜底管理员) → 通知审批人。
     /// </summary>
     public async Task<ApprovalRequest> SubmitApprovalAsync(int applicantUserId, SubmitApprovalDto dto)
     {
@@ -63,7 +63,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         db.ApprovalRequests.Add(request);
         await db.SaveChangesAsync();   // 先存单子，拿到它的 Id
 
-        await CreateApprovalStepsAsync(request, user);   // 建审批节点
+        await CreateApprovalStepsAsync(request, user, dto.ApproverUserId);   // 建审批节点
         await NotifyApproversAsync(request);             // 通知第一个审批人
         return request;
     }
@@ -235,6 +235,27 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             .Select(ToDto).ToList();
     }
 
+    /// <summary>
+    /// 查某员工提交申请时可选的审批人名单（取自其所在考勤组配置的审批人）。
+    /// </summary>
+    public async Task<List<ApproverOptionDto>> GetAvailableApproversAsync(int userId)
+    {
+        var user = await db.Users.FindAsync(userId);
+        if (user?.AttendanceGroupId is null) return [];   // 没有考勤组，就没有名单可选
+
+        return await db.AttendanceGroupApprovers
+            .Where(a => a.AttendanceGroupId == user.AttendanceGroupId)
+            .Include(a => a.Approver)
+            .OrderBy(a => a.Approver.RealName)
+            .Select(a => new ApproverOptionDto
+            {
+                UserId   = a.UserId,
+                RealName = a.Approver.RealName,
+                Position = a.Approver.Position
+            })
+            .ToListAsync();
+    }
+
     /// <summary>生成申请单号：前缀(BK补卡/QJ请假/JB加班) + 日期 + 当天第几单。</summary>
     public async Task<string> GenerateRequestNoAsync(ApprovalType type)
     {
@@ -254,47 +275,40 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     // ── 私有方法 ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 为申请创建审批节点：
-    /// 有配审批流就按审批流（可多级）；没配就回退“直属上级单级”，
-    /// 连上级也没有时，兜底指派一名管理员/文员，避免申请永远没人审。
+    /// 为申请创建审批节点（现在只会有一个节点，一步审完）：
+    /// 考勤组配了审批人名单 → 必须是员工自己从名单里选的那个人；
+    /// 组里没配名单 → 回退“直属上级”；连上级也没有 → 兜底指派一名管理员/文员，避免申请永远没人审。
     /// </summary>
-    private async Task CreateApprovalStepsAsync(ApprovalRequest request, User applicant)
+    private async Task CreateApprovalStepsAsync(ApprovalRequest request, User applicant, int? selectedApproverUserId)
     {
-        // 找这个考勤组 + 这种申请类型 的启用中的审批流
-        var flow = await db.ApprovalFlows
-            .FirstOrDefaultAsync(f =>
-                f.AttendanceGroupId == applicant.AttendanceGroupId &&
-                f.ApprovalType      == request.ApprovalType &&
-                f.IsActive);
+        var groupApproverIds = await db.AttendanceGroupApprovers
+            .Where(a => a.AttendanceGroupId == applicant.AttendanceGroupId)
+            .Select(a => a.UserId)
+            .ToListAsync();
 
-        if (flow is null)
+        int? approverId;
+        if (groupApproverIds.Count > 0)
         {
-            // 没有审批流：优先直属上级；没上级就兜底找个管理员/文员
-            var approverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
-            if (approverId.HasValue)
-                db.ApprovalSteps.Add(new ApprovalStep
-                {
-                    ApprovalRequestId = request.Id,
-                    ApproverUserId    = approverId.Value,
-                    StepOrder         = 1,
-                    ApprovalStatus    = ApprovalStatus.Pending,
-                    CreatedAt         = DateTime.Now
-                });
+            // 组里配了审批人名单：员工必须选中名单里的一个人，不能自己瞎填/绕过名单
+            if (selectedApproverUserId is null || !groupApproverIds.Contains(selectedApproverUserId.Value))
+                throw new InvalidOperationException("请选择有效的审批人");
+            approverId = selectedApproverUserId;
         }
         else
         {
-            // 有审批流：把它的 JSON 配置解析出来，逐级建节点（跳过没填审批人的）
-            var steps = JsonSerializer.Deserialize<List<FlowStepConfig>>(flow.StepsConfig) ?? [];
-            foreach (var step in steps.OrderBy(s => s.StepOrder).Where(s => s.ApproverUserId.HasValue))
-                db.ApprovalSteps.Add(new ApprovalStep
-                {
-                    ApprovalRequestId = request.Id,
-                    ApproverUserId    = step.ApproverUserId!.Value,
-                    StepOrder         = step.StepOrder,
-                    ApprovalStatus    = ApprovalStatus.Pending,
-                    CreatedAt         = DateTime.Now
-                });
+            // 组里没配名单：退回直属上级；没上级就兜底找个管理员/文员
+            approverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
         }
+
+        if (approverId.HasValue)
+            db.ApprovalSteps.Add(new ApprovalStep
+            {
+                ApprovalRequestId = request.Id,
+                ApproverUserId    = approverId.Value,
+                StepOrder         = 1,
+                ApprovalStatus    = ApprovalStatus.Pending,
+                CreatedAt         = DateTime.Now
+            });
 
         await db.SaveChangesAsync();
     }
@@ -453,13 +467,4 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         LeaveType.CompensatoryLeave => "调休",
         _                           => "其他"
     };
-}
-
-/// <summary>解析审批流 StepsConfig(JSON) 用的小模型：一个审批节点的顺序 + 审批人。</summary>
-file class FlowStepConfig
-{
-    /// <summary>节点顺序（从 1 开始，决定先后）。</summary>
-    public int  StepOrder      { get; set; }
-    /// <summary>该节点的审批人编号。</summary>
-    public int? ApproverUserId { get; set; }
 }

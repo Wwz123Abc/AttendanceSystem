@@ -10,4 +10,25 @@ public interface IDingTalkContactClient
     /// 需要应用已发布且可用范围为「全部员工」，否则只能读到范围内的人。
     /// </summary>
     Task<DingTalkContactSnapshot> ListAllAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 从钉钉通讯录里彻底删除一名员工。钉钉开放平台对普通企业应用只提供"删除"，没有"临时禁用"，
+    /// 所以这个操作删掉之后，如果以后要恢复，需要对方重新扫码/接受邀请加回通讯录，无法用接口撤销。
+    /// </summary>
+    Task DeleteEmployeeAsync(string dingTalkUserId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 把本系统里已经改过的姓名/手机号/工号/职位，同步更新到钉钉通讯录里对应的员工身上（本系统 → 钉钉）。
+    /// 只能用于已经绑定过 DingTalkUserId 的员工；哪个参数传 null 就表示钉钉那边这一项不用改。
+    /// 返回值：null=全部同步成功；非空=钉钉那边的已知限制导致手机号没能同步（其余字段仍已同步），
+    /// 这句话是给管理员看的说明，不代表整体失败。
+    /// </summary>
+    Task<string?> UpdateEmployeeAsync(string dingTalkUserId, string? name, string? mobile, string? jobNumber, string? title, CancellationToken ct = default);
+
+    /// <summary>
+    /// 在钉钉通讯录里新建一名员工（本系统 → 钉钉）。mobile 在钉钉企业内必须唯一，dingTalkDeptIds
+    /// 是这个人要挂到的钉钉部门编号（调用前要先换算好，换不出来就不能调这个接口）。
+    /// 成功后返回钉钉分配的 userid，本地要把它存回 User.DingTalkUserId，以后编辑/删除才能继续联动。
+    /// </summary>
+    Task<string> CreateEmployeeAsync(string name, string mobile, string? jobNumber, string? title, List<long> dingTalkDeptIds, CancellationToken ct = default);
 }

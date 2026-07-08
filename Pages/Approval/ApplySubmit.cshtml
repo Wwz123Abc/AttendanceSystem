@@ -110,6 +110,24 @@
                         <div class="form-text mb-3">审批通过后，出差期间自动记为全勤，无需打卡。</div>
                     </div>
 
+                    @if (Model.ApproverOptions.Count > 0)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">审批人 <span class="text-danger">*</span></label>
+                            <select asp-for="ApproverUserId" class="form-select" required>
+                                <option value="">请选择审批人</option>
+                                @foreach (var a in Model.ApproverOptions)
+                                {
+                                    <option value="@a.UserId">@a.RealName@(string.IsNullOrEmpty(a.Position) ? "" : $"（{a.Position}）")</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="form-text mb-3">未配置审批人名单，申请将自动提交给您的直属上级审批。</div>
+                    }
+
                     <div class="mb-3">
                         <label class="form-label">申请原因</label>
                         <textarea asp-for="Reason" class="form-control" rows="3" placeholder="请填写申请原因..."></textarea>

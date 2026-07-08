@@ -75,6 +75,61 @@ public class DingTalkContactClient(
         return snapshot;
     }
 
+    /// <summary>调钉钉"删除员工"接口（topapi/v2/user/delete），把这个人从企业通讯录里彻底移除。</summary>
+    public async Task DeleteEmployeeAsync(string dingTalkUserId, CancellationToken ct = default)
+    {
+        var token   = await tokenProvider.GetAccessTokenAsync(ct);
+        var baseUrl = _opt.OldGatewayBase.TrimEnd('/');
+        await PostAsync<DingTalkDeleteUserResponse>(
+            $"{baseUrl}/topapi/v2/user/delete?access_token={token}",
+            new { userid = dingTalkUserId }, ct);
+    }
+
+    /// <summary>
+    /// 调钉钉"更新员工"接口（topapi/v2/user/update），把本系统改过的资料同步过去。
+    /// 返回值：null=全部同步成功；非空=有一部分（目前只会是手机号）没能同步，这句话是给管理员看的说明，
+    /// 但不代表调用失败——其余字段已经同步过去了。
+    /// </summary>
+    public async Task<string?> UpdateEmployeeAsync(string dingTalkUserId, string? name, string? mobile, string? jobNumber, string? title, CancellationToken ct = default)
+    {
+        var token   = await tokenProvider.GetAccessTokenAsync(ct);
+        var baseUrl = _opt.OldGatewayBase.TrimEnd('/');
+        var url     = $"{baseUrl}/topapi/v2/user/update?access_token={token}";
+        var req     = new DingTalkUpdateUserRequest { UserId = dingTalkUserId, Name = name, Mobile = mobile, JobNumber = jobNumber, Title = title };
+
+        try
+        {
+            await PostAsync<DingTalkUpdateUserResponse>(url, req, ct);
+            return null;
+        }
+        catch (DingTalkApiException ex) when (ex.ErrCode == 40022 && mobile is not null)
+        {
+            // errcode=40022：钉钉的官方限制——员工本人登录钉钉时用的手机号，和这次要改成的手机号不一致，
+            // 钉钉不允许通过接口改这一项（钉钉官方给的说法是"可以删除后重新添加"，但那样太重，本系统不做）。
+            // 这不是网络/权限之类的临时故障，重试也没用，所以退一步：把手机号从这次更新里去掉，
+            // 只同步姓名/工号/职位这几项，不要因为手机号这一项卡住其余资料的同步。
+            req.Mobile = null;
+            await PostAsync<DingTalkUpdateUserResponse>(url, req, ct);
+            return "手机号与该员工登录钉钉时用的手机号不一致，钉钉不允许通过接口修改（需要员工本人在钉钉里自行更新），其余资料已同步成功";
+        }
+    }
+
+    /// <summary>调钉钉"新建员工"接口（topapi/v2/user/create），成功后返回钉钉分配的 userid。</summary>
+    public async Task<string> CreateEmployeeAsync(string name, string mobile, string? jobNumber, string? title, List<long> dingTalkDeptIds, CancellationToken ct = default)
+    {
+        var token   = await tokenProvider.GetAccessTokenAsync(ct);
+        var baseUrl = _opt.OldGatewayBase.TrimEnd('/');
+        var resp = await PostAsync<DingTalkCreateUserResponse>(
+            $"{baseUrl}/topapi/v2/user/create?access_token={token}",
+            new DingTalkCreateUserRequest
+            {
+                Name = name, Mobile = mobile, JobNumber = jobNumber, Title = title,
+                DeptIdList = string.Join(",", dingTalkDeptIds)
+            }, ct);
+        return resp.Result?.UserId
+            ?? throw new InvalidOperationException("钉钉新建员工接口返回成功，但没有带回 userid");
+    }
+
     /// <summary>POST JSON 并反序列化；统一校验钉钉 errcode。</summary>
     private async Task<T> PostAsync<T>(string url, object body, CancellationToken ct) where T : IDingTalkResponse
     {
@@ -84,8 +139,18 @@ public class DingTalkContactClient(
         var data = await resp.Content.ReadFromJsonAsync<T>(cancellationToken: ct)
             ?? throw new InvalidOperationException("钉钉通讯录接口响应为空");
         if (data.ErrCode != 0)
-            throw new InvalidOperationException(
-                $"钉钉通讯录接口错误：errcode={data.ErrCode}, errmsg={data.ErrMsg}");
+            throw new DingTalkApiException(data.ErrCode, data.ErrMsg);
         return data;
     }
+}
+
+/// <summary>
+/// 钉钉接口返回了非 0 的 errcode 时抛出，把 errcode 单独存一份（ErrCode 属性），
+/// 好让调用的地方能针对具体的错误码做不同处理（比如 40022 这种"手机号不一致"的已知限制，需要用不同方式应对），
+/// 而不用去解析异常文字里的字符串。
+/// </summary>
+public class DingTalkApiException(int errCode, string? errMsg)
+    : Exception($"钉钉通讯录接口错误：errcode={errCode}, errmsg={errMsg}")
+{
+    public int ErrCode { get; } = errCode;
 }

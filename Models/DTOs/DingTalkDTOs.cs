@@ -228,6 +228,55 @@ public interface IDingTalkResponse
     string? ErrMsg  { get; }
 }
 
+// 删除企业员工（topapi/v2/user/delete）的响应：只有 errcode/errmsg，没有额外数据
+public class DingTalkDeleteUserResponse : IDingTalkResponse
+{
+    [JsonPropertyName("errcode")] public int ErrCode { get; set; }
+    [JsonPropertyName("errmsg")]  public string? ErrMsg { get; set; }
+}
+
+// 更新企业员工（topapi/v2/user/update）的请求体：userid 必填，其余字段不传就表示"这一项不改"
+public class DingTalkUpdateUserRequest
+{
+    [JsonPropertyName("userid")]     public string  UserId    { get; set; } = string.Empty;
+    [JsonPropertyName("name")]       public string?  Name      { get; set; }
+    [JsonPropertyName("mobile")]     public string?  Mobile    { get; set; }
+    [JsonPropertyName("job_number")] public string?  JobNumber { get; set; }
+    [JsonPropertyName("title")]      public string?  Title     { get; set; }
+}
+
+// 更新企业员工的响应：只有 errcode/errmsg，没有额外数据
+public class DingTalkUpdateUserResponse : IDingTalkResponse
+{
+    [JsonPropertyName("errcode")] public int ErrCode { get; set; }
+    [JsonPropertyName("errmsg")]  public string? ErrMsg { get; set; }
+}
+
+// 新建企业员工（topapi/v2/user/create）的请求体：name/mobile/dept_id_list 是必填项
+public class DingTalkCreateUserRequest
+{
+    [JsonPropertyName("name")]         public string  Name       { get; set; } = string.Empty;
+    [JsonPropertyName("mobile")]       public string  Mobile     { get; set; } = string.Empty;   // 企业内必须唯一
+    [JsonPropertyName("job_number")]   public string? JobNumber  { get; set; }
+    [JsonPropertyName("title")]        public string? Title      { get; set; }
+
+    /// <summary>要挂到的钉钉部门编号列表，多个用逗号分隔（钉钉这个接口要求的是逗号分隔字符串，不是数组）</summary>
+    [JsonPropertyName("dept_id_list")] public string  DeptIdList { get; set; } = string.Empty;
+}
+
+// 新建企业员工的响应：成功会在 result.userid 里带回钉钉分配的员工编号
+public class DingTalkCreateUserResponse : IDingTalkResponse
+{
+    [JsonPropertyName("errcode")] public int ErrCode { get; set; }
+    [JsonPropertyName("errmsg")]  public string? ErrMsg { get; set; }
+    [JsonPropertyName("result")]  public DingTalkCreateUserResult? Result { get; set; }
+}
+
+public class DingTalkCreateUserResult
+{
+    [JsonPropertyName("userid")] public string? UserId { get; set; }
+}
+
 // 获取子部门列表（topapi/v2/department/listsub）的响应
 public class DingTalkDeptListResponse : IDingTalkResponse
 {

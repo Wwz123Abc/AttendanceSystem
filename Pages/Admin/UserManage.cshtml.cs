@@ -2,26 +2,28 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using AttendanceSystem.Data;
+using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 using AttendanceSystem.Models.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using QRCoder;
 
 namespace AttendanceSystem.Pages.Admin;
 
-/// <summary>员工管理页：左侧部门树筛选 + 右侧员工表（增删改、启停、拉黑、批量、重置密码、钉钉对接）。</summary>
+/// <summary>员工管理页：左侧部门树筛选 + 右侧员工表（增删改、启停、拉黑、批量、重置密码、钉钉对接、扫码登记确认）。</summary>
 [Authorize(Policy = "ManagePolicy")]
 public class UserManageModel(
     IUserService userService,
     IDingTalkSyncService dingTalkSyncService,
     IAttendanceGroupService groupService,
+    IEmployeeRegistrationService registrationService,
     IOptions<AppSettingsOptions> appOptions,
     AttendanceDbContext db) : PageModel
 {
     public List<User>            Users       { get; set; } = [];
-    public List<Department>      Departments { get; set; } = [];   // 弹窗“部门”下拉
     public List<AttendanceGroup> Groups      { get; set; } = [];
     public List<User>            Supervisors { get; set; } = [];
 
@@ -42,8 +44,14 @@ public class UserManageModel(
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage   { get; set; }
 
+    /// <summary>待确认的扫码登记列表（"待确认"标签页用）。</summary>
+    public List<EmployeeRegistrationDto> PendingRegistrations { get; set; } = [];
+
+    /// <summary>员工"扫码登记"页面的完整访问地址（用于生成二维码、展示可复制的链接）。</summary>
+    public string RegistrationUrl => $"{Request.Scheme}://{Request.Host}/Employee/SelfRegister";
+
     /// <summary>部门树的一个节点。</summary>
-    public record DeptNode(int Id, int? ParentId, string Name, int Depth, int MemberCount, bool HasChildren);
+    public record DeptNode(int Id, int? ParentId, string Name, int Depth, int MemberCount, bool HasChildren, bool IsActive);
 
     // ── 员工表单 ──────────────────────────────────────────────────────────────
     [BindProperty] public string  EmployeeNo     { get; set; } = string.Empty;
@@ -54,8 +62,15 @@ public class UserManageModel(
     [BindProperty] public int?    SuperId        { get; set; }
     [BindProperty] public string? Position       { get; set; }
     [BindProperty] public string? Phone          { get; set; }
+    [BindProperty] public string? IdNumber       { get; set; }
+    [BindProperty] public string? ContractCompany { get; set; }
     [BindProperty] public string? HireDate       { get; set; }
     [BindProperty] public int     EditUserId     { get; set; }
+
+    /// <summary>本次"新建员工"是不是在确认某条扫码登记（非空=确认通过后要联动把那条登记标记为已确认）。</summary>
+    [BindProperty] public int? RegistrationId { get; set; }
+    // 驳回登记时填的原因
+    [BindProperty] public string? RejectReason { get; set; }
 
     // 批量操作的员工 id（逗号分隔）
     [BindProperty] public string? BatchIds { get; set; }
@@ -93,6 +108,24 @@ public class UserManageModel(
 
         await LoadTreeAsync();
         await LoadDropdownsAsync();
+        PendingRegistrations = await registrationService.GetPendingAsync();
+    }
+
+    /// <summary>生成"扫码登记"链接的二维码图片（PNG），供"待确认"标签页里展示/打印。</summary>
+    public IActionResult OnGetQr()
+    {
+        using var generator = new QRCodeGenerator();
+        using var data      = generator.CreateQrCode(RegistrationUrl, QRCodeGenerator.ECCLevel.Q);
+        var png = new PngByteQRCode(data).GetGraphic(10);
+        return File(png, "image/png");
+    }
+
+    /// <summary>驳回一条扫码登记（不建账号）。</summary>
+    public async Task<IActionResult> OnPostRejectRegistrationAsync(int id)
+    {
+        try { await registrationService.RejectAsync(id, RejectReason); SuccessMessage = "已驳回该登记"; }
+        catch (Exception ex) { ErrorMessage = ex.Message; }
+        await ReloadAsync(); return Page();
     }
 
     // ── 增 / 改 ───────────────────────────────────────────────────────────────
@@ -102,10 +135,20 @@ public class UserManageModel(
         {
             ValidateContact(requirePhone: true);
             var newUser = BuildUser();
-            if (DeptId.HasValue) newUser.AttendanceGroupId = await groupService.EnsureDeptGroupAsync(DeptId.Value);   // 考勤组跟随部门
+            // 部门长期跟随了某个考勤组时，自动归入该组；部门没配跟随关系则维持表单里手动选的考勤组
+            if (DeptId.HasValue)
+            {
+                var followedGroupId = await groupService.GetGroupIdForDepartmentAsync(DeptId.Value);
+                if (followedGroupId.HasValue) newUser.AttendanceGroupId = followedGroupId.Value;
+            }
             var initialPwd = appOptions.Value.DefaultPassword;   // 初始密码统一取配置值（默认 123456）
-            await userService.CreateUserAsync(newUser, initialPwd);
-            SuccessMessage = $"员工 {RealName} 创建成功！初始密码：{initialPwd}";
+            var (_, warning) = await userService.CreateUserAsync(newUser, initialPwd);
+
+            // 如果这次新建是在确认某条扫码登记，顺带把那条登记标记为「已确认」，关联上新建好的账号
+            if (RegistrationId.HasValue)
+                await registrationService.MarkConfirmedAsync(RegistrationId.Value, newUser.Id);
+
+            SuccessMessage = $"员工 {RealName} 创建成功！初始密码：{initialPwd}" + (warning is null ? "" : $"（{warning}）");
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync();
@@ -119,9 +162,14 @@ public class UserManageModel(
             ValidateContact(requirePhone: false);
             var user = BuildUser();
             user.Id = EditUserId;
-            if (DeptId.HasValue) user.AttendanceGroupId = await groupService.EnsureDeptGroupAsync(DeptId.Value);   // 考勤组跟随部门
-            await userService.UpdateUserAsync(user);
-            SuccessMessage = "员工信息更新成功！";
+            // 部门长期跟随了某个考勤组时，自动归入该组；部门没配跟随关系则维持表单里手动选的考勤组
+            if (DeptId.HasValue)
+            {
+                var followedGroupId = await groupService.GetGroupIdForDepartmentAsync(DeptId.Value);
+                if (followedGroupId.HasValue) user.AttendanceGroupId = followedGroupId.Value;
+            }
+            var (_, warning) = await userService.UpdateUserAsync(user);
+            SuccessMessage = warning is null ? "员工信息更新成功！" : $"员工信息更新成功！（{warning}）";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync();
@@ -159,7 +207,11 @@ public class UserManageModel(
 
     public async Task<IActionResult> OnPostDeleteAsync(int id)
     {
-        try { await userService.DeleteUserAsync(id); SuccessMessage = "已彻底删除该员工"; }
+        try
+        {
+            var (_, warning) = await userService.DeleteUserAsync(id);
+            SuccessMessage = warning is null ? "已彻底删除该员工" : $"已彻底删除该员工（{warning}）";
+        }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync(); return Page();
     }
@@ -233,6 +285,9 @@ public class UserManageModel(
         if (!string.IsNullOrWhiteSpace(Phone) &&
             !System.Text.RegularExpressions.Regex.IsMatch(Phone.Trim(), @"^1[3-9]\d{9}$"))
             throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
+        if (!string.IsNullOrWhiteSpace(IdNumber) &&
+            !System.Text.RegularExpressions.Regex.IsMatch(IdNumber.Trim(), @"^\d{17}[\dXx]$"))
+            throw new InvalidOperationException("请输入正确格式的身份证号（18 位）");
     }
 
     private User BuildUser() => new()
@@ -245,6 +300,8 @@ public class UserManageModel(
         SupervisorUserId  = SuperId,
         Position          = string.IsNullOrWhiteSpace(Position)       ? null : Position.Trim(),
         Phone             = string.IsNullOrWhiteSpace(Phone)          ? null : Phone.Trim(),
+        IdNumber          = string.IsNullOrWhiteSpace(IdNumber)       ? null : IdNumber.Trim().ToUpperInvariant(),
+        ContractCompany   = string.IsNullOrWhiteSpace(ContractCompany) ? null : ContractCompany.Trim(),
         HireDate          = string.IsNullOrEmpty(HireDate)            ? null : DateOnly.Parse(HireDate)
         // DingTalkUserId 不在员工表单里维护，新建时留空，由「从钉钉导入/自动映射」填充
     };
@@ -280,6 +337,7 @@ public class UserManageModel(
 
         await LoadTreeAsync();
         await LoadDropdownsAsync();
+        PendingRegistrations = await registrationService.GetPendingAsync();
     }
 
     private async Task LoadTreeAsync()
@@ -307,7 +365,7 @@ public class UserManageModel(
         void Walk(int parentKey, int depth)
         {
             if (!byParent.TryGetValue(parentKey, out var kids)) return;
-            foreach (var d in kids) { DeptTree.Add(new DeptNode(d.Id, d.ParentId, d.DeptName, depth, total.GetValueOrDefault(d.Id), byParent.ContainsKey(d.Id))); Walk(d.Id, depth + 1); }
+            foreach (var d in kids) { DeptTree.Add(new DeptNode(d.Id, d.ParentId, d.DeptName, depth, total.GetValueOrDefault(d.Id), byParent.ContainsKey(d.Id), d.IsActive)); Walk(d.Id, depth + 1); }
         }
         Walk(0, 0);
 
@@ -317,8 +375,6 @@ public class UserManageModel(
 
     private async Task LoadDropdownsAsync()
     {
-        Departments = await db.Departments.Where(d => d.IsActive)
-                              .OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
         Groups      = await db.AttendanceGroups.Where(g => g.IsActive).OrderBy(g => g.GroupName).ToListAsync();
         Supervisors = await db.Users.Where(u => u.IsActive && u.Role != UserRole.Employee)
                               .OrderBy(u => u.RealName).ToListAsync();

@@ -33,7 +33,9 @@ public class DashboardModel(IAttendanceService attendanceService) : PageModel
                 ClockIn  = r.ClockInText,
                 ClockOut = r.ClockOutText,
                 r.StatusText,
-                Badge    = ToBadgeClass(r.StatusCssClass)   // 转成本页实际在用的 Bootstrap 徽章色
+                Badge    = ToBadgeClass(r.StatusCssClass),   // 转成本页实际在用的 Bootstrap 徽章色
+                r.LocationAbnormal,
+                r.LocationAbnormalNote
             })
         });
     }

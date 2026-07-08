@@ -51,6 +51,13 @@ public class ShiftSchedule
 
     public bool IsActive { get; set; } = true;              // 是否启用
 
+    /// <summary>
+    /// 每周休息日：哪几天不用上班，存成逗号隔开的星期几编号（0=周日,1=周一...6=周六，和 C# DayOfWeek 编号一致）。
+    /// 默认"0,6"＝周六周日休息；三班倒这类班次可以改成别的组合（比如休二、三）。
+    /// </summary>
+    [MaxLength(20)]
+    public string RestDaysOfWeek { get; set; } = "0,6";
+
     public DateTime CreatedAt { get; set; } = DateTime.Now; // 创建时间
     public DateTime UpdatedAt { get; set; } = DateTime.Now; // 最后修改时间
 
@@ -59,6 +66,22 @@ public class ShiftSchedule
     public AttendanceGroup AttendanceGroup { get; set; } = null!;        // 所属考勤组
 
     public ICollection<ShiftAssignment> ShiftAssignments { get; set; } = [];  // 用了这个班次的排班记录
+}
+
+/// <summary>ShiftSchedule 的辅助方法：解析/判断"每周休息日"。</summary>
+public static class ShiftScheduleExtensions
+{
+    /// <summary>把 RestDaysOfWeek 这个逗号分隔字符串解析成星期几的集合。</summary>
+    public static HashSet<DayOfWeek> ParseRestDays(this ShiftSchedule shift) =>
+        (shift.RestDaysOfWeek ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => int.TryParse(s.Trim(), out var n) && n is >= 0 and <= 6 ? (DayOfWeek?)n : null)
+            .Where(d => d.HasValue)
+            .Select(d => d!.Value)
+            .ToHashSet();
+
+    /// <summary>某个星期几是不是这个班次配置的"每周休息日"。</summary>
+    public static bool IsRestDay(this ShiftSchedule shift, DayOfWeek day) => shift.ParseRestDays().Contains(day);
 }
 
 /// <summary>

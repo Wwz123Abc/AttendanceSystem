@@ -33,6 +33,12 @@ public class SubmitApprovalDto
     // 通用
     public string?       Reason         { get; set; }        // 申请理由
     public List<string>  AttachmentUrls { get; set; } = [];  // 附件地址列表
+
+    /// <summary>
+    /// 员工自己选的审批人编号。如果所在考勤组配了审批人名单，这里必须选一个名单里的人；
+    /// 组里没配审批人名单时可以不填，系统会自动退回直属上级/兜底管理员。
+    /// </summary>
+    public int? ApproverUserId { get; set; }
 }
 
 /// <summary>审批人处理申请时传的数据。</summary>
@@ -105,6 +111,14 @@ public class ApprovalRequestDto
     public string   SubmittedAtText => SubmittedAt.ToString("yyyy-MM-dd HH:mm");   // 提交时间文字
 
     public List<ApprovalStepDto> Steps { get; set; } = [];   // 各级审批节点
+}
+
+/// <summary>可选审批人 DTO（员工提交申请时，下拉框里的一个候选人）。</summary>
+public class ApproverOptionDto
+{
+    public int     UserId   { get; set; }                   // 这个候选审批人的用户编号
+    public string  RealName { get; set; } = string.Empty;    // 姓名
+    public string? Position { get; set; }                   // 岗位（辅助员工分辨选谁）
 }
 
 /// <summary>审批节点展示 DTO（一条审批记录：谁审的、结果、意见）。</summary>

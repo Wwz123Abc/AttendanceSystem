@@ -74,10 +74,11 @@ C-02-1,审批,提交请假申请,P0,emp01 已登录,"1. 选请假类型（事假
 C-02-2,审批,跨天请假,P1,同上,1. 请假 1/10-1/12 提交,LeaveDurationHours 为跨天小时数
 C-03-1,审批,提交加班申请,P1,emp01 已登录,"1. 填 OvertimeStart/End 和原因
 2. 提交",单号 JB 开头；OvertimeDurationHours 正确
-C-04-1,审批,多级审批流路由,P0,考勤组配置了 ApprovalFlow 多级 StepsConfig,"1. 提交对应类型申请
-2. 查 ApprovalStep",按 StepOrder 创建多个 Pending 节点
-C-04-2,审批,无审批流回退直属上级,P0,无 Flow 配置，有 SupervisorUserId,1. 提交申请,仅创建 StepOrder=1 的上级审批节点
-C-04-3,审批,无审批流无上级,P2,无 Flow 且无 SupervisorUserId,1. 提交申请,申请创建但无 ApprovalStep（需记录实际行为）
+C-04-1,审批,组审批人名单路由,P0,考勤组配置了 AttendanceGroupApprover 名单（多人）,"1. 提交申请时从下拉框选一个名单里的审批人
+2. 查 ApprovalStep",仅创建 StepOrder=1、ApproverUserId=所选人 的 Pending 节点
+C-04-1b,审批,审批人不在名单内被拒绝,P0,考勤组配置了审批人名单,1. 绕开下拉框，直接提交一个不在名单里的 ApproverUserId,提交失败，报错「请选择有效的审批人」
+C-04-2,审批,组未配置审批人回退直属上级,P0,考勤组未配置审批人名单，员工有 SupervisorUserId,1. 提交申请,仅创建 StepOrder=1 的上级审批节点
+C-04-3,审批,组未配置审批人且无上级,P2,考勤组未配置审批人名单，员工无 SupervisorUserId,1. 提交申请,兜底指派在职管理员/文员为审批人
 C-05-1,审批,单级审批通过,P0,待审批补卡申请，sup01 为审批人,"1. sup01 登录 PendingApproval
 2. 点击通过",ApprovalStatus=Approved；通知申请人；考勤回写
 C-05-2,审批,单级审批驳回,P0,有待审批申请,"1. 审批人填驳回原因
@@ -129,8 +130,8 @@ E-05-2,管理后台,编辑班次参数,P1,已有班次,1. PUT /api/admin/shifts/
 E-06-1,管理后台,新增法定节假日,P0,Admin 已登录,1. POST /api/admin/holidays LegalHoliday,该日员工不可打卡
 E-06-2,管理后台,新增调班补班日,P1,选择周末日期,1. POST CompensatoryWorkDay,周末需出勤；后台不跳过旷工标记
 E-06-3,管理后台,删除假期,P2,存在假期记录,1. DELETE /api/admin/holidays/{id},删除成功；该日恢复可打卡
-E-07-1,管理后台,配置补卡审批流,P1,Admin 已登录,"1. ApprovalFlowManage 配置多级补卡流
-2. 员工提交补卡",按配置创建审批节点
+E-07-1,管理后台,考勤组配置审批人名单,P1,Admin 已登录,"1. GroupManage 编辑考勤组，勾选一个或多个审批人保存
+2. 该组员工提交补卡申请",员工提交页出现审批人下拉；按所选人创建审批节点
 F-01,报表,手动生成月度汇总,P0,当月有考勤记录,1. POST /api/report/generate-monthly-summary?year=&month=,所有在职员工生成/更新 MonthlyAttendanceSummary
 F-02,报表,汇总字段准确性,P1,员工有迟到/早退/旷工/请假记录,"1. 生成汇总
 2. 对比 AttendanceRecord",LateCount/AbsentDays/LeaveDays/TotalWorkHours 一致

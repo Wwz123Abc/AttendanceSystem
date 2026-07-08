@@ -49,6 +49,22 @@
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
 }
 
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabEmployeeList" type="button">员工列表</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabPendingReg" type="button">
+            待确认登记
+            @if (Model.PendingRegistrations.Count > 0)
+            { <span class="badge bg-danger ms-1">@Model.PendingRegistrations.Count</span> }
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+<div class="tab-pane fade show active" id="tabEmployeeList">
+
 <!-- 钉钉对接 -->
 <div class="card mb-3 border-primary-subtle">
     <div class="card-body py-3">
@@ -193,14 +209,14 @@
                             <tr>
                                 <th style="width:40px"><input type="checkbox" id="checkAll" onclick="toggleAll(this)" /></th>
                                 <th>姓名</th><th>工号</th><th>部门</th><th>角色</th>
-                                <th>用工性质</th>
-                                <th>手机</th><th>状态</th><th style="width:230px">操作</th>
+                                <th>用工性质</th><th>合同公司</th>
+                                <th>手机</th><th>状态</th><th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
                             @if (!Model.Users.Any())
                             {
-                                <tr><td colspan="9" class="empty-state"><i class="bi bi-inbox"></i>暂无数据</td></tr>
+                                <tr><td colspan="10" class="empty-state"><i class="bi bi-inbox"></i>暂无数据</td></tr>
                             }
                             @foreach (var u in Model.Users)
                             {
@@ -216,7 +232,14 @@
                                         else
                                         { <span class="badge bg-light text-muted">临时工</span> }
                                     </td>
-                                    <td class="small">@u.Phone</td>
+                                    <td class="small">@(u.ContractCompany ?? "—")</td>
+                                    <td class="small">
+                                        @u.Phone
+                                        @if (!string.IsNullOrEmpty(u.DingTalkUserId))
+                                        {
+                                            <i class="bi bi-link-45deg text-primary" title="已绑定钉钉账号：改资料/删除会同步到钉钉"></i>
+                                        }
+                                    </td>
                                     <td>
                                         @switch (u.Status)
                                         {
@@ -226,34 +249,38 @@
                                         }
                                     </td>
                                     <td>
-                                        <button class="btn btn-outline-primary btn-sm mb-1"
-                                                onclick="openEdit(@System.Text.Json.JsonSerializer.Serialize(new {
-                                                    id = u.Id, employeeNo = u.EmployeeNo, realName = u.RealName,
-                                                    role = u.Role.ToString(), deptId = u.DepartmentId, groupId = u.AttendanceGroupId,
-                                                    superId = u.SupervisorUserId, position = u.Position ?? "",
-                                                    phone = u.Phone ?? "",
-                                                    hireDate = u.HireDate?.ToString("yyyy-MM-dd") ?? "",
-                                                    dingTalkUserId = u.DingTalkUserId ?? ""
-                                                }))">编辑</button>
-                                        @if (u.Status == EmployeeStatus.Active)
-                                        {
-                                            <button class="btn btn-outline-warning btn-sm mb-1" onclick="doAction('Deactivate',@u.Id,'确认停用该员工？停用后无法登录。')">停用</button>
-                                        }
-                                        else if (u.Status == EmployeeStatus.Disabled)
-                                        {
-                                            <button class="btn btn-outline-success btn-sm mb-1" onclick="doAction('Activate',@u.Id,'确认启用该员工？')">启用</button>
-                                        }
-                                        @if (u.IsBlacklisted)
-                                        {
-                                            <button class="btn btn-outline-secondary btn-sm mb-1" onclick="doAction('RemoveBlacklist',@u.Id,'确认将该员工移出黑名单？（仍为已停用状态）')">移出黑名单</button>
-                                        }
-                                        else
-                                        {
-                                            <button class="btn btn-outline-dark btn-sm mb-1" onclick="doAction('Blacklist',@u.Id,'确认拉黑该员工？将禁止登录，且其工号永不再被使用。')">拉黑</button>
-                                        }
-                                        <button class="btn btn-outline-secondary btn-sm mb-1"
-                                                onclick="openResetPwd(@u.Id, @System.Text.Json.JsonSerializer.Serialize(u.RealName))">重置密码</button>
-                                        <button class="btn btn-outline-danger btn-sm mb-1" onclick="doAction('Delete',@u.Id,'确认彻底删除该员工？将同时删除其考勤/审批/通知等全部数据，且不可恢复！')">删除</button>
+                                        <div class="d-flex flex-nowrap align-items-center gap-1">
+                                            <button class="btn btn-outline-primary btn-sm"
+                                                    onclick="openEdit(@System.Text.Json.JsonSerializer.Serialize(new {
+                                                        id = u.Id, employeeNo = u.EmployeeNo, realName = u.RealName,
+                                                        role = u.Role.ToString(), deptId = u.DepartmentId, groupId = u.AttendanceGroupId,
+                                                        superId = u.SupervisorUserId, position = u.Position ?? "",
+                                                        phone = u.Phone ?? "",
+                                                        idNumber = u.IdNumber ?? "",
+                                                        contractCompany = u.ContractCompany ?? "",
+                                                        hireDate = u.HireDate?.ToString("yyyy-MM-dd") ?? "",
+                                                        dingTalkUserId = u.DingTalkUserId ?? ""
+                                                    }))">编辑</button>
+                                            @if (u.Status == EmployeeStatus.Active)
+                                            {
+                                                <button class="btn btn-outline-warning btn-sm" onclick="doAction('Deactivate',@u.Id,'确认停用该员工？停用后无法登录。')">停用</button>
+                                            }
+                                            else if (u.Status == EmployeeStatus.Disabled)
+                                            {
+                                                <button class="btn btn-outline-success btn-sm" onclick="doAction('Activate',@u.Id,'确认启用该员工？')">启用</button>
+                                            }
+                                            @if (u.IsBlacklisted)
+                                            {
+                                                <button class="btn btn-outline-secondary btn-sm" onclick="doAction('RemoveBlacklist',@u.Id,'确认将该员工移出黑名单？（仍为已停用状态）')">移出黑名单</button>
+                                            }
+                                            else
+                                            {
+                                                <button class="btn btn-outline-dark btn-sm" onclick="doAction('Blacklist',@u.Id,'确认拉黑该员工？将禁止登录，且其工号永不再被使用。')">拉黑</button>
+                                            }
+                                            <button class="btn btn-outline-secondary btn-sm"
+                                                    onclick="openResetPwd(@u.Id, @System.Text.Json.JsonSerializer.Serialize(u.RealName))">重置密码</button>
+                                            <button class="btn btn-outline-danger btn-sm" onclick="doAction('Delete',@u.Id,'确认彻底删除该员工？将同时删除其考勤/审批/通知等全部数据，且不可恢复！')">删除</button>
+                                        </div>
                                     </td>
                                 </tr>
                             }
@@ -294,7 +321,75 @@
     </div>
 </div>
 
-<!-- 统一的“行内/批量操作”隐藏表单 -->
+</div><!-- /tabEmployeeList -->
+
+<div class="tab-pane fade" id="tabPendingReg">
+    <div class="row g-3">
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-header"><i class="bi bi-qr-code me-1 text-primary"></i>登记二维码</div>
+                <div class="card-body text-center">
+                    <img src="?handler=Qr" alt="登记二维码" class="border rounded p-2"
+                         style="width:200px;height:200px" />
+                    <div class="input-group input-group-sm mt-3">
+                        <input type="text" class="form-control" id="regLinkInput" readonly
+                               value="@Model.RegistrationUrl" />
+                        <button class="btn btn-outline-secondary" type="button" onclick="copyRegLink()">
+                            <i class="bi bi-clipboard me-1"></i>复制链接
+                        </button>
+                    </div>
+                    <div class="form-text mt-2 text-start">把二维码打印出来贴在前台，或把链接发给新员工；员工扫码/打开后自己填姓名、手机号、身份证号提交，提交后会出现在右侧"待确认"列表里。</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-8">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-person-check me-1 text-primary"></i>待确认登记</span>
+                    <span class="badge bg-secondary">共 @Model.PendingRegistrations.Count 条</span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0 align-middle">
+                            <thead>
+                                <tr><th>姓名</th><th>手机号</th><th>身份证号</th><th>提交时间</th><th style="width:200px">操作</th></tr>
+                            </thead>
+                            <tbody>
+                                @if (!Model.PendingRegistrations.Any())
+                                {
+                                    <tr><td colspan="5" class="empty-state"><i class="bi bi-inbox"></i>暂无待确认的登记</td></tr>
+                                }
+                                @foreach (var r in Model.PendingRegistrations)
+                                {
+                                    <tr>
+                                        <td>@r.RealName</td>
+                                        <td class="small">@r.Phone</td>
+                                        <td class="small">@r.IdNumber</td>
+                                        <td class="small">@r.SubmittedAtText</td>
+                                        <td>
+                                            <div class="d-flex flex-nowrap gap-1">
+                                                <button class="btn btn-primary btn-sm"
+                                                        onclick="openConfirm(@System.Text.Json.JsonSerializer.Serialize(new {
+                                                            id = r.Id, realName = r.RealName, phone = r.Phone, idNumber = r.IdNumber
+                                                        }))">确认录入</button>
+                                                <button class="btn btn-outline-danger btn-sm"
+                                                        onclick="openRejectReg(@r.Id, @System.Text.Json.JsonSerializer.Serialize(r.RealName))">驳回</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div><!-- /tabPendingReg -->
+
+</div><!-- /tab-content -->
+
+<!-- 统一的”行内/批量操作”隐藏表单 -->
 <form method="post" id="actionForm" class="d-none">
     @Html.Raw(ctxHidden)
     <input type="hidden" name="id" id="actId" />
@@ -312,6 +407,7 @@
             <form method="post" id="userForm">
                 @Html.Raw(ctxHidden)
                 <input type="hidden" asp-for="EditUserId" id="fEditUserId" />
+                <input type="hidden" asp-for="RegistrationId" id="fRegistrationId" />
                 <div class="modal-body">
                     <div class="row g-3">
                         <div class="col-md-6">
@@ -342,8 +438,8 @@
                             <label class="form-label">部门</label>
                             <select asp-for="DeptId" class="form-select" id="fDeptId">
                                 <option value="">请选择</option>
-                                @foreach (var d in Model.Departments)
-                                { <option value="@d.Id">@d.DeptName</option> }
+                                @foreach (var d in Model.DeptTree.Where(x => x.IsActive))
+                                { <option value="@d.Id">@(new string('　', d.Depth))@d.Name</option> }
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -371,10 +467,21 @@
                             <input asp-for="Phone" class="form-control" id="fPhone" type="tel" maxlength="11"
                                    pattern="^1[3-9]\d{9}$" title="请输入正确格式的手机号（11 位中国大陆手机号）" />
                             <div class="form-text">新建员工需填写手机号，用于以后"忘记密码"自助找回。</div>
+                            <div class="form-text" id="fDingTalkStatus"></div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">入职日期</label>
                             <input asp-for="HireDate" type="date" class="form-control" id="fHireDate" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">身份证号</label>
+                            <input asp-for="IdNumber" class="form-control" id="fIdNumber" maxlength="18"
+                                   pattern="^\d{17}[\dXx]$" title="请输入正确格式的身份证号（18 位）" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">合同公司</label>
+                            <input asp-for="ContractCompany" class="form-control" id="fContractCompany" placeholder="如：科瑞技术有限公司" />
+                            <div class="form-text">员工实际签合同、发工资的公司主体（可能和所属部门的公司不是同一家）。</div>
                         </div>
                     </div>
                 </div>
@@ -408,6 +515,31 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="submit" class="btn btn-primary">确认重置</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 驳回登记 Modal -->
+<div class="modal fade" id="rejectRegModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">驳回登记</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" asp-page-handler="RejectRegistration" id="rejectRegForm">
+                @Html.Raw(ctxHidden)
+                <input type="hidden" name="id" id="rejRegId" />
+                <div class="modal-body">
+                    <p class="mb-3">登记人：<span id="rejRegName" class="fw-semibold"></span></p>
+                    <label class="form-label">驳回原因 <small class="text-muted">（可选）</small></label>
+                    <textarea asp-for="RejectReason" class="form-control" id="rejRegReason" rows="2"></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-danger">确认驳回</button>
                 </div>
             </form>
         </div>
@@ -480,14 +612,56 @@ function openAdd() {
     document.getElementById('userForm').action = '?handler=Create';
     document.getElementById('userSubmitBtn').textContent = '创建';
     document.getElementById('fEditUserId').value = 0;
+    document.getElementById('fRegistrationId').value = '';   // 不是在确认扫码登记，清空关联
     document.getElementById('pwdRow').style.display = '';
-    ['fEmployeeNo','fRealName','fPosition','fPhone','fHireDate']
+    ['fEmployeeNo','fRealName','fPosition','fPhone','fIdNumber','fContractCompany','fHireDate']
         .forEach(id => document.getElementById(id).value = '');
     document.getElementById('fRole').value = 'Employee';
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
     document.getElementById('fSuperId').value = '';
     document.getElementById('fPhone').required = true;             // 新建必须填手机号
+    document.getElementById('fPhoneReq').style.display = '';
+    document.getElementById('fDingTalkStatus').textContent = '';   // 新建员工还没有钉钉绑定状态，不显示
+    new bootstrap.Modal(document.getElementById('userModal')).show();
+}
+
+// 复制"扫码登记"链接
+function copyRegLink() {
+    const input = document.getElementById('regLinkInput');
+    input.select();
+    navigator.clipboard.writeText(input.value).then(() => alert('链接已复制')).catch(() => document.execCommand('copy'));
+}
+
+// 打开"驳回登记"弹窗
+function openRejectReg(id, name) {
+    document.getElementById('rejRegId').value = id;
+    document.getElementById('rejRegName').textContent = name;
+    document.getElementById('rejRegReason').value = '';
+    new bootstrap.Modal(document.getElementById('rejectRegModal')).show();
+}
+
+// 点"确认录入"：复用"新增员工"弹窗，把员工扫码填的姓名/手机号/身份证号预填进去，
+// 管理员只需要再补上工号、部门、考勤组等信息即可
+function openConfirm(data) {
+    document.getElementById('userModalTitle').textContent = '确认录入 - ' + data.realName;
+    document.getElementById('userForm').action = '?handler=Create';
+    document.getElementById('userSubmitBtn').textContent = '确认并创建账号';
+    document.getElementById('fEditUserId').value = 0;
+    document.getElementById('fRegistrationId').value = data.id;   // 标记这次创建关联的是哪条登记
+    document.getElementById('pwdRow').style.display = '';
+    document.getElementById('fEmployeeNo').value = '';
+    document.getElementById('fRealName').value   = data.realName;
+    document.getElementById('fPosition').value   = '';
+    document.getElementById('fPhone').value      = data.phone;
+    document.getElementById('fIdNumber').value   = data.idNumber;
+    document.getElementById('fContractCompany').value = '';
+    document.getElementById('fHireDate').value   = '';
+    document.getElementById('fRole').value       = 'Employee';
+    document.getElementById('fDeptId').value     = SELECTED_DEPT !== null ? SELECTED_DEPT : '';
+    document.getElementById('fGroupId').value    = '';
+    document.getElementById('fSuperId').value    = '';
+    document.getElementById('fPhone').required   = true;
     document.getElementById('fPhoneReq').style.display = '';
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
@@ -506,6 +680,7 @@ function openEdit(data) {
     document.getElementById('userForm').action = '?handler=Update';
     document.getElementById('userSubmitBtn').textContent = '保存';
     document.getElementById('fEditUserId').value = data.id;
+    document.getElementById('fRegistrationId').value = '';   // 编辑老员工，跟扫码登记无关
     document.getElementById('pwdRow').style.display = 'none';
     document.getElementById('fEmployeeNo').value = data.employeeNo;
     document.getElementById('fRealName').value   = data.realName;
@@ -517,7 +692,13 @@ function openEdit(data) {
     document.getElementById('fPhone').value      = data.phone;
     document.getElementById('fPhone').required   = false;          // 编辑老员工不强制补填手机号
     document.getElementById('fPhoneReq').style.display = 'none';
+    document.getElementById('fIdNumber').value   = data.idNumber || '';
+    document.getElementById('fContractCompany').value = data.contractCompany || '';
     document.getElementById('fHireDate').value   = data.hireDate;
+    // 直接告诉管理员这个人有没有绑定钉钉——绑定了，改资料/删除才会同步到钉钉，没绑定就只改本地
+    document.getElementById('fDingTalkStatus').innerHTML = data.dingTalkUserId
+        ? '<i class="bi bi-link-45deg text-primary"></i> 已绑定钉钉账号，保存/删除时会同步到钉钉通讯录'
+        : '<i class="bi bi-slash-circle text-muted"></i> 未绑定钉钉账号，保存/删除只影响本地数据，不会调用钉钉';
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
 </script>

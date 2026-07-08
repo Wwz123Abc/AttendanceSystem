@@ -7,7 +7,7 @@ namespace AttendanceSystem.Services.Interfaces;
 /// <summary>审批业务服务契约（补卡 / 请假 / 加班）。</summary>
 public interface IApprovalService
 {
-    /// <summary>提交审批申请，按审批流生成审批节点并通知首个审批人。</summary>
+    /// <summary>提交审批申请，按（员工自选的审批人 / 直属上级 / 兜底管理员）生成审批节点并发送通知。</summary>
     Task<ApprovalRequest> SubmitApprovalAsync(int applicantUserId, SubmitApprovalDto dto);
     /// <summary>审批人处理（通过则流转下一节点或终审，驳回则整单驳回）。</summary>
     Task<bool> HandleApprovalAsync(int approverUserId, HandleApprovalDto dto);
@@ -26,4 +26,9 @@ public interface IApprovalService
     Task<List<ApprovalRequestDto>> GetMyApprovalsAsync(int userId, ApprovalStatus? status = null);
     /// <summary>生成审批单号（前缀 + 日期 + 当日流水号）。</summary>
     Task<string> GenerateRequestNoAsync(ApprovalType type);
+    /// <summary>
+    /// 查某员工提交申请时可选的审批人名单（取自其所在考勤组配置的审批人）。
+    /// 组里没配审批人名单、或员工没有考勤组时，返回空列表（届时提交申请会自动退回直属上级/兜底管理员）。
+    /// </summary>
+    Task<List<ApproverOptionDto>> GetAvailableApproversAsync(int userId);
 }

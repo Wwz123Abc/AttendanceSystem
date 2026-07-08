@@ -4,17 +4,9 @@
 
 <div class="page-header d-flex justify-content-between align-items-center">
     <h4><i class="bi bi-building me-2 text-primary"></i>考勤组管理</h4>
-    <div class="d-flex gap-2">
-        <form method="post" asp-page-handler="SyncDeptGroups" class="mb-0"
-              onsubmit="return confirm('将按部门自动补建考勤组，并把每位有部门的员工归入其部门对应的考勤组（考勤组跟随部门）。确认执行？')">
-            <button type="submit" class="btn btn-outline-primary btn-sm" title="给每个部门建好考勤组，并让员工考勤组跟随部门">
-                <i class="bi bi-arrow-repeat me-1"></i>按部门同步
-            </button>
-        </form>
-        <button class="btn btn-primary btn-sm" onclick="openAdd()">
-            <i class="bi bi-plus-lg me-1"></i>新建考勤组
-        </button>
-    </div>
+    <button class="btn btn-primary btn-sm" onclick="openAdd()">
+        <i class="bi bi-plus-lg me-1"></i>新建考勤组
+    </button>
 </div>
 
 @if (!string.IsNullOrEmpty(Model.SuccessMessage))
@@ -39,8 +31,10 @@
                 <tr>
                     <th>考勤组名称</th>
                     <th>所属公司</th>
+                    <th>所属部门</th>
                     <th>人员数</th>
-                    <th>定位打卡</th>
+                    <th>审批人</th>
+                    <th>打卡地点</th>
                     <th>午休/晚餐</th>
                     <th>状态</th>
                     <th>操作</th>
@@ -49,18 +43,40 @@
             <tbody>
                 @foreach (var (g, cnt) in Model.Groups)
                 {
+                    var approverIds   = Model.GroupApproverIds.GetValueOrDefault(g.Id) ?? new List<int>();
+                    var approverNames = Model.ApproverOptions.Where(u => approverIds.Contains(u.Id)).Select(u => u.RealName).ToList();
+                    var deptIds       = Model.GroupDepartmentIds.GetValueOrDefault(g.Id) ?? new List<int>();
+                    var deptNames     = Model.DeptTree.Where(d => deptIds.Contains(d.Id)).Select(d => d.Name).ToList();
+                    var locations     = Model.GroupLocations.GetValueOrDefault(g.Id) ?? new List<AttendanceSystem.Models.Entities.AttendanceGroupLocation>();
                     <tr>
                         <td class="fw-semibold">@g.GroupName</td>
-                        <td>@(g.CompanyName ?? "-")</td>
+                        <td class="small">@(g.CompanyName ?? "-")</td>
+                        <td class="small">
+                            @if (deptNames.Count > 0)
+                            { @string.Join("、", deptNames) }
+                            else
+                            { <span class="text-muted">未关联</span> }
+                        </td>
                         <td><span class="badge bg-secondary">@cnt 人</span></td>
-                        <td>
-                            @if (g.EnableLocationPunch)
+                        <td class="small">
+                            @if (approverNames.Count > 0)
+                            { @string.Join("、", approverNames) }
+                            else
+                            { <span class="text-muted">未配置（默认走直属上级）</span> }
+                        </td>
+                        <td class="small">
+                            @if (!g.EnableLocationPunch)
                             {
-                                <span class="badge bg-success">已启用<br/><small>@(g.LocationName ?? "未命名")</small></span>
+                                <span class="text-muted">未启用</span>
+                            }
+                            else if (locations.Count > 0)
+                            {
+                                <span class="badge bg-success mb-1">已启用</span>
+                                <div>@string.Join("、", locations.Select(l => l.LocationName ?? "未命名"))</div>
                             }
                             else
                             {
-                                <span class="text-muted small">未启用</span>
+                                <span class="text-warning">已启用但未配置地点</span>
                             }
                         </td>
                         <td class="small">午休 @g.LunchBreakMinutes 分钟 / 晚餐 @g.DinnerBreakMinutes 分钟</td>
@@ -73,12 +89,11 @@
                         <td>
                             <button class="btn btn-outline-primary btn-sm"
                                     onclick="openEdit(@g.Id,'@g.GroupName.Replace("'","\\'")',
-                                             '@(g.CompanyName ?? "")',@g.PunchRadiusMeters,
-                                             @(g.LocationLatitude?.ToString() ?? "null"),
-                                             @(g.LocationLongitude?.ToString() ?? "null"),
-                                             '@(g.LocationName ?? "")',
                                              @(g.EnableLocationPunch ? "true" : "false"),
-                                             @g.LunchBreakMinutes,@g.DinnerBreakMinutes)">
+                                             @g.LunchBreakMinutes,@g.DinnerBreakMinutes,
+                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(approverIds))',
+                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(deptIds))',
+                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters })))')">
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <form method="post" asp-page-handler="Toggle" class="d-inline"
@@ -88,12 +103,19 @@
                                     <i class="bi bi-@(g.IsActive ? "pause" : "play")"></i>
                                 </button>
                             </form>
+                            <form method="post" asp-page-handler="Delete" class="d-inline"
+                                  onsubmit="return confirm('确认彻底删除考勤组「@g.GroupName.Replace("'","\\'")」？\n\n将会：\n- 组内 @cnt 名在职员工的考勤组归属会被清空（需另外分配）\n- 跟随本组的部门会解除跟随关系\n- 本组的班次/排班记录、审批人名单、打卡地点会一并删除\n\n此操作不可恢复！')">
+                                <input type="hidden" name="id" value="@g.Id" />
+                                <button type="submit" class="btn btn-outline-danger btn-sm">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
                         </td>
                     </tr>
                 }
                 @if (!Model.Groups.Any())
                 {
-                    <tr><td colspan="7" class="empty-state"><i class="bi bi-inbox"></i>暂无考勤组</td></tr>
+                    <tr><td colspan="9" class="empty-state"><i class="bi bi-inbox"></i>暂无考勤组</td></tr>
                 }
             </tbody>
         </table>
@@ -116,18 +138,46 @@
                             <label class="form-label fw-semibold">考勤组名称 <span class="text-danger">*</span></label>
                             <input asp-for="GroupName" id="fGroupName" class="form-control" required />
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-semibold">所属公司</label>
-                            <input asp-for="CompanyName" id="fCompany" class="form-control" />
-                        </div>
-                        <div class="col-md-6">
+                        <div class="col-md-3">
                             <label class="form-label fw-semibold">午休时长（分钟）</label>
                             <input asp-for="LunchBreak" id="fLunch" type="number" min="0" max="120" class="form-control" />
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-3">
                             <label class="form-label fw-semibold">晚餐时长（分钟）</label>
                             <input asp-for="DinnerBreak" id="fDinner" type="number" min="0" max="120" class="form-control" />
                         </div>
+
+                        <div class="col-12">
+                            <hr class="my-1" />
+                            <label class="form-label fw-semibold">
+                                所属部门（所属公司）
+                                <small class="text-muted fw-normal">（勾选部门 = 长期跟随本组：这些部门现有及以后新增/调入的员工都会自动归入本考勤组；所属公司会按勾选部门自动带出）</small>
+                            </label>
+                            <div id="deptTreeList" class="border rounded p-2" style="max-height:220px;overflow-y:auto;">
+                                @foreach (var d in Model.DeptTree)
+                                {
+                                    var linkedGroup = d.AttendanceGroupId.HasValue
+                                        ? Model.Groups.FirstOrDefault(x => x.Group.Id == d.AttendanceGroupId.Value).Group?.GroupName
+                                        : null;
+                                    <div class="form-check" style="padding-left:@(1.5 + d.Depth * 1.2)rem">
+                                        <input class="form-check-input dept-checkbox" type="checkbox"
+                                               name="SelectedDeptIds" value="@d.Id" id="dept_@d.Id"
+                                               data-id="@d.Id" data-parent="@(d.ParentId?.ToString() ?? "")"
+                                               onchange="onDeptCheckboxChange(this)" />
+                                        <label class="form-check-label" for="dept_@d.Id">
+                                            @d.Name
+                                            @if (!string.IsNullOrEmpty(linkedGroup))
+                                            { <span class="text-muted small">（当前跟随：@linkedGroup）</span> }
+                                        </label>
+                                    </div>
+                                }
+                                @if (!Model.DeptTree.Any())
+                                {
+                                    <div class="text-muted small">暂无部门，请先到"部门管理"创建部门</div>
+                                }
+                            </div>
+                        </div>
+
                         <div class="col-12">
                             <hr class="my-1" />
                             <div class="form-check form-switch">
@@ -136,29 +186,37 @@
                                 <label class="form-check-label fw-semibold" for="EnableLocation">启用定位打卡</label>
                             </div>
                         </div>
-                        <div id="locationFields">
-                            <div class="row g-3">
-                                <div class="col-md-12">
-                                    <label class="form-label fw-semibold">打卡地点名称</label>
-                                    <input asp-for="LocationName" id="fLocName" class="form-control" placeholder="如：总公司大楼" />
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-semibold">纬度</label>
-                                    <input asp-for="Latitude" id="fLat" type="number" step="0.000001" class="form-control" placeholder="如：22.543096" />
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-semibold">经度</label>
-                                    <input asp-for="Longitude" id="fLng" type="number" step="0.000001" class="form-control" placeholder="如：114.057865" />
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-semibold">有效半径（米）</label>
-                                    <input asp-for="PunchRadius" id="fRadius" type="number" min="50" max="5000" class="form-control" />
-                                </div>
-                                <div class="col-12">
-                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="getMyLocation()">
-                                        <i class="bi bi-geo-alt me-1"></i>获取当前位置
-                                    </button>
-                                </div>
+                        <div id="locationFields" class="col-12">
+                            <label class="form-label fw-semibold">
+                                打卡地点 <small class="text-muted fw-normal">（可配多个，员工落在其中任意一个的有效半径内即算打卡成功）</small>
+                            </label>
+                            <div id="locationRows"></div>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addLocationRow()">
+                                <i class="bi bi-plus-lg me-1"></i>添加打卡地点
+                            </button>
+                        </div>
+
+                        <div class="col-12">
+                            <hr class="my-1" />
+                            <label class="form-label fw-semibold">
+                                审批人
+                                <small class="text-muted fw-normal">（可多选；本组员工提交申请时从这里面选一个人来审批；一个都不选则自动退回员工的直属上级）</small>
+                            </label>
+                            <div id="approverList" class="border rounded p-2" style="max-height:180px;overflow-y:auto;">
+                                @foreach (var u in Model.ApproverOptions)
+                                {
+                                    <div class="form-check">
+                                        <input class="form-check-input approver-checkbox" type="checkbox"
+                                               name="ApproverUserIds" value="@u.Id" id="approver_@u.Id" />
+                                        <label class="form-check-label" for="approver_@u.Id">
+                                            @u.RealName <span class="text-muted small">（@(u.Position ?? u.Role.ToString())）</span>
+                                        </label>
+                                    </div>
+                                }
+                                @if (!Model.ApproverOptions.Any())
+                                {
+                                    <div class="text-muted small">暂无可选审批人（需要先有在职、且角色不是"普通员工"的用户）</div>
+                                }
                             </div>
                         </div>
                     </div>
@@ -180,50 +238,124 @@ function openAdd() {
     document.getElementById('modalTitle').textContent = '新建考勤组';
     document.getElementById('editId').value = 0;
     document.getElementById('fGroupName').value = '';
-    document.getElementById('fCompany').value = '';
     document.getElementById('fLunch').value = 60;
     document.getElementById('fDinner').value = 30;
     document.getElementById('fEnableLocation').checked = false;
-    document.getElementById('fLocName').value = '';
-    document.getElementById('fLat').value = '';
-    document.getElementById('fLng').value = '';
-    document.getElementById('fRadius').value = 500;
     toggleLocation(false);
+    setSelectedApprovers([]);
+    setSelectedDepts([]);
+    setLocations([]);
     modal.show();
 }
 
-function openEdit(id, name, company, radius, lat, lng, locName, enableLoc, lunch, dinner) {
+function openEdit(id, name, enableLoc, lunch, dinner, approverIdsJson, deptIdsJson, locationsJson) {
     document.getElementById('modalTitle').textContent = '编辑考勤组';
     document.getElementById('editId').value = id;
     document.getElementById('fGroupName').value = name;
-    document.getElementById('fCompany').value = company;
     document.getElementById('fLunch').value = lunch;
     document.getElementById('fDinner').value = dinner;
     document.getElementById('fEnableLocation').checked = enableLoc;
-    document.getElementById('fLocName').value = locName;
-    document.getElementById('fLat').value = lat ?? '';
-    document.getElementById('fLng').value = lng ?? '';
-    document.getElementById('fRadius').value = radius;
     toggleLocation(enableLoc);
+    setSelectedApprovers(JSON.parse(approverIdsJson || '[]'));
+    setSelectedDepts(JSON.parse(deptIdsJson || '[]'));
+    setLocations(JSON.parse(locationsJson || '[]'));
     modal.show();
 }
 
-// "是否启用定位打卡"这个开关：勾上才需要填打卡点的经纬度/半径，所以没勾的时候把这几个字段都藏起来
+// 按传入的审批人编号列表，勾选/取消勾选审批人多选框
+function setSelectedApprovers(approverIds) {
+    document.querySelectorAll('.approver-checkbox').forEach(cb => {
+        cb.checked = approverIds.includes(parseInt(cb.value, 10));
+    });
+}
+
+// 按传入的部门编号列表，勾选/取消勾选部门树（这是回显已保存的数据，不需要级联）
+function setSelectedDepts(deptIds) {
+    document.querySelectorAll('.dept-checkbox').forEach(cb => {
+        cb.checked = deptIds.includes(parseInt(cb.value, 10));
+    });
+}
+
+// 手动勾选/取消勾选某个部门时：连带把它所有下级部门也一起勾上/取消（勾选大部门=连它底下的小部门一起跟这个考勤组）
+function onDeptCheckboxChange(checkbox) {
+    const checked = checkbox.checked;
+    const deptId  = checkbox.dataset.id;
+    document.querySelectorAll(`.dept-checkbox[data-parent="${deptId}"]`).forEach(child => {
+        child.checked = checked;
+        onDeptCheckboxChange(child);   // 递归处理下一级
+    });
+}
+
+// "是否启用定位打卡"这个开关：勾上才需要配打卡地点，所以没勾的时候把这块藏起来
 function toggleLocation(enabled) {
     document.getElementById('locationFields').style.display = enabled ? 'block' : 'none';
 }
 
-// "获取我的位置"按钮：直接用管理员当前所在的浏览器定位，自动填进经纬度框，
-// 不用自己去查打卡点的经纬度是多少（常见用法：管理员站在打卡点现场点一下这个按钮）
-function getMyLocation() {
-    if (!navigator.geolocation) { alert('浏览器不支持定位'); return; }
-    navigator.geolocation.getCurrentPosition(pos => {
-        document.getElementById('fLat').value = pos.coords.latitude.toFixed(6);
-        document.getElementById('fLng').value = pos.coords.longitude.toFixed(6);
-    }, () => alert('获取位置失败，请手动输入'));
+// ── 打卡地点：动态增删的表单行 ──────────────────────────────────────────────
+// Razor Pages 绑定 List<T> 要求索引从 0 开始连续编号，所以每次增删后都要重新给所有行编号，
+// 不能只在末尾自增一个从不回退的计数器（否则删中间一行后，索引会断掉，后面的行绑不上）。
+function addLocationRow(data) {
+    data = data || { name: '', lat: '', lng: '', radius: 500 };
+    const div = document.createElement('div');
+    div.className = 'row g-2 align-items-end mb-2 location-row';
+    div.innerHTML = `
+        <div class="col-md-4">
+            <label class="form-label small mb-1">地点名称</label>
+            <input type="text" class="form-control form-control-sm" data-field="Name" placeholder="如：总部大楼" />
+        </div>
+        <div class="col-md-3">
+            <label class="form-label small mb-1">纬度</label>
+            <input type="number" step="0.000001" class="form-control form-control-sm" data-field="Latitude" />
+        </div>
+        <div class="col-md-3">
+            <label class="form-label small mb-1">经度</label>
+            <input type="number" step="0.000001" class="form-control form-control-sm" data-field="Longitude" />
+        </div>
+        <div class="col-md-1">
+            <label class="form-label small mb-1">半径(米)</label>
+            <input type="number" min="50" max="5000" class="form-control form-control-sm" data-field="Radius" />
+        </div>
+        <div class="col-md-1 d-flex gap-1">
+            <button type="button" class="btn btn-outline-secondary btn-sm" title="获取当前位置" onclick="fillMyLocation(this)"><i class="bi bi-geo-alt"></i></button>
+            <button type="button" class="btn btn-outline-danger btn-sm" title="删除" onclick="removeLocationRow(this)"><i class="bi bi-trash"></i></button>
+        </div>
+    `;
+    div.querySelector('[data-field="Name"]').value = data.name ?? '';
+    div.querySelector('[data-field="Latitude"]').value = data.lat ?? '';
+    div.querySelector('[data-field="Longitude"]').value = data.lng ?? '';
+    div.querySelector('[data-field="Radius"]').value = data.radius ?? 500;
+    document.getElementById('locationRows').appendChild(div);
+    renumberLocationRows();
 }
 
-// 页面刚打开时，也要按当前"是否启用定位打卡"复选框的勾选状态，同步一次这几个字段的显示/隐藏
-toggleLocation(document.getElementById('fEnableLocation')?.checked);
+function removeLocationRow(btn) {
+    btn.closest('.location-row').remove();
+    renumberLocationRows();
+}
+
+// 重新按当前 DOM 顺序，把每一行的 name 属性编成 Locations[0]、Locations[1]……连续序号
+function renumberLocationRows() {
+    document.querySelectorAll('#locationRows .location-row').forEach((row, idx) => {
+        row.querySelectorAll('[data-field]').forEach(input => {
+            input.name = `Locations[${idx}].${input.dataset.field}`;
+        });
+    });
+}
+
+// 清空后按传入的地点列表重新渲染（编辑时回显 / 新建时清空）
+function setLocations(list) {
+    document.getElementById('locationRows').innerHTML = '';
+    list.forEach(l => addLocationRow({ name: l.name, lat: l.lat, lng: l.lng, radius: l.radius }));
+}
+
+// "获取当前位置"按钮：直接用管理员当前所在的浏览器定位，自动填进这一行的经纬度框
+function fillMyLocation(btn) {
+    if (!navigator.geolocation) { alert('浏览器不支持定位'); return; }
+    const row = btn.closest('.location-row');
+    navigator.geolocation.getCurrentPosition(pos => {
+        row.querySelector('[data-field="Latitude"]').value = pos.coords.latitude.toFixed(6);
+        row.querySelector('[data-field="Longitude"]').value = pos.coords.longitude.toFixed(6);
+    }, () => alert('获取位置失败，请手动输入'));
+}
 </script>
 }

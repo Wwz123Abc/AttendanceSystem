@@ -54,6 +54,8 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     [BindProperty] public bool    CrossDay   { get; set; }
     [BindProperty] public decimal StdHours   { get; set; } = 8;
     [BindProperty] public string  ShiftColor { get; set; } = "#1890ff";
+    /// <summary>每周休息日（勾选的星期几，0=周日...6=周六）</summary>
+    [BindProperty] public List<int> RestDays { get; set; } = [];
 
     // ── 排班表单字段 ──
     [BindProperty] public int       AssignShiftId { get; set; }        // 排哪个班次
@@ -121,6 +123,9 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
             var we = TimeOnly.Parse(WorkEnd);
             if (GroupId == 0) throw new Exception("请选择该班次所属的考勤组");
 
+            // 把勾选的星期几（0=周日...6=周六）拼成逗号分隔的字符串存起来
+            var restDaysCsv = string.Join(",", RestDays.Where(d => d is >= 0 and <= 6).Distinct().OrderBy(d => d));
+
             if (ShiftId == 0)   // 新增
             {
                 db.ShiftSchedules.Add(new ShiftSchedule
@@ -136,6 +141,7 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
                     IsCrossDay                 = CrossDay,
                     StandardWorkHours          = StdHours,
                     Color                      = ShiftColor,
+                    RestDaysOfWeek             = restDaysCsv,
                     IsActive                   = true,
                     CreatedAt                  = DateTime.Now,
                     UpdatedAt                  = DateTime.Now
@@ -158,6 +164,7 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
                     s.IsCrossDay                 = CrossDay;
                     s.StandardWorkHours          = StdHours;
                     s.Color                      = ShiftColor;
+                    s.RestDaysOfWeek             = restDaysCsv;
                     s.UpdatedAt                  = DateTime.Now;
                 }
                 SuccessMessage = $"班次「{ShiftName}」已更新";

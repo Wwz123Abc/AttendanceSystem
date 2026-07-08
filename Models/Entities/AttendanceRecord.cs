@@ -33,6 +33,13 @@ public class AttendancePunch
     /// <summary>是否有效（补卡审批通过后，原来的无效记录会标为 false）</summary>
     public bool IsValid { get; set; } = true;
 
+    /// <summary>
+    /// 定位是否有效：null=未做定位校验（考勤组没开定位打卡，或没有配置地点）；
+    /// true=落在考勤组某个打卡地点的有效半径内；false=离所有配置地点都太远。
+    /// 目前只有"同步钉钉打卡"这条路径会填这个字段（本系统自己的打卡页超范围会直接拒绝提交，不存无效记录）。
+    /// </summary>
+    public bool? LocationValid { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.Now; // 入库时间
 
     // ── 导航属性 ──────────────────────────────────────────────────────────
@@ -91,6 +98,17 @@ public class AttendanceRecord
     /// <summary>关联审批通过后的说明（如“补卡已通过”）</summary>
     [MaxLength(200)]
     public string? ApprovalNote { get; set; }
+
+    /// <summary>
+    /// 定位异常，需要人工审核：当天从钉钉同步来的打卡里，有至少一次的定位和考勤组配置的所有地点都对不上
+    /// （距离都超出有效半径）。这天的迟到/旷工等状态仍按打卡时间正常判定，只是多这一条提醒，
+    /// 让管理员自己判断是不是代打卡/定位漂移之类的问题，不会自动影响出勤结果。
+    /// </summary>
+    public bool LocationAbnormal { get; set; } = false;
+
+    /// <summary>定位异常的具体说明（如"打卡地点距最近的「总部大楼」850 米，超出有效范围 500 米"）</summary>
+    [MaxLength(300)]
+    public string? LocationAbnormalNote { get; set; }
 
     [MaxLength(500)]
     public string? Remark { get; set; }                     // 备注（钉钉同步的会标“钉钉同步”）

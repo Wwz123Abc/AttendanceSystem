@@ -94,35 +94,3 @@ public class ApprovalStep
     [ForeignKey("ApproverUserId")]
     public User Approver { get; set; } = null!;                     // 这一级的审批人
 }
-
-/// <summary>
-/// 审批流配置（对应数据库表 ApprovalFlow）：每个考勤组、每种申请类型，配几级审批人。
-/// </summary>
-[Table("ApprovalFlow")]
-public class ApprovalFlow
-{
-    [Key] public int Id { get; set; }                       // 主键
-
-    public int          AttendanceGroupId { get; set; }     // 适用于哪个考勤组
-    public ApprovalType ApprovalType      { get; set; }     // 适用于哪种申请（补卡/请假/加班）
-
-    [Required, MaxLength(100)]
-    public string FlowName { get; set; } = string.Empty;    // 审批流名称
-
-    /// <summary>
-    /// 各级审批人的配置（以 JSON 文本存储）。例：
-    /// [{"StepOrder":1,"ApproverUserId":5},{"StepOrder":2,"ApproverUserId":3}]
-    /// 表示先由 5 号审，再由 3 号审。
-    /// </summary>
-    [Required]
-    public string StepsConfig { get; set; } = "[]";
-
-    public bool IsActive { get; set; } = true;              // 是否启用
-
-    public DateTime CreatedAt { get; set; } = DateTime.Now; // 创建时间
-    public DateTime UpdatedAt { get; set; } = DateTime.Now; // 最后修改时间
-
-    // ── 导航属性 ──────────────────────────────────────────────────────────
-    [ForeignKey("AttendanceGroupId")]
-    public AttendanceGroup AttendanceGroup { get; set; } = null!;   // 所属考勤组
-}

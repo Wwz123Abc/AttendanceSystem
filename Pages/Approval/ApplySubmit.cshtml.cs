@@ -15,11 +15,14 @@ public class ApplySubmitModel(
     IOptions<AppSettingsOptions> appOptions) : AppPageModel
 {
     public List<ApprovalRequestDto> MyApplications { get; set; } = [];
+    /// <summary>我可以选的审批人名单（取自我所在考勤组的配置）；为空表示没配置，提交后自动退回直属上级</summary>
+    public List<ApproverOptionDto> ApproverOptions { get; set; } = [];
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage   { get; set; }
 
     // 表单字段（全用字符串接收，提交后再转成对应类型）
     [BindProperty] public string  ApprovalType  { get; set; } = "Leave";   // 申请类型
+    [BindProperty] public int?    ApproverUserId { get; set; }             // 选的审批人
     [BindProperty] public string? LeaveType     { get; set; }
     [BindProperty] public string? LeaveStart    { get; set; }
     [BindProperty] public string? LeaveEnd      { get; set; }
@@ -34,13 +37,19 @@ public class ApplySubmitModel(
     [BindProperty] public string? Reason        { get; set; }
     [BindProperty] public List<IFormFile> Attachments { get; set; } = [];  // 上传的附件文件
 
-    /// <summary>打开页面：加载我提交过的申请。</summary>
+    /// <summary>打开页面：加载我提交过的申请、我可以选的审批人名单。</summary>
     public async Task OnGetAsync()
-        => MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);
+    {
+        MyApplications  = await approvalService.GetMyApprovalsAsync(CurrentUserId);
+        ApproverOptions = await approvalService.GetAvailableApproversAsync(CurrentUserId);
+    }
 
     /// <summary>点“提交申请”时执行：存附件 → 按类型组装数据 → 提交。</summary>
     public async Task<IActionResult> OnPostAsync()
     {
+        // 审批人名单要先查出来：一是校验员工选的人在不在名单里，二是提交失败时页面要重新显示这份名单
+        ApproverOptions = await approvalService.GetAvailableApproversAsync(CurrentUserId);
+
         try
         {
             // 校验时间是否合理（前端已经限制过选择范围，这里是服务器端的权威兜底，不能只信前端）
@@ -48,6 +57,14 @@ public class ApplySubmitModel(
             if (dateError != null)
             {
                 ErrorMessage = dateError;
+                MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);
+                return Page();
+            }
+
+            // 配了审批人名单的话，必须从名单里选一个，不能不选
+            if (ApproverOptions.Count > 0 && (ApproverUserId is null || !ApproverOptions.Any(a => a.UserId == ApproverUserId)))
+            {
+                ErrorMessage = "请选择审批人";
                 MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);
                 return Page();
             }
@@ -61,7 +78,8 @@ public class ApplySubmitModel(
             {
                 ApprovalType   = Enum.Parse<Models.Enums.ApprovalType>(ApprovalType),
                 Reason         = Reason,
-                AttachmentUrls = attachmentUrls
+                AttachmentUrls = attachmentUrls,
+                ApproverUserId = ApproverUserId
             };
 
             // 按申请类型，把对应的字段填进去

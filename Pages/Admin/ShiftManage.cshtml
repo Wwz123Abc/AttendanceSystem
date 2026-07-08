@@ -73,11 +73,13 @@
             <div class="card-body p-0">
                 <table class="table table-sm mb-0">
                     <thead>
-                        <tr><th>班次</th><th>所属组</th><th>上/下班</th><th>操作</th></tr>
+                        <tr><th>班次</th><th>所属组</th><th>上/下班</th><th>每周休息</th><th>操作</th></tr>
                     </thead>
                     <tbody>
+                        @{ string[] weekShort = ["日", "一", "二", "三", "四", "五", "六"]; }
                         @foreach (var s in Model.Shifts)
                         {
+                            var restDays = s.ParseRestDays();
                             <tr>
                                 <td>
                                     <span class="badge" style="background:@s.Color">@s.ShiftName</span>
@@ -85,13 +87,19 @@
                                 </td>
                                 <td class="small text-muted">@s.AttendanceGroup?.GroupName</td>
                                 <td class="small">@s.WorkStartTime.ToString("HH:mm")~@s.WorkEndTime.ToString("HH:mm")</td>
+                                <td class="small text-muted">
+                                    @(restDays.Count > 0
+                                        ? "周" + string.Join("、", restDays.OrderBy(d => (int)d).Select(d => weekShort[(int)d]))
+                                        : "无休")
+                                </td>
                                 <td>
                                     <button class="btn btn-outline-primary btn-sm"
                                             onclick="openEditShift(@s.Id,@s.AttendanceGroupId,'@s.ShiftName',
                                                      '@s.WorkStartTime.ToString("HH:mm")','@s.WorkEndTime.ToString("HH:mm")',
                                                      @s.LateToleranceMinutes,@s.EarlyLeaveToleranceMinutes,
                                                      @s.EarliestClockInMinutes,@s.OvertimeThresholdMinutes,
-                                                     @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,'@s.Color')">
+                                                     @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,'@s.Color',
+                                                     '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(restDays.Select(d => (int)d)))')">
                                         <i class="bi bi-pencil"></i>
                                     </button>
                                     <form method="post" asp-page-handler="DeleteShift" class="d-inline"
@@ -105,7 +113,7 @@
                         }
                         @if (!Model.Shifts.Any())
                         {
-                            <tr><td colspan="4" class="empty-state"><i class="bi bi-inbox"></i>所选考勤组暂无班次</td></tr>
+                            <tr><td colspan="5" class="empty-state"><i class="bi bi-inbox"></i>所选考勤组暂无班次</td></tr>
                         }
                     </tbody>
                 </table>
@@ -281,6 +289,24 @@
                                 <label class="form-check-label" for="fCross">跨天班次（夜班）</label>
                             </div>
                         </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold">
+                                每周休息日 <small class="text-muted fw-normal">（勾选的这几天不用上班；三班倒等特殊班次可以自由选，不用局限于周六周日）</small>
+                            </label>
+                            <div class="d-flex flex-wrap gap-3 rest-day-group">
+                                @{
+                                    string[] weekLabels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+                                }
+                                @for (var i = 0; i < 7; i++)
+                                {
+                                    <div class="form-check">
+                                        <input class="form-check-input rest-day-chk" type="checkbox"
+                                               name="RestDays" value="@i" id="fRest@i" />
+                                        <label class="form-check-label" for="fRest@i">@weekLabels[i]</label>
+                                    </div>
+                                }
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -312,11 +338,12 @@ function openAddShift() {
     document.getElementById('fSH').value = 8;
     document.getElementById('fCross').checked = false;
     document.getElementById('fSColor').value = '#1890ff';
+    setRestDays([0, 6]);   // 新建默认周六周日休息，和后台的默认值保持一致
     shiftModal.show();
 }
 
 // 点某个班次的"编辑"：把这个班次现有的各项值填进弹窗表单，方便直接在原有基础上改
-function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color) {
+function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, restDaysJson) {
     document.getElementById('shiftModalTitle').textContent = '编辑班次';
     document.getElementById('shiftId').value = id;   // 非 0，OnPostSaveShiftAsync 据此判断是"修改"
     document.getElementById('shiftGroupId').value = gid;
@@ -329,7 +356,15 @@ function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color) 
     document.getElementById('fSH').value = sh;
     document.getElementById('fCross').checked = cross;
     document.getElementById('fSColor').value = color;
+    setRestDays(JSON.parse(restDaysJson || '[]'));
     shiftModal.show();
+}
+
+// 按传入的星期几编号列表，勾选/取消勾选"每周休息日"
+function setRestDays(days) {
+    document.querySelectorAll('.rest-day-chk').forEach(cb => {
+        cb.checked = days.includes(parseInt(cb.value, 10));
+    });
 }
 
 // 排班表单里"是否所选组全部成员"这个开关：勾上就不用再一个个选人了，

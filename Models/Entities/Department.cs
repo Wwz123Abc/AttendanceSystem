@@ -27,6 +27,12 @@ public class Department
     [MaxLength(500)]
     public string? Description { get; set; }                // 备注说明
 
+    /// <summary>
+    /// 长期跟随的考勤组编号（可空）：在"考勤组管理"里把本部门勾进某个考勤组后填写。
+    /// 填了之后，本部门以后新入职/调入的员工都会自动归入这个考勤组。
+    /// </summary>
+    public int? AttendanceGroupId { get; set; }
+
     public bool IsActive { get; set; } = true;              // 是否启用
 
     /// <summary>排序号（越小越靠前，用于部门树里同级部门的排序）。</summary>
@@ -38,6 +44,9 @@ public class Department
     // ── 导航属性 ──────────────────────────────────────────────────────────
     [ForeignKey("ParentId")]
     public Department? ParentDepartment { get; set; }            // 上级部门（也是一个部门）
+
+    [ForeignKey("AttendanceGroupId")]
+    public AttendanceGroup? AttendanceGroup { get; set; }         // 长期跟随的考勤组
 
     public ICollection<Department> ChildDepartments { get; set; } = [];  // 下属的子部门列表
     public ICollection<User>       Users            { get; set; } = [];  // 本部门下的员工列表

@@ -118,6 +118,11 @@
                             <td class="@(r.ClockOutText == "--" ? "text-muted" : "")">@r.ClockOutText</td>
                             <td>
                                 <span class="badge bg-@StatusColor(r.AttendanceStatus)">@r.StatusText</span>
+                                @if (r.LocationAbnormal)
+                                {
+                                    <i class="bi bi-geo-alt-fill text-danger ms-1"
+                                       title="定位异常，管理员正在核实：@(r.LocationAbnormalNote ?? "打卡地点异常")"></i>
+                                }
                             </td>
                             <td>@(r.ActualWorkHours > 0 ? r.ActualWorkHours.ToString("F1") : "--")</td>
                             <td class="@(r.LateMinutes > 0 ? "text-danger" : "text-muted")">

@@ -89,6 +89,10 @@ public class AttendanceRecordDto
     public decimal OvertimeHours     { get; set; }   // 加班工时
     public bool    IsHoliday         { get; set; }   // 是否节假日（说明：目前系统里没有任何地方会把这个值设成 true，取值始终是 false，等于暂时没在用）
     public string? ApprovalNote      { get; set; }   // 审批说明
+
+    /// <summary>定位异常，需要人工审核（钉钉同步来的打卡，定位和考勤组配置的地点对不上）。不影响上面的考勤状态判定。</summary>
+    public bool    LocationAbnormal     { get; set; }
+    public string? LocationAbnormalNote { get; set; }
 }
 
 /// <summary>月度考勤汇总展示 DTO（用于报表 1 总表 + 报表 2 个人明细）。</summary>
@@ -117,6 +121,65 @@ public class MonthlySummaryDto
 
     /// <summary>每日明细（报表 2 使用）</summary>
     public List<AttendanceRecordDto> DailyRecords { get; set; } = [];
+}
+
+/// <summary>
+/// “模板月度汇总表”里一个员工的完整统计（对照公司要求的外部模板文件的列结构）。
+/// 统计周期不是自然月，而是“上月26号 至 本月25号”这种薪资结算周期（由调用方传入起止日期）。
+/// </summary>
+public class TemplateReportRowDto
+{
+    public int     UserId         { get; set; }
+    public string  RealName       { get; set; } = string.Empty;
+    public string? GroupName      { get; set; }   // 考勤组
+    public string? DeptName       { get; set; }   // 部门
+    public string? EmployeeNo     { get; set; }   // 工号
+    public string? Position       { get; set; }   // 职位
+    public string? DingTalkUserId { get; set; }   // 钉钉 UserId
+
+    /// <summary>标准工时（取这段时间里用得最多的那个班次的标准工时，没排过班就是空）</summary>
+    public decimal? StandardDailyHours { get; set; }
+
+    public int NightShiftDays { get; set; }   // 夜班天数
+
+    /// <summary>每天的工时（整数，舍去小数）；当天没有工时（休息/请假/旷工等）为 null，导出时显示空白。
+    /// 下标和 TemplateReportResultDto.Dates 一一对应。</summary>
+    public List<int?> DailyHours { get; set; } = [];
+
+    public int     ActualWorkdays  { get; set; }   // 出勤天数
+    public int     RestDays        { get; set; }   // 休息天数（周末/法定节假日/公司休息日，不含调班补班日）
+    public decimal TotalWorkHours  { get; set; }   // 工作时长（合计，保留小数，不取整——和每日格子的取整规则不同）
+
+    public int LateMinutes         { get; set; }   // 迟到时长（分钟，合计）
+    public int EarlyLeaveCount     { get; set; }   // 早退次数
+    public int LateCount           { get; set; }   // 迟到次数
+    public int EarlyLeaveMinutes   { get; set; }   // 早退时长（分钟，合计）
+    public int MissingClockInCount { get; set; }   // 上班缺卡次数（有下班卡但没有上班卡）
+    public int MissingClockOutCount{ get; set; }   // 下班缺卡次数（有上班卡但没有下班卡）
+    public int AbsentDays          { get; set; }   // 旷工天数
+
+    public decimal BusinessTripHours { get; set; }   // 出差时长
+    public decimal OutHours          { get; set; }   // 外出时长（系统目前没有“外出”这个概念，恒为 0）
+
+    // 注意：这四列单位是"小时"，跟 TotalWorkHours（工作时长）同一个单位口径，不是分钟——
+    // 参考模板里这几列的数值大小和"工作时长"是同一量级（比如整月工作 235 小时、加班 110 小时这种），
+    // 不是"迟到时长"那种几十分钟量级，之前误当成分钟数存过，导出结果会大了 60 倍，已经改正。
+    public decimal TotalOvertimeHours   { get; set; }   // 加班总时长（小时）
+    public decimal WeekdayOvertimeHours { get; set; }   // 工作日加班（小时）
+    public decimal RestDayOvertimeHours { get; set; }   // 休息日加班（小时）
+    public decimal HolidayOvertimeHours { get; set; }   // 节假日加班（小时）
+}
+
+/// <summary>“模板月度汇总表”整体结果：统计周期 + 每一天的日期表头 + 每个员工一行。</summary>
+public class TemplateReportResultDto
+{
+    public DateOnly StartDate { get; set; }
+    public DateOnly EndDate   { get; set; }
+
+    /// <summary>周期内每一天，按顺序排列（和每行的 DailyHours 下标一一对应）</summary>
+    public List<DateOnly> Dates { get; set; } = [];
+
+    public List<TemplateReportRowDto> Rows { get; set; } = [];
 }
 
 /// <summary>“我的排班”展示 DTO：员工自己某天被排的班次（方便自己看上班时间，不含打卡/工时信息）。</summary>
@@ -159,4 +222,5 @@ public class AttendanceStatsDto
     public int      LateCount       { get; set; }   // 迟到人数
     public int      OnLeaveCount    { get; set; }   // 请假人数
     public int      NotPunchedCount { get; set; }   // 未打卡人数
+    public int      LocationAbnormalCount { get; set; }   // 定位异常待审核人数
 }

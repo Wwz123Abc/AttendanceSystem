@@ -20,9 +20,12 @@ public static class ExcelExportHelper
         var sheet  = wb.CreateSheet($"{year}年{month:D2}月考勤汇总");  // 新建一个工作表
 
         // 预先准备好几种单元格样式，后面反复用
-        var titleStyle  = TitleStyle(wb);   // 大标题
-        var headerStyle = HeaderStyle(wb);  // 表头（灰底加粗）
-        var dataStyle   = DataStyle(wb);    // 普通数据
+        var titleStyle     = TitleStyle(wb);   // 大标题
+        var headerStyle    = HeaderStyle(wb);  // 表头（灰底加粗）
+        var dataStyle      = DataStyle(wb);    // 普通数据
+        var hourStyle      = HourStyle(wb);        // 工时类小数（固定 2 位小数）
+        var bandedStyle    = BandedStyle(wb);      // 隔行浅灰底
+        var bandedHourStyle = BandedHourStyle(wb); // 隔行浅灰底 + 固定 2 位小数
         var redStyle    = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);     // 红字（旷工/缺卡）
         var orangeStyle = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index);  // 橙字（迟到/早退）
 
@@ -47,27 +50,30 @@ public static class ExcelExportHelper
             SetCell(headerRow, i, headers[i], headerStyle);
             sheet.SetColumnWidth(i, 14 * 256);   // 设置列宽（NPOI 里 1 个字符宽 = 256）
         }
+        sheet.SetAutoFilter(new CellRangeAddress(1, 1, 0, headers.Length - 1));   // 表头加筛选箭头，方便按列筛选/排序
 
-        // 从第 2 行起：每个员工一行数据（异常的数字用红/橙色突出）
+        // 从第 2 行起：每个员工一行数据（异常的数字用红/橙色突出；隔行浅灰底，方便对齐看清一整行）
         for (var r = 0; r < summaries.Count; r++)
         {
             var dto = summaries[r];
             var row = sheet.CreateRow(r + 2);
-            SetCell(row, 0,  dto.EmployeeNo,                              dataStyle);
-            SetCell(row, 1,  dto.RealName,                                dataStyle);
-            SetCell(row, 2,  dto.DeptName ?? "",                          dataStyle);
-            SetCell(row, 3,  dto.Position ?? "",                          dataStyle);
-            SetCell(row, 4,  dto.ExpectedWorkdays,                        dataStyle);
-            SetCell(row, 5,  dto.ActualWorkdays,                          dataStyle);
-            SetCell(row, 6,  dto.NightShiftDays,                          dataStyle);   // 夜班天数
-            SetCell(row, 7,  dto.LateCount,        dto.LateCount > 0        ? orangeStyle : dataStyle);  // 有迟到→橙
-            SetCell(row, 8,  dto.EarlyLeaveCount,  dto.EarlyLeaveCount > 0  ? orangeStyle : dataStyle);  // 有早退→橙
-            SetCell(row, 9,  dto.AbsentDays,       dto.AbsentDays > 0       ? redStyle    : dataStyle);  // 有旷工→红
-            SetCell(row, 10, dto.NotPunchedCount,  dto.NotPunchedCount > 0  ? redStyle    : dataStyle);  // 有缺卡→红
-            SetCell(row, 11, (double)dto.LeaveDays,                       dataStyle);
-            SetCell(row, 12, (double)dto.TotalOvertimeHours,              dataStyle);
-            SetCell(row, 13, (double)dto.TotalWorkHours,                  dataStyle);
-            SetCell(row, 14, dto.ApprovedCount,                           dataStyle);
+            var baseStyle = r % 2 == 1 ? bandedStyle : dataStyle;
+            var hStyle    = r % 2 == 1 ? bandedHourStyle : hourStyle;
+            SetCell(row, 0,  dto.EmployeeNo,                              baseStyle);
+            SetCell(row, 1,  dto.RealName,                                baseStyle);
+            SetCell(row, 2,  dto.DeptName ?? "",                          baseStyle);
+            SetCell(row, 3,  dto.Position ?? "",                          baseStyle);
+            SetCell(row, 4,  dto.ExpectedWorkdays,                        baseStyle);
+            SetCell(row, 5,  dto.ActualWorkdays,                          baseStyle);
+            SetCell(row, 6,  dto.NightShiftDays,                          baseStyle);   // 夜班天数
+            SetCell(row, 7,  dto.LateCount,        dto.LateCount > 0        ? orangeStyle : baseStyle);  // 有迟到→橙
+            SetCell(row, 8,  dto.EarlyLeaveCount,  dto.EarlyLeaveCount > 0  ? orangeStyle : baseStyle);  // 有早退→橙
+            SetCell(row, 9,  dto.AbsentDays,       dto.AbsentDays > 0       ? redStyle    : baseStyle);  // 有旷工→红
+            SetCell(row, 10, dto.NotPunchedCount,  dto.NotPunchedCount > 0  ? redStyle    : baseStyle);  // 有缺卡→红
+            SetCell(row, 11, (double)dto.LeaveDays,                       hStyle);
+            SetCell(row, 12, (double)dto.TotalOvertimeHours,              hStyle);
+            SetCell(row, 13, (double)dto.TotalWorkHours,                  hStyle);
+            SetCell(row, 14, dto.ApprovedCount,                           baseStyle);
         }
 
         // 最后一行：各列合计
@@ -152,12 +158,120 @@ public static class ExcelExportHelper
         return ToBytes(wb);
     }
 
+    // ── 报表 3：模板月度汇总表（对照公司要求的外部模板文件列结构，一行一个人，含每日打卡格子）──
+    public static byte[] ExportTemplateReport(TemplateReportResultDto result)
+    {
+        var wb    = new XSSFWorkbook();
+        var sheet = wb.CreateSheet("月度汇总");
+
+        var titleStyle   = TitleStyle(wb);
+        var subTitleStyle = DataStyle(wb);
+        var headerStyle  = HeaderStyle(wb);
+        var dataStyle    = DataStyle(wb);
+        var redStyle     = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);
+
+        var dayCount  = result.Dates.Count;
+        var fixedCols = 8;                       // 姓名/考勤组/部门/工号/职位/UserId/工时/夜班天数
+        var tailCols  = 16;                       // 出勤天数..节假日加班
+        var totalCols = fixedCols + dayCount + tailCols;
+
+        // 第 0 行：大标题（统计日期区间）
+        var titleRow = sheet.CreateRow(0);
+        SetCell(titleRow, 0, $"月度汇总 统计日期：{result.StartDate:yyyy-MM-dd} 至 {result.EndDate:yyyy-MM-dd}", titleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, totalCols - 1));
+        titleRow.HeightInPoints = 26;
+
+        // 第 1 行：报表生成时间
+        var genRow = sheet.CreateRow(1);
+        SetCell(genRow, 0, $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}", subTitleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
+
+        // 第 2 行：主表头
+        var headerRow = sheet.CreateRow(2);
+        headerRow.HeightInPoints = 20;
+        string[] fixedHeaders = ["姓名", "考勤组", "部门", "工号", "职位", "UserId", "工时", "夜班天数"];
+        for (var i = 0; i < fixedHeaders.Length; i++) SetCell(headerRow, i, fixedHeaders[i], headerStyle);
+        SetCell(headerRow, fixedCols, "考勤结果", headerStyle);
+        if (dayCount > 1) sheet.AddMergedRegion(new CellRangeAddress(2, 2, fixedCols, fixedCols + dayCount - 1));
+        string[] tailHeaders =
+        [
+            "出勤天数", "休息天数", "工作时长", "迟到时长", "早退次数", "迟到次数", "早退时长",
+            "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长",
+            "加班总时长", "工作日加班", "休息日加班", "节假日加班"
+        ];
+        for (var i = 0; i < tailHeaders.Length; i++) SetCell(headerRow, fixedCols + dayCount + i, tailHeaders[i], headerStyle);
+
+        // 第 3 行：每天的日期表头（周六/周日用"六"/"日"代替日期数字，和参考模板一致）
+        var dayHeaderRow = sheet.CreateRow(3);
+        for (var i = 0; i < dayCount; i++)
+        {
+            var date  = result.Dates[i];
+            var label = date.DayOfWeek switch { DayOfWeek.Saturday => "六", DayOfWeek.Sunday => "日", _ => date.Day.ToString() };
+            SetCell(dayHeaderRow, fixedCols + i, label, headerStyle);
+        }
+
+        // 列宽：姓名/部门等给宽一点，每日格子给窄一点
+        sheet.SetColumnWidth(0, 10 * 256);
+        sheet.SetColumnWidth(1, 20 * 256);
+        sheet.SetColumnWidth(2, 18 * 256);
+        for (var i = 3; i < fixedCols; i++) sheet.SetColumnWidth(i, 12 * 256);
+        for (var i = 0; i < dayCount; i++) sheet.SetColumnWidth(fixedCols + i, 5 * 256);
+        for (var i = 0; i < tailHeaders.Length; i++) sheet.SetColumnWidth(fixedCols + dayCount + i, 11 * 256);
+
+        // 从第 4 行起：每个员工一行
+        for (var r = 0; r < result.Rows.Count; r++)
+        {
+            var row = result.Rows[r];
+            var xRow = sheet.CreateRow(r + 4);
+
+            SetCell(xRow, 0, row.RealName,        dataStyle);
+            SetCell(xRow, 1, row.GroupName ?? "", dataStyle);
+            SetCell(xRow, 2, row.DeptName ?? "",  dataStyle);
+            SetCell(xRow, 3, row.EmployeeNo ?? "", dataStyle);
+            SetCell(xRow, 4, row.Position ?? "",  dataStyle);
+            SetCell(xRow, 5, row.DingTalkUserId ?? "", dataStyle);
+            if (row.StandardDailyHours is { } sh) SetCell(xRow, 6, (double)sh, dataStyle);
+            SetCellIfNonZero(xRow, 7, row.NightShiftDays, dataStyle);
+
+            for (var i = 0; i < dayCount; i++)
+                if (row.DailyHours[i] is { } h) SetCell(xRow, fixedCols + i, h, dataStyle);
+
+            var c = fixedCols + dayCount;
+            SetCell(xRow, c++, row.ActualWorkdays, dataStyle);
+            SetCellIfNonZero(xRow, c++, row.RestDays, dataStyle);
+            SetCell(xRow, c++, (double)row.TotalWorkHours, dataStyle);
+            SetCellIfNonZero(xRow, c++, row.LateMinutes, orangeOrRed(row.LateMinutes));
+            SetCellIfNonZero(xRow, c++, row.EarlyLeaveCount, orangeOrRed(row.EarlyLeaveCount));
+            SetCellIfNonZero(xRow, c++, row.LateCount, orangeOrRed(row.LateCount));
+            SetCellIfNonZero(xRow, c++, row.EarlyLeaveMinutes, orangeOrRed(row.EarlyLeaveMinutes));
+            SetCellIfNonZero(xRow, c++, row.MissingClockInCount, redIfPositive(row.MissingClockInCount));
+            SetCellIfNonZero(xRow, c++, row.MissingClockOutCount, redIfPositive(row.MissingClockOutCount));
+            SetCellIfNonZero(xRow, c++, row.AbsentDays, redIfPositive(row.AbsentDays));
+            if (row.BusinessTripHours > 0) SetCell(xRow, c, (double)row.BusinessTripHours, dataStyle);
+            c++;
+            c++;   // 外出时长：系统没有这个概念，恒不写值（留空）
+            SetCellIfNonZero(xRow, c++, (double)row.TotalOvertimeHours, dataStyle);
+            SetCellIfNonZero(xRow, c++, (double)row.WeekdayOvertimeHours, dataStyle);
+            SetCellIfNonZero(xRow, c++, (double)row.RestDayOvertimeHours, dataStyle);
+            SetCellIfNonZero(xRow, c,   (double)row.HolidayOvertimeHours, dataStyle);
+        }
+
+        return ToBytes(wb);
+
+        ICellStyle orangeOrRed(int v) => v > 0 ? ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index) : dataStyle;
+        ICellStyle redIfPositive(int v) => v > 0 ? redStyle : dataStyle;
+    }
+
     // ── 下面是“样式工厂”：各做一种单元格外观（字体/颜色/边框/对齐）─────────────
+
+    // 全部报表统一用这个字体——默认字体是英文的 Arial，中文在 Excel 里显示会发虚，换成微软雅黑更清楚
+    private const string ReportFontName = "微软雅黑";
 
     private static ICellStyle TitleStyle(IWorkbook wb)      // 大标题：16 号、加粗、居中
     {
         var s = wb.CreateCellStyle();
         var f = wb.CreateFont();
+        f.FontName = ReportFontName;
         f.FontHeightInPoints = 16;
         f.IsBold = true;
         s.SetFont(f);
@@ -170,11 +284,13 @@ public static class ExcelExportHelper
     {
         var s = wb.CreateCellStyle();
         var f = wb.CreateFont();
+        f.FontName = ReportFontName;
         f.IsBold = true;
         s.SetFont(f);
         s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.Grey25Percent.Index;
         s.FillPattern = FillPattern.SolidForeground;
         s.Alignment   = HorizontalAlignment.Center;
+        s.VerticalAlignment = VerticalAlignment.Center;
         ApplyBorder(s);
         return s;
     }
@@ -182,7 +298,11 @@ public static class ExcelExportHelper
     private static ICellStyle DataStyle(IWorkbook wb)       // 普通数据：居中、带边框
     {
         var s = wb.CreateCellStyle();
+        var f = wb.CreateFont();
+        f.FontName = ReportFontName;
+        s.SetFont(f);
         s.Alignment = HorizontalAlignment.Center;
+        s.VerticalAlignment = VerticalAlignment.Center;
         ApplyBorder(s);
         return s;
     }
@@ -191,14 +311,67 @@ public static class ExcelExportHelper
     {
         var s = DataStyle(wb);
         var f = wb.CreateFont();
+        f.FontName = ReportFontName;
         f.Color = colorIndex;
         s.SetFont(f);
+        return s;
+    }
+
+    // 隔行浅灰底（斑马纹）：人多、天数多的时候，一行数据横向很长，加了这个更容易顺着一行看到底不串行
+    private static ICellStyle BandedStyle(IWorkbook wb)
+    {
+        var s = DataStyle(wb);
+        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.Grey10Percent.Index;
+        s.FillPattern = FillPattern.SolidForeground;
+        return s;
+    }
+
+    // 周六/周日的日期表头：浅黄底，一眼区分工作日和周末，不用数日子
+    private static ICellStyle WeekendHeaderStyle(IWorkbook wb)
+    {
+        var s = HeaderStyle(wb);
+        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.LightYellow.Index;
+        s.FillPattern = FillPattern.SolidForeground;
+        return s;
+    }
+
+    // 周六/周日那一整列的每日工时格子：同样浅黄底，跟表头呼应，整列竖着看也能一眼分清楚
+    private static ICellStyle WeekendDataStyle(IWorkbook wb)
+    {
+        var s = DataStyle(wb);
+        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.LightYellow.Index;
+        s.FillPattern = FillPattern.SolidForeground;
+        return s;
+    }
+
+    // 工时类的小数格子：固定显示 2 位小数（比如 9.5 显示成 9.50），一列数字看着整整齐齐，不会有的 1 位有的 2 位
+    private static ICellStyle HourStyle(IWorkbook wb)       => WithTwoDecimals(DataStyle(wb), wb);
+    private static ICellStyle BandedHourStyle(IWorkbook wb) => WithTwoDecimals(BandedStyle(wb), wb);
+
+    private static ICellStyle WithTwoDecimals(ICellStyle s, IWorkbook wb)
+    {
+        s.DataFormat = wb.CreateDataFormat().GetFormat("0.00");
         return s;
     }
 
     private static void ApplyBorder(ICellStyle s)          // 给单元格四边加细边框
     {
         s.BorderBottom = s.BorderTop = s.BorderLeft = s.BorderRight = BorderStyle.Thin;
+    }
+
+    // 统一的打印/查看外观：关掉默认灰色网格线（改靠边框区分格子，看着更干净）、
+    // 横向打印并把宽度压缩到一页（这几份报表列数都不少，横向打印才不会被切成好几页）、
+    // 冻结指定的行数/列数（往下/往右滚动时，表头和姓名这些"认人"的列始终留在屏幕上）、
+    // 打印多页时每页顶部都重复表头（不然翻到后面几页就不知道每一列是什么了）。
+    private static void ApplyLookAndFeel(ISheet sheet, int freezeCols, int freezeRows, int repeatHeaderRows)
+    {
+        sheet.DisplayGridlines = false;
+        sheet.PrintSetup.Landscape = true;
+        sheet.FitToPage = true;
+        sheet.PrintSetup.FitWidth  = 1;
+        sheet.PrintSetup.FitHeight = 0;   // 0=高度不限制页数，只压缩宽度到一页
+        sheet.CreateFreezePane(freezeCols, freezeRows);
+        sheet.SetRepeatingRows(new CellRangeAddress(0, repeatHeaderRows - 1, 0, 0));
     }
 
     // ── SetCell：往某个单元格写值并套样式 ──────────────────────────────────────
@@ -216,6 +389,17 @@ public static class ExcelExportHelper
     private static void SetCell(IRow row, int col, double value, ICellStyle style)
     {
         var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;
+    }
+
+    // 值为 0 时不写（留空白格子），非 0 才写——模板月度汇总表里，迟到/早退/缺卡/旷工这类"异常次数"
+    // 统一按这个规则显示，0 次留空更方便肉眼一眼看出哪些人有问题，不用满屏都是 0。
+    private static void SetCellIfNonZero(IRow row, int col, int value, ICellStyle style)
+    {
+        if (value != 0) SetCell(row, col, value, style);
+    }
+    private static void SetCellIfNonZero(IRow row, int col, double value, ICellStyle style)
+    {
+        if (value != 0) SetCell(row, col, value, style);
     }
 
     // 把内存里拼好的 Excel 写成字节数组返回

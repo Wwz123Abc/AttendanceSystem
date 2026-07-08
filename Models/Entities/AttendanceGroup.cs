@@ -16,26 +16,17 @@ public class AttendanceGroup
     [Required, MaxLength(100)]
     public string GroupName { get; set; } = string.Empty;
 
-    /// <summary>所属公司</summary>
+    /// <summary>
+    /// 所属公司（展示用）：不再手动填写，由"所属部门"里各部门的所属公司自动派生
+    /// （勾了几个部门就取这几个部门的公司名去重拼起来）。
+    /// </summary>
     [MaxLength(100)]
     public string? CompanyName { get; set; }
-
-    /// <summary>对应的部门编号（系统按部门自动建的考勤组会填这个；手动建的组为空）。用于“考勤组跟随部门”。</summary>
-    public int? DepartmentId { get; set; }
 
     /// <summary>负责该组的文员用户编号</summary>
     public int? ClerkUserId { get; set; }
 
-    /// <summary>定位打卡的有效半径（米）：超出这个范围打卡视为无效</summary>
-    public int PunchRadiusMeters { get; set; } = 500;
-
-    public double? LocationLatitude  { get; set; }          // 打卡点纬度
-    public double? LocationLongitude { get; set; }          // 打卡点经度
-
-    [MaxLength(200)]
-    public string? LocationName { get; set; }               // 打卡点名称
-
-    /// <summary>是否启用定位打卡（开启后会校验打卡距离）</summary>
+    /// <summary>是否启用定位打卡（开启后，打卡要落在下面 Locations 里任意一个地点的有效半径内才算数）</summary>
     public bool EnableLocationPunch { get; set; } = false;
 
     /// <summary>午休时长（分钟）：算工时时自动扣掉</summary>
@@ -50,7 +41,9 @@ public class AttendanceGroup
     public DateTime UpdatedAt { get; set; } = DateTime.Now; // 最后修改时间
 
     // ── 导航属性 ──────────────────────────────────────────────────────────
-    public ICollection<User>          Users          { get; set; } = [];  // 本组的员工
-    public ICollection<ShiftSchedule> ShiftSchedules { get; set; } = [];  // 本组的班次
-    public ICollection<ApprovalFlow>  ApprovalFlows  { get; set; } = [];  // 本组的审批流配置
+    public ICollection<User>                    Users          { get; set; } = [];  // 本组的员工
+    public ICollection<ShiftSchedule>           ShiftSchedules { get; set; } = [];  // 本组的班次
+    public ICollection<AttendanceGroupApprover> Approvers      { get; set; } = [];  // 本组的审批人名单
+    public ICollection<AttendanceGroupLocation> Locations      { get; set; } = [];  // 本组的打卡地点（可以多个）
+    public ICollection<Department>              Departments    { get; set; } = [];  // 长期跟随本组的部门（这些部门以后新增/调入的员工自动归入本组）
 }

@@ -19,15 +19,6 @@
     .stat-icon-warning   { background: var(--warning-bg);  color: var(--warning-text); }
     .stat-icon-info      { background: var(--info-bg);     color: var(--info-text); }
     .stat-icon-secondary { background: var(--gray-bg);     color: var(--gray-text); }
-    .quick-nav-item {
-        display: flex; align-items: center; gap: .75rem; padding: .7rem .85rem;
-        border-radius: var(--radius-md); border: 1px solid var(--border-2); color: var(--text-1);
-        text-decoration: none; transition: background .15s, border-color .15s;
-    }
-    .quick-nav-item:hover { background: var(--brand-lighter); border-color: var(--brand-light); color: var(--text-1); }
-    .quick-nav-item .stat-icon { width: 34px; height: 34px; font-size: .95rem; }
-    .quick-nav-item .qn-label { font-size: .875rem; font-weight: 500; flex: 1; }
-    .quick-nav-item .bi-chevron-right { color: var(--text-4); }
 </style>
 
 <div class="page-header">
@@ -108,10 +99,22 @@
             </div>
         </div>
     </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card stat-card-click border-start-danger py-3 px-3"
+             onclick="openDrilldown('locationabnormal', '定位异常待审核')" title="钉钉同步的打卡，定位和考勤组配置的地点对不上，需要人工确认">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="stat-value text-danger">@s.LocationAbnormalCount</div>
+                    <div class="text-muted small mt-1">定位异常</div>
+                </div>
+                <div class="stat-icon stat-icon-danger"><i class="bi bi-geo-alt-fill"></i></div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <div class="row g-4">
-    <div class="col-md-6">
+    <div class="col-12">
         <div class="card">
             <div class="card-header">出勤率</div>
             <div class="card-body text-center py-4">
@@ -122,35 +125,6 @@
                 <div class="text-muted small">@s.PresentCount / @s.TotalEmployees 人出勤</div>
                 <div class="progress mt-3" style="height:10px;border-radius:var(--radius-sm);background:var(--gray-bg)">
                     <div class="progress-bar bg-success" style="width:@rate%;border-radius:var(--radius-sm)"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">快速导航</div>
-            <div class="card-body">
-                <div class="d-flex flex-column gap-2">
-                    <a href="/Admin/UserManage" class="quick-nav-item">
-                        <div class="stat-icon stat-icon-primary"><i class="bi bi-people"></i></div>
-                        <span class="qn-label">员工管理</span>
-                        <i class="bi bi-chevron-right"></i>
-                    </a>
-                    <a href="/Report/MonthlyReport" class="quick-nav-item">
-                        <div class="stat-icon stat-icon-success"><i class="bi bi-file-earmark-bar-graph"></i></div>
-                        <span class="qn-label">月度报表</span>
-                        <i class="bi bi-chevron-right"></i>
-                    </a>
-                    <a href="/Admin/HolidayManage" class="quick-nav-item">
-                        <div class="stat-icon stat-icon-secondary"><i class="bi bi-calendar-x"></i></div>
-                        <span class="qn-label">假期设置</span>
-                        <i class="bi bi-chevron-right"></i>
-                    </a>
-                    <a href="/Approval/PendingApproval" class="quick-nav-item">
-                        <div class="stat-icon stat-icon-warning"><i class="bi bi-check2-circle"></i></div>
-                        <span class="qn-label">待审批</span>
-                        <i class="bi bi-chevron-right"></i>
-                    </a>
                 </div>
             </div>
         </div>
@@ -172,7 +146,7 @@
                         <thead>
                             <tr>
                                 <th>工号</th><th>姓名</th><th>部门</th>
-                                <th>上班打卡</th><th>下班打卡</th><th>状态</th>
+                                <th>上班打卡</th><th>下班打卡</th><th>状态</th><th>备注</th>
                             </tr>
                         </thead>
                         <tbody id="drilldownBody"></tbody>
@@ -217,6 +191,7 @@ async function openDrilldown(category, title) {
                 <td class="small">${escapeHtml(p.clockIn)}</td>
                 <td class="small">${escapeHtml(p.clockOut)}</td>
                 <td><span class="badge ${p.badge}">${escapeHtml(p.statusText)}</span></td>
+                <td class="small text-danger">${p.locationAbnormal ? escapeHtml(p.locationAbnormalNote ?? '定位异常') : ''}</td>
             </tr>`).join('');
         document.getElementById('drilldownTableWrap').classList.remove('d-none');
     } catch (e) {

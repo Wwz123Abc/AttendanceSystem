@@ -37,4 +37,11 @@ public interface IAttendanceService
     Task<ShiftAssignment?>         GetShiftAssignmentAsync(int userId, DateOnly date);
     /// <summary>审批通过后回写对应考勤记录（补卡/请假）。</summary>
     Task                           UpdateAttendanceAfterApprovalAsync(int approvalRequestId);
+    /// <summary>
+    /// 生成"模板月度汇总表"（对照公司要求的外部模板文件列结构）。
+    /// 统计周期可以是任意起止日期（比如"上月26号至本月25号"这种薪资结算周期，不一定是自然月）。
+    /// deptIds 为空/不传 = 不筛选（导出全公司）；传了就只统计这些部门编号里的员工
+    /// （页面上是一棵"公司/部门"合并树，勾大范围的公司节点会自动展开成它下面所有部门的编号）。
+    /// </summary>
+    Task<TemplateReportResultDto>  GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds);
 }

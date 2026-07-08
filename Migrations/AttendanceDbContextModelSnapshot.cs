@@ -22,55 +22,6 @@ namespace AttendanceSystem.Migrations
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
 
-            modelBuilder.Entity("AttendanceSystem.Models.Entities.ApprovalFlow", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasColumnName("Id");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("ApprovalType")
-                        .HasColumnType("int")
-                        .HasColumnName("ApprovalType");
-
-                    b.Property<int>("AttendanceGroupId")
-                        .HasColumnType("int")
-                        .HasColumnName("AttendanceGroupId");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)")
-                        .HasColumnName("CreatedAt");
-
-                    b.Property<string>("FlowName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("varchar(100)")
-                        .HasColumnName("FlowName");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("tinyint(1)")
-                        .HasColumnName("IsActive");
-
-                    b.Property<string>("StepsConfig")
-                        .IsRequired()
-                        .HasColumnType("longtext")
-                        .HasColumnName("StepsConfig");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("datetime(6)")
-                        .HasColumnName("UpdatedAt");
-
-                    b.HasKey("Id")
-                        .HasName("PK_ApprovalFlow");
-
-                    b.HasIndex("AttendanceGroupId")
-                        .HasDatabaseName("IX_ApprovalFlow_AttendanceGroupId");
-
-                    b.ToTable("ApprovalFlow");
-                });
-
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ApprovalRequest", b =>
                 {
                     b.Property<int>("Id")
@@ -247,10 +198,6 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("int")
                         .HasColumnName("ClerkUserId");
 
-                    b.Property<int?>("DepartmentId")
-                        .HasColumnType("int")
-                        .HasColumnName("DepartmentId");
-
                     b.Property<string>("CompanyName")
                         .HasMaxLength(100)
                         .HasColumnType("varchar(100)")
@@ -278,26 +225,9 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("tinyint(1)")
                         .HasColumnName("IsActive");
 
-                    b.Property<double?>("LocationLatitude")
-                        .HasColumnType("double")
-                        .HasColumnName("LocationLatitude");
-
-                    b.Property<double?>("LocationLongitude")
-                        .HasColumnType("double")
-                        .HasColumnName("LocationLongitude");
-
-                    b.Property<string>("LocationName")
-                        .HasMaxLength(200)
-                        .HasColumnType("varchar(200)")
-                        .HasColumnName("LocationName");
-
                     b.Property<int>("LunchBreakMinutes")
                         .HasColumnType("int")
                         .HasColumnName("LunchBreakMinutes");
-
-                    b.Property<int>("PunchRadiusMeters")
-                        .HasColumnType("int")
-                        .HasColumnName("PunchRadiusMeters");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime(6)")
@@ -319,9 +249,76 @@ namespace AttendanceSystem.Migrations
                             GroupName = "总公司考勤组",
                             IsActive = true,
                             LunchBreakMinutes = 60,
-                            PunchRadiusMeters = 500,
                             UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
                         });
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroupApprover", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AttendanceGroupId")
+                        .HasColumnType("int")
+                        .HasColumnName("AttendanceGroupId");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int")
+                        .HasColumnName("UserId");
+
+                    b.HasKey("Id")
+                        .HasName("PK_AttendanceGroupApprover");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("IX_AttendanceGroupApprover_UserId");
+
+                    b.HasIndex("AttendanceGroupId", "UserId")
+                        .IsUnique();
+
+                    b.ToTable("AttendanceGroupApprover");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroupLocation", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AttendanceGroupId")
+                        .HasColumnType("int")
+                        .HasColumnName("AttendanceGroupId");
+
+                    b.Property<double>("Latitude")
+                        .HasColumnType("double")
+                        .HasColumnName("Latitude");
+
+                    b.Property<string>("LocationName")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)")
+                        .HasColumnName("LocationName");
+
+                    b.Property<double>("Longitude")
+                        .HasColumnType("double")
+                        .HasColumnName("Longitude");
+
+                    b.Property<int>("RadiusMeters")
+                        .HasColumnType("int")
+                        .HasColumnName("RadiusMeters");
+
+                    b.HasKey("Id")
+                        .HasName("PK_AttendanceGroupLocation");
+
+                    b.HasIndex("AttendanceGroupId")
+                        .HasDatabaseName("IX_AttendanceGroupLocation_AttendanceGroupId");
+
+                    b.ToTable("AttendanceGroupLocation");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendancePunch", b =>
@@ -354,6 +351,10 @@ namespace AttendanceSystem.Migrations
                     b.Property<double?>("Latitude")
                         .HasColumnType("double")
                         .HasColumnName("Latitude");
+
+                    b.Property<bool?>("LocationValid")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("LocationValid");
 
                     b.Property<double?>("Longitude")
                         .HasColumnType("double")
@@ -421,6 +422,15 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("int")
                         .HasColumnName("LateMinutes");
 
+                    b.Property<bool>("LocationAbnormal")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("LocationAbnormal");
+
+                    b.Property<string>("LocationAbnormalNote")
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)")
+                        .HasColumnName("LocationAbnormalNote");
+
                     b.Property<decimal>("OvertimeHours")
                         .HasColumnType("decimal(65,30)")
                         .HasColumnName("OvertimeHours");
@@ -468,6 +478,10 @@ namespace AttendanceSystem.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<int?>("AttendanceGroupId")
+                        .HasColumnType("int")
+                        .HasColumnName("AttendanceGroupId");
+
                     b.Property<string>("CompanyName")
                         .HasMaxLength(100)
                         .HasColumnType("varchar(100)")
@@ -488,10 +502,6 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("varchar(100)")
                         .HasColumnName("DeptName");
 
-                    b.Property<int>("SortIndex")
-                        .HasColumnType("int")
-                        .HasColumnName("SortIndex");
-
                     b.Property<string>("Description")
                         .HasMaxLength(500)
                         .HasColumnType("varchar(500)")
@@ -505,12 +515,19 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("int")
                         .HasColumnName("ParentId");
 
+                    b.Property<int>("SortIndex")
+                        .HasColumnType("int")
+                        .HasColumnName("SortIndex");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime(6)")
                         .HasColumnName("UpdatedAt");
 
                     b.HasKey("Id")
                         .HasName("PK_Department");
+
+                    b.HasIndex("AttendanceGroupId")
+                        .HasDatabaseName("IX_Department_AttendanceGroupId");
 
                     b.HasIndex("ParentId")
                         .HasDatabaseName("IX_Department_ParentId");
@@ -526,8 +543,70 @@ namespace AttendanceSystem.Migrations
                             DeptCode = "HQ",
                             DeptName = "总公司",
                             IsActive = true,
+                            SortIndex = 0,
                             UpdatedAt = new DateTime(2024, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
                         });
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.EmployeeRegistration", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("ConfirmedUserId")
+                        .HasColumnType("int")
+                        .HasColumnName("ConfirmedUserId");
+
+                    b.Property<string>("IdNumber")
+                        .IsRequired()
+                        .HasMaxLength(18)
+                        .HasColumnType("varchar(18)")
+                        .HasColumnName("IdNumber");
+
+                    b.Property<string>("Phone")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("Phone");
+
+                    b.Property<string>("RealName")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("RealName");
+
+                    b.Property<string>("RejectReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)")
+                        .HasColumnName("RejectReason");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("ReviewedAt");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int")
+                        .HasColumnName("Status");
+
+                    b.Property<DateTime>("SubmittedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("SubmittedAt");
+
+                    b.HasKey("Id")
+                        .HasName("PK_EmployeeRegistration");
+
+                    b.HasIndex("ConfirmedUserId")
+                        .HasDatabaseName("IX_EmployeeRegistration_ConfirmedUserId");
+
+                    b.HasIndex("IdNumber");
+
+                    b.HasIndex("Phone");
+
+                    b.ToTable("EmployeeRegistration");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Holiday", b =>
@@ -799,6 +878,12 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("int")
                         .HasColumnName("OvertimeThresholdMinutes");
 
+                    b.Property<string>("RestDaysOfWeek")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("RestDaysOfWeek");
+
                     b.Property<string>("ShiftName")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -846,6 +931,7 @@ namespace AttendanceSystem.Migrations
                             IsCrossDay = false,
                             LateToleranceMinutes = 5,
                             OvertimeThresholdMinutes = 30,
+                            RestDaysOfWeek = "0,6",
                             ShiftName = "正常班",
                             ShiftType = 1,
                             StandardWorkHours = 8m,
@@ -873,6 +959,11 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("varchar(500)")
                         .HasColumnName("AvatarUrl");
 
+                    b.Property<string>("ContractCompany")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("ContractCompany");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)")
                         .HasColumnName("CreatedAt");
@@ -885,10 +976,6 @@ namespace AttendanceSystem.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("varchar(64)")
                         .HasColumnName("DingTalkUserId");
-
-                    b.Property<bool>("IsBlacklisted")
-                        .HasColumnType("tinyint(1)")
-                        .HasColumnName("IsBlacklisted");
 
                     b.Property<string>("Email")
                         .HasMaxLength(100)
@@ -905,9 +992,18 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("date")
                         .HasColumnName("HireDate");
 
+                    b.Property<string>("IdNumber")
+                        .HasMaxLength(18)
+                        .HasColumnType("varchar(18)")
+                        .HasColumnName("IdNumber");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("tinyint(1)")
                         .HasColumnName("IsActive");
+
+                    b.Property<bool>("IsBlacklisted")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("IsBlacklisted");
 
                     b.Property<DateTime?>("LastLoginAt")
                         .HasColumnType("datetime(6)")
@@ -959,24 +1055,14 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("EmployeeNo")
                         .IsUnique();
 
+                    b.HasIndex("IdNumber");
+
                     b.HasIndex("Phone");
 
                     b.HasIndex("SupervisorUserId")
                         .HasDatabaseName("IX_User_SupervisorUserId");
 
                     b.ToTable("User");
-                });
-
-            modelBuilder.Entity("AttendanceSystem.Models.Entities.ApprovalFlow", b =>
-                {
-                    b.HasOne("AttendanceSystem.Models.Entities.AttendanceGroup", "AttendanceGroup")
-                        .WithMany("ApprovalFlows")
-                        .HasForeignKey("AttendanceGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("FK_ApprovalFlow_AttendanceGroup_AttendanceGroupId");
-
-                    b.Navigation("AttendanceGroup");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ApprovalRequest", b =>
@@ -1012,6 +1098,39 @@ namespace AttendanceSystem.Migrations
                     b.Navigation("Approver");
                 });
 
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroupApprover", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.AttendanceGroup", "AttendanceGroup")
+                        .WithMany("Approvers")
+                        .HasForeignKey("AttendanceGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_AttendanceGroupApprover_AttendanceGroup_AttendanceGroupId");
+
+                    b.HasOne("AttendanceSystem.Models.Entities.User", "Approver")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_AttendanceGroupApprover_User_UserId");
+
+                    b.Navigation("Approver");
+
+                    b.Navigation("AttendanceGroup");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroupLocation", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.AttendanceGroup", "AttendanceGroup")
+                        .WithMany("Locations")
+                        .HasForeignKey("AttendanceGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_AttendanceGroupLocation_AttendanceGroup_AttendanceGroupId");
+
+                    b.Navigation("AttendanceGroup");
+                });
+
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendancePunch", b =>
                 {
                     b.HasOne("AttendanceSystem.Models.Entities.User", "User")
@@ -1038,13 +1157,32 @@ namespace AttendanceSystem.Migrations
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Department", b =>
                 {
+                    b.HasOne("AttendanceSystem.Models.Entities.AttendanceGroup", "AttendanceGroup")
+                        .WithMany("Departments")
+                        .HasForeignKey("AttendanceGroupId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("FK_Department_AttendanceGroup_AttendanceGroupId");
+
                     b.HasOne("AttendanceSystem.Models.Entities.Department", "ParentDepartment")
                         .WithMany("ChildDepartments")
                         .HasForeignKey("ParentId")
                         .OnDelete(DeleteBehavior.SetNull)
                         .HasConstraintName("FK_Department_Department_ParentId");
 
+                    b.Navigation("AttendanceGroup");
+
                     b.Navigation("ParentDepartment");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.EmployeeRegistration", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.User", "ConfirmedUser")
+                        .WithMany()
+                        .HasForeignKey("ConfirmedUserId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("FK_EmployeeRegistration_User_ConfirmedUserId");
+
+                    b.Navigation("ConfirmedUser");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Holiday", b =>
@@ -1148,7 +1286,11 @@ namespace AttendanceSystem.Migrations
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroup", b =>
                 {
-                    b.Navigation("ApprovalFlows");
+                    b.Navigation("Approvers");
+
+                    b.Navigation("Departments");
+
+                    b.Navigation("Locations");
 
                     b.Navigation("ShiftSchedules");
 

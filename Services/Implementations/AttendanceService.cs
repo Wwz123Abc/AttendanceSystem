@@ -36,23 +36,34 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (await IsHolidayAsync(today, user.AttendanceGroupId))
             return new PunchResponseDto { Success = false, Message = "今日为节假日，无需打卡" };
 
-        // 定位打卡校验：如果考勤组开了定位打卡，就要看打卡位置离打卡点多远
+        // 定位打卡校验：如果考勤组开了定位打卡、且配了打卡地点，就要看打卡位置离「任意一个」地点够不够近
+        // （多地点是"或"的关系：命中其中一个地点的有效半径内就算通过，不要求同时满足全部地点）
         if (user.AttendanceGroupId.HasValue)
         {
-            var group = await db.AttendanceGroups.FindAsync(user.AttendanceGroupId.Value);
-            if (group is { EnableLocationPunch: true, LocationLatitude: not null, LocationLongitude: not null })
+            var group = await db.AttendanceGroups
+                .Include(g => g.Locations)
+                .FirstOrDefaultAsync(g => g.Id == user.AttendanceGroupId.Value);
+            if (group is { EnableLocationPunch: true } && group.Locations.Count > 0)
             {
                 if (!request.Latitude.HasValue || !request.Longitude.HasValue)
                     return new PunchResponseDto { Success = false, Message = "该考勤组已启用定位打卡，请允许浏览器获取位置权限后重试" };
 
-                // 算两点之间的实际距离（米）
-                var dist = HaversineMeters(request.Latitude.Value, request.Longitude.Value,
-                                           group.LocationLatitude.Value, group.LocationLongitude.Value);
-                if (dist > group.PunchRadiusMeters)   // 超出允许范围
+                // 算到每个配置地点的距离，取最近的一个来判断
+                var nearest = group.Locations
+                    .Select(l => new
+                    {
+                        l.LocationName,
+                        l.RadiusMeters,
+                        Distance = HaversineMeters(request.Latitude.Value, request.Longitude.Value, l.Latitude, l.Longitude)
+                    })
+                    .OrderBy(x => x.Distance)
+                    .First();
+
+                if (nearest.Distance > nearest.RadiusMeters)   // 离最近的地点都还超出范围
                     return new PunchResponseDto
                     {
                         Success = false,
-                        Message = $"打卡位置超出有效范围（距打卡点 {dist:F0} 米，限 {group.PunchRadiusMeters} 米内）"
+                        Message = $"打卡位置超出有效范围（距最近的「{nearest.LocationName ?? "打卡点"}」{nearest.Distance:F0} 米，限 {nearest.RadiusMeters} 米内）"
                     };
             }
         }
@@ -237,11 +248,19 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             .ToList();
     }
 
-    /// <summary>取某部门/考勤组某月的汇总列表（不含每日明细）。</summary>
+    /// <summary>
+    /// 取某部门/考勤组某月的汇总列表（不含每日明细）。
+    /// 这里故意不按"当前是否在职"过滤——月度报表是历史记录，员工哪怕后来离职/停用了，
+    /// 只要那个月确实生成过汇总，也应该继续能查到，不然离职员工那个月的数据会从报表里凭空消失。
+    /// 部门/考勤组这两个字段员工离职后仍然保留（停用不会清空），所以按它们筛选不受影响。
+    /// </summary>
     public async Task<List<MonthlySummaryDto>> GetDeptMonthlySummariesAsync(
         int? deptId, int? groupId, int year, int month)
     {
-        var userIds = await BuildUserIdQueryAsync(deptId, groupId);
+        var idQuery = db.Users.AsQueryable();
+        if (deptId.HasValue)  idQuery = idQuery.Where(u => u.DepartmentId == deptId.Value);
+        if (groupId.HasValue) idQuery = idQuery.Where(u => u.AttendanceGroupId == groupId.Value);
+        var userIds = await idQuery.Select(u => u.Id).ToListAsync();
 
         var dtos = (await db.MonthlyAttendanceSummaries
             .Include(s => s.User).ThenInclude(u => u.Department)
@@ -256,12 +275,189 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         return dtos;
     }
 
-    /// <summary>生成/重算某月所有在职员工的考勤汇总（已存在就更新，没有就新建）。</summary>
+    /// <summary>
+    /// 生成"模板月度汇总表"：统计周期是调用方传入的任意起止日期（比如"上月26号至本月25号"这种薪资结算周期），
+    /// 不依赖 MonthlyAttendanceSummary 这张按自然月生成的汇总表，而是直接从每日考勤记录/排班/假期现算，
+    /// 这样才能支持不是自然月的统计区间。可选按部门 / 按考勤组自动带出的所属公司筛选。
+    /// </summary>
+    public async Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var dates = new List<DateOnly>();
+        for (var d = start; d <= end; d = d.AddDays(1)) dates.Add(d);
+
+        // 范围 = 现在在职的人 ∪ 这段周期里有考勤记录的人——这份表是给发工资用的，
+        // 如果只按"现在是否在职"筛选，员工在这个薪资周期里离职、导出报表时已经被停用，
+        // 就会整个人从表里消失，那个月的工资就算不出来了，所以必须把"曾经有过记录的人"也纳进来。
+        var relevantIds = await db.Users.Where(u => u.IsActive).Select(u => u.Id)
+            .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
+            .Distinct()
+            .ToListAsync();
+
+        var q = db.Users
+            .Include(u => u.Department)
+            .Include(u => u.AttendanceGroup)
+            .Where(u => relevantIds.Contains(u.Id))
+            .AsQueryable();
+        // deptIds 是页面那棵"公司/部门"合并树里勾选出来的部门编号（勾大范围=公司节点，会连带展开成它底下所有部门的编号）；
+        // 不勾任何部门 = 不筛选，导出全公司所有人。
+        if (deptIds is { Count: > 0 }) q = q.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
+        var users = await q.OrderBy(u => u.Department!.DeptName).ThenBy(u => u.EmployeeNo).ToListAsync();
+        var userIds = users.Select(u => u.Id).ToList();
+
+        // 批量预取这段时间的考勤记录/排班/假期，循环里直接从内存取，避免每人都查一次库
+        var recordsByUser = (await db.AttendanceRecords
+                .Where(r => userIds.Contains(r.UserId) && r.WorkDate >= start && r.WorkDate <= end)
+                .ToListAsync())
+            .GroupBy(r => r.UserId)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(r => r.WorkDate));
+
+        var assignByUser = (await db.ShiftAssignments
+                .Include(a => a.ShiftSchedule)
+                .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end)
+                .ToListAsync())
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(a => a.WorkDate));
+
+        var groupIds = users.Where(u => u.AttendanceGroupId.HasValue).Select(u => u.AttendanceGroupId!.Value).Distinct().ToList();
+        var holidays = await db.Holidays
+            .Where(h => h.HolidayDate >= start && h.HolidayDate <= end
+                     && (h.AttendanceGroupId == null || groupIds.Contains(h.AttendanceGroupId.Value)))
+            .ToListAsync();
+
+        var night = await ComputeNightShiftDaysRangeAsync(userIds, start, end);
+
+        var rows = new List<TemplateReportRowDto>();
+        foreach (var user in users)
+        {
+            var recByDate    = recordsByUser.GetValueOrDefault(user.Id) ?? new Dictionary<DateOnly, AttendanceRecord>();
+            var assignByDate = assignByUser.GetValueOrDefault(user.Id) ?? new Dictionary<DateOnly, ShiftAssignment>();
+            var myHolidays   = holidays.Where(h => h.AttendanceGroupId == null || h.AttendanceGroupId == user.AttendanceGroupId).ToList();
+
+            var row = new TemplateReportRowDto
+            {
+                UserId         = user.Id,
+                RealName       = user.RealName,
+                GroupName      = user.AttendanceGroup?.GroupName,
+                DeptName       = user.Department?.DeptName,
+                EmployeeNo     = user.EmployeeNo,
+                Position       = user.Position,
+                DingTalkUserId = user.DingTalkUserId,
+                NightShiftDays = night.GetValueOrDefault(user.Id)
+            };
+
+            // 标准工时：取这段时间里出现次数最多的那个班次的标准工时（没排过班就留空）
+            row.StandardDailyHours = assignByDate.Values
+                .GroupBy(a => a.ShiftScheduleId)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.First().ShiftSchedule.StandardWorkHours)
+                .FirstOrDefault();
+            if (assignByDate.Count == 0) row.StandardDailyHours = null;
+
+            decimal totalWork = 0, businessTripHours = 0;
+            decimal totalOtHours = 0, weekdayOtHours = 0, restOtHours = 0, holidayOtHours = 0;
+            int actualDays = 0, restDays = 0, absentDays = 0, missingIn = 0, missingOut = 0;
+            int lateMin = 0, earlyMin = 0, lateCnt = 0, earlyCnt = 0;
+
+            foreach (var date in dates)
+            {
+                // 入职日之前的日子不算这个人的考勤范围——没有这一条，新员工入职前那几天会因为
+                // "当天没有考勤记录、又不是休息日"被误判成旷工，把刚入职的人旷工天数算多
+                if (user.HireDate is { } hireDate && date < hireDate)
+                {
+                    row.DailyHours.Add(null);
+                    continue;
+                }
+
+                recByDate.TryGetValue(date, out var rec);
+                assignByDate.TryGetValue(date, out var assign);
+                var holiday      = myHolidays.FirstOrDefault(h => h.HolidayDate == date);
+                var isCompDay    = holiday?.HolidayType == HolidayType.CompensatoryWorkDay;
+                var isHolidayOff = holiday is not null && !isCompDay;                                              // 法定节假日/公司休息（非补班）
+                var isShiftRest  = !isCompDay && assign is not null && assign.ShiftSchedule.IsRestDay(date.DayOfWeek);  // 排的班自己配置的每周休息日
+                var isWeekendOff = !isCompDay && assign is null && date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;  // 没排班时按全局周末兜底
+
+                int? dayHours = null;
+                if (rec is not null)
+                {
+                    if (rec.ActualWorkHours > 0)
+                    {
+                        dayHours = (int)Math.Floor(rec.ActualWorkHours);   // 每日格子按要求取整（舍去小数）
+                        totalWork += rec.ActualWorkHours;
+                        actualDays++;
+                    }
+                    if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += rec.ActualWorkHours;
+                    if (rec.AttendanceStatus == AttendanceStatus.Absent) absentDays++;
+                    if (rec.ClockInTime is null && rec.ClockOutTime is not null) missingIn++;    // 有下班卡没上班卡
+                    if (rec.ClockInTime is not null && rec.ClockOutTime is null) missingOut++;   // 有上班卡没下班卡
+                    lateMin  += rec.LateMinutes;
+                    earlyMin += rec.EarlyLeaveMinutes;
+                    if (rec.LateMinutes > 0) lateCnt++;
+                    if (rec.EarlyLeaveMinutes > 0) earlyCnt++;
+
+                    if (rec.OvertimeHours > 0)
+                    {
+                        // 参考模板里"加班总时长"这几列的单位是小时，跟"工作时长"同一个口径，不用再换算
+                        totalOtHours += rec.OvertimeHours;
+                        if (isHolidayOff) holidayOtHours += rec.OvertimeHours;
+                        else if (isShiftRest || isWeekendOff) restOtHours += rec.OvertimeHours;
+                        else weekdayOtHours += rec.OvertimeHours;
+                    }
+                }
+                else if (!isHolidayOff && !isShiftRest && !isWeekendOff && date <= today)
+                {
+                    // 完全没有考勤记录，又不是休息/节假日 → 算旷工（和后台旷工判定的口径一致）。
+                    // 必须加 date <= today 这个限制：这份报表的统计周期是"上月26号至本月25号"，
+                    // 只要在 25 号之前导出，周期里就会包含"还没到的未来几天"——这些天当然不会有考勤记录，
+                    // 但它们不是旷工，是"还没发生"，不加这个判断会把每个人都算出一堆莫名其妙的旷工天数。
+                    absentDays++;
+                }
+
+                if (isHolidayOff || isShiftRest || isWeekendOff) restDays++;
+
+                row.DailyHours.Add(dayHours);
+            }
+
+            row.ActualWorkdays          = actualDays;
+            row.RestDays                = restDays;
+            row.TotalWorkHours          = Math.Round(totalWork, 2);
+            row.LateMinutes             = lateMin;
+            row.EarlyLeaveMinutes       = earlyMin;
+            row.LateCount               = lateCnt;
+            row.EarlyLeaveCount         = earlyCnt;
+            row.MissingClockInCount     = missingIn;
+            row.MissingClockOutCount    = missingOut;
+            row.AbsentDays              = absentDays;
+            row.BusinessTripHours       = Math.Round(businessTripHours, 2);
+            row.TotalOvertimeHours      = Math.Round(totalOtHours, 2);
+            row.WeekdayOvertimeHours    = Math.Round(weekdayOtHours, 2);
+            row.RestDayOvertimeHours    = Math.Round(restOtHours, 2);
+            row.HolidayOvertimeHours    = Math.Round(holidayOtHours, 2);
+
+            rows.Add(row);
+        }
+
+        return new TemplateReportResultDto { StartDate = start, EndDate = end, Dates = dates, Rows = rows };
+    }
+
+    /// <summary>
+    /// 生成/重算某月的考勤汇总（已存在就更新，没有就新建）。
+    /// 处理范围不能只看"现在是否在职"：如果一个人这个月工作过、后来才离职（停用），
+    /// 那他这个月的汇总必须照常算出来/保持更新，不能因为人已经离职就让这个月的历史记录消失
+    /// ——不然离职员工最后一个月的考勤/工时在报表里会直接对不上账，这是财务和 HR 都要用的数据。
+    /// 所以处理范围 = 现在在职的人 ∪ 这个月有考勤记录的人 ∪ 这个月已经生成过汇总的人。
+    /// </summary>
     public async Task GenerateMonthlySummaryAsync(int year, int month)
     {
         var start = new DateOnly(year, month, 1);
         var end   = start.AddMonths(1).AddDays(-1);
-        var users = await db.Users.Where(u => u.IsActive).ToListAsync();
+
+        var candidateIds = await db.Users.Where(u => u.IsActive).Select(u => u.Id)
+            .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
+            .Union(db.MonthlyAttendanceSummaries.Where(s => s.Year == year && s.Month == month).Select(s => s.UserId))
+            .Distinct()
+            .ToListAsync();
+        var users = await db.Users.Where(u => candidateIds.Contains(u.Id)).ToListAsync();
 
         // 本月每个人“审批通过”的申请数（一次性批量查，避免循环里逐人查库）
         var startDt = start.ToDateTime(TimeOnly.MinValue);
@@ -364,7 +560,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 若按 LateMinutes>0 算会漏掉钉钉来的迟到。
             LateCount       = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late),
             OnLeaveCount    = records.Count(r => r.AttendanceStatus == AttendanceStatus.OnLeave),
-            NotPunchedCount = userIds.Count - records.Count(IsPresent)   // 总人数 - 出勤 = 没打卡
+            NotPunchedCount = userIds.Count - records.Count(IsPresent),   // 总人数 - 出勤 = 没打卡
+            LocationAbnormalCount = records.Count(r => r.LocationAbnormal)
         };
     }
 
@@ -399,6 +596,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             "late"       => records.Where(r => r.AttendanceStatus == AttendanceStatus.Late).Select(r => r.UserId).ToList(),
             "onleave"    => records.Where(r => r.AttendanceStatus == AttendanceStatus.OnLeave).Select(r => r.UserId).ToList(),
             "notpunched" => userIds.Where(id => !presentIds.Contains(id)).ToList(),   // 含“完全没记录”和“有记录但没打上班卡”两种人
+            "locationabnormal" => records.Where(r => r.LocationAbnormal).Select(r => r.UserId).ToList(),
             _            => []
         };
 
@@ -423,7 +621,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 StatusCssClass   = rec is null ? "f-color-red" : StatusCss(rec.AttendanceStatus),
                 LateMinutes      = rec?.LateMinutes ?? 0,
                 EarlyLeaveMinutes = rec?.EarlyLeaveMinutes ?? 0,
-                ApprovalNote     = rec?.ApprovalNote
+                ApprovalNote     = rec?.ApprovalNote,
+                LocationAbnormal     = rec?.LocationAbnormal ?? false,
+                LocationAbnormalNote = rec?.LocationAbnormalNote
             });
         }
 
@@ -630,13 +830,18 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     ///   ① 当天排的班是夜班(跨天班次 或 班次名含“夜”)；
     ///   ② 无排班时按打卡时间兜底：18 点后上班，或下班跨到了第二天（适配钉钉数据）。
     /// </summary>
-    private async Task<Dictionary<int, int>> ComputeNightShiftDaysAsync(List<int> userIds, int year, int month)
+    private Task<Dictionary<int, int>> ComputeNightShiftDaysAsync(List<int> userIds, int year, int month)
+    {
+        var start = new DateOnly(year, month, 1);
+        var end   = start.AddMonths(1).AddDays(-1);
+        return ComputeNightShiftDaysRangeAsync(userIds, start, end);
+    }
+
+    /// <summary>算一段时间内（任意起止日期，不一定是自然月）每个人的夜班天数。</summary>
+    private async Task<Dictionary<int, int>> ComputeNightShiftDaysRangeAsync(List<int> userIds, DateOnly start, DateOnly end)
     {
         var result = new Dictionary<int, int>();
         if (userIds.Count == 0) return result;
-
-        var start = new DateOnly(year, month, 1);
-        var end   = start.AddMonths(1).AddDays(-1);
 
         // 夜班排班的 (用户, 日期) 集合
         var nightAssign = (await db.ShiftAssignments
@@ -730,7 +935,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         ActualWorkHours  = r.ActualWorkHours,
         OvertimeHours    = r.OvertimeHours,
         IsHoliday        = r.IsHoliday,
-        ApprovalNote     = r.ApprovalNote
+        ApprovalNote     = r.ApprovalNote,
+        LocationAbnormal     = r.LocationAbnormal,
+        LocationAbnormalNote = r.LocationAbnormalNote
     };
 
     /// <summary>把“月度汇总”实体转成展示对象(DTO)。</summary>
@@ -776,7 +983,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// Haversine 公式：根据两点的经纬度，算出它们在地球表面的直线距离（米）。
     /// 用于定位打卡时判断“离打卡点多远”。
     /// </summary>
-    private static double HaversineMeters(double lat1, double lon1, double lat2, double lon2)
+    /// <summary>算地球上两个经纬度坐标之间的直线距离（米）。定位打卡校验、钉钉打卡定位比对都复用这个公式。</summary>
+    public static double HaversineMeters(double lat1, double lon1, double lat2, double lon2)
     {
         const double R = 6371000; // 地球平均半径（米）
         var dLat = (lat2 - lat1) * Math.PI / 180;   // 纬度差（弧度）

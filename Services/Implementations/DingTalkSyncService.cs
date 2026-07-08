@@ -21,7 +21,6 @@ public class DingTalkSyncService(
     IDingTalkAttendanceClient client,
     IDingTalkContactClient contactClient,
     IDingTalkLeaveClient leaveClient,
-    IAttendanceGroupService groupService,
     IConfiguration configuration,
     IOptions<DingTalkOptions> options,
     ILogger<DingTalkSyncService> logger) : IDingTalkSyncService
@@ -42,6 +41,14 @@ public class DingTalkSyncService(
         var groupBreaks = await db.AttendanceGroups
             .Select(g => new { g.Id, g.LunchBreakMinutes, g.DinnerBreakMinutes })
             .ToDictionaryAsync(g => g.Id, g => (g.LunchBreakMinutes, g.DinnerBreakMinutes), ct);
+
+        // 各考勤组是否开了定位打卡 + 配置的打卡地点（用来比对钉钉上报的定位是否在范围内）
+        var groupEnableLocation = await db.AttendanceGroups
+            .Select(g => new { g.Id, g.EnableLocationPunch })
+            .ToDictionaryAsync(g => g.Id, g => g.EnableLocationPunch, ct);
+        var groupLocations = (await db.AttendanceGroupLocations.ToListAsync(ct))
+            .GroupBy(l => l.AttendanceGroupId)
+            .ToDictionary(g => g.Key, g => g.ToList());
 
         var result = new DingTalkSyncResultDto { From = from, To = to, MappedUsers = userMap.Count };
 
@@ -102,27 +109,51 @@ public class DingTalkSyncService(
                 var type = string.Equals(r.CheckType, "OnDuty", StringComparison.OrdinalIgnoreCase)
                     ? PunchType.ClockIn : PunchType.ClockOut;
 
+                double? lat = double.TryParse(r.UserLatitude,  out var la) && la != 0 ? la : null;
+                double? lng = double.TryParse(r.UserLongitude, out var lo) && lo != 0 ? lo : null;
+
+                // 定位比对：员工的考勤组开了定位打卡、且配了地点时，比对钉钉上报的坐标离最近的地点多远
+                bool?  locationValid = null;
+                string? locationNote = null;
+                if (lat.HasValue && lng.HasValue
+                    && groupIdByUser.TryGetValue(localUid, out var gidForLoc) && gidForLoc.HasValue
+                    && groupEnableLocation.GetValueOrDefault(gidForLoc.Value)
+                    && groupLocations.TryGetValue(gidForLoc.Value, out var locs) && locs.Count > 0)
+                {
+                    var nearest = locs
+                        .Select(l => new
+                        {
+                            l.LocationName,
+                            l.RadiusMeters,
+                            Distance = AttendanceService.HaversineMeters(lat.Value, lng.Value, l.Latitude, l.Longitude)
+                        })
+                        .OrderBy(x => x.Distance).First();
+                    locationValid = nearest.Distance <= nearest.RadiusMeters;
+                    if (!locationValid.Value)
+                        locationNote = $"打卡地点距最近的「{nearest.LocationName ?? "打卡点"}」{nearest.Distance:F0} 米，超出有效范围 {nearest.RadiusMeters} 米";
+                }
+
                 // 3) 去重写入原始打卡流水
                 if (punchSet.Add((localUid, type, time)))
                 {
-                    double? lat = double.TryParse(r.UserLatitude,  out var la) && la != 0 ? la : null;
-                    double? lng = double.TryParse(r.UserLongitude, out var lo) && lo != 0 ? lo : null;
                     db.AttendancePunches.Add(new AttendancePunch
                     {
-                        UserId     = localUid,
-                        PunchTime  = time,
-                        PunchType  = type,
-                        Latitude   = lat,
-                        Longitude  = lng,
-                        Address    = r.UserAddress,
-                        DeviceInfo = $"DingTalk:{r.SourceType}",
-                        IsValid    = true,
-                        CreatedAt  = DateTime.Now
+                        UserId        = localUid,
+                        PunchTime     = time,
+                        PunchType     = type,
+                        Latitude      = lat,
+                        Longitude     = lng,
+                        Address       = r.UserAddress,
+                        DeviceInfo    = $"DingTalk:{r.SourceType}",
+                        IsValid       = true,
+                        LocationValid = locationValid,
+                        CreatedAt     = DateTime.Now
                     });
                     result.PunchAdded++;
                 }
 
                 agg.Apply(type, time, r.TimeResult);
+                if (locationValid == false) agg.MarkLocationAbnormal(locationNote!);   // 需要人工审核，但不影响正常的迟到/旷工判定
             }
             else
             {
@@ -148,9 +179,11 @@ public class DingTalkSyncService(
 
             if (agg.ClockIn  is not null) record.ClockInTime  = agg.ClockIn;
             if (agg.ClockOut is not null) record.ClockOutTime = agg.ClockOut;
-            record.AttendanceStatus = agg.ResolveStatus();
-            record.Remark           = "钉钉同步";
-            record.UpdatedAt        = DateTime.Now;
+            record.AttendanceStatus     = agg.ResolveStatus();
+            record.Remark               = "钉钉同步";
+            record.LocationAbnormal     = agg.LocationAbnormal;      // 定位异常只是提醒，不影响上面的迟到/旷工判定
+            record.LocationAbnormalNote = agg.LocationAbnormalNote;
+            record.UpdatedAt            = DateTime.Now;
 
             // ★ 工时（工资按工时结算，必须在同步时算准写进日记录，不能留 0 等汇总兜底）：
             //   上下班卡齐了就按「打卡时长 − 午休/晚餐」算实际工时，公式与本地打卡完全相同；
@@ -405,12 +438,9 @@ public class DingTalkSyncService(
 
         await db.SaveChangesAsync(ct);
 
-        // 导入后按部门自动建考勤组、并把员工归入其部门对应的考勤组（考勤组跟随部门）
-        var (grpCreated, grpMoved) = await groupService.SyncAllAsync();
-
         result.Message = $"导入完成：公司「{companyName}」，部门 {result.DepartmentsSynced} 个，" +
                          $"钉钉员工 {result.TotalFromDingTalk} 人，新建 {result.Created}，更新 {result.Updated}；" +
-                         $"按部门建考勤组 {grpCreated} 个、归组 {grpMoved} 人";
+                         $"统一归入「{groupName}」（如需按部门细分考勤组，请到「考勤组管理」手动配置部门跟随）";
         logger.LogInformation(result.Message);
         return result;
     }
@@ -444,6 +474,17 @@ public class DingTalkSyncService(
 
         /// <summary>这一天是否有可写入的数据（有打卡，或被判旷工）。仅「未打卡」这种残缺标记不算。</summary>
         public bool HasData => ClockIn is not null || ClockOut is not null || _absent;
+
+        /// <summary>这一天是否有定位异常，需要人工审核（不影响正常的迟到/旷工判定）。</summary>
+        public bool LocationAbnormal { get; private set; }
+        public string? LocationAbnormalNote { get; private set; }
+
+        /// <summary>标记这一天有一次定位对不上（记最后一次触发的说明即可，不需要罗列每一次）。</summary>
+        public void MarkLocationAbnormal(string note)
+        {
+            LocationAbnormal     = true;
+            LocationAbnormalNote = note;
+        }
 
         public void Apply(PunchType type, DateTime time, string? timeResult)
         {
