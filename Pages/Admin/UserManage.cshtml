@@ -250,6 +250,9 @@
                                     </td>
                                     <td>
                                         <div class="d-flex flex-nowrap align-items-center gap-1">
+                                            <a class="btn btn-outline-info btn-sm" href="/Admin/EmployeeInfo?id=@u.Id" title="查看该员工的全部资料">
+                                                <i class="bi bi-person-lines-fill"></i> 详情
+                                            </a>
                                             <button class="btn btn-outline-primary btn-sm"
                                                     onclick="openEdit(@System.Text.Json.JsonSerializer.Serialize(new {
                                                         id = u.Id, employeeNo = u.EmployeeNo, realName = u.RealName,
@@ -259,7 +262,11 @@
                                                         idNumber = u.IdNumber ?? "",
                                                         contractCompany = u.ContractCompany ?? "",
                                                         hireDate = u.HireDate?.ToString("yyyy-MM-dd") ?? "",
-                                                        dingTalkUserId = u.DingTalkUserId ?? ""
+                                                        dingTalkUserId = u.DingTalkUserId ?? "",
+                                                        homeAddress = u.HomeAddress ?? "",
+                                                        emergencyContactName = u.EmergencyContactName ?? "",
+                                                        emergencyContactPhone = u.EmergencyContactPhone ?? "",
+                                                        idCardPhotoUrl = u.IdCardPhotoUrl ?? ""
                                                     }))">编辑</button>
                                             @if (u.Status == EmployeeStatus.Active)
                                             {
@@ -404,7 +411,7 @@
                 <h5 class="modal-title" id="userModalTitle">新增员工</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post" id="userForm">
+            <form method="post" id="userForm" enctype="multipart/form-data">
                 @Html.Raw(ctxHidden)
                 <input type="hidden" asp-for="EditUserId" id="fEditUserId" />
                 <input type="hidden" asp-for="RegistrationId" id="fRegistrationId" />
@@ -482,6 +489,30 @@
                             <label class="form-label">合同公司</label>
                             <input asp-for="ContractCompany" class="form-control" id="fContractCompany" placeholder="如：科瑞技术有限公司" />
                             <div class="form-text">员工实际签合同、发工资的公司主体（可能和所属部门的公司不是同一家）。</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">紧急联系人姓名</label>
+                            <input asp-for="EmergencyContactName" class="form-control" id="fEmergencyContactName" placeholder="如：本人配偶/父母" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">紧急联系人电话</label>
+                            <input asp-for="EmergencyContactPhone" class="form-control" id="fEmergencyContactPhone" type="tel" maxlength="11" />
+                        </div>
+                        <div class="col-md-12">
+                            <label class="form-label">家庭住址</label>
+                            <input asp-for="HomeAddress" class="form-control" id="fHomeAddress" placeholder="如：广东省东莞市xx镇xx街xx号" />
+                        </div>
+                        <div class="col-md-12">
+                            <label class="form-label">身份证照片</label>
+                            <input type="file" name="IdCardPhoto" class="form-control" id="fIdCardPhoto" accept="image/*" />
+                            <div class="form-text">支持 jpg / png / webp，最大 10MB；上传新照片会替换旧照片，不选则保留原照片不变。</div>
+                            <div id="fIdCardPhotoPreviewWrap" class="mt-2" style="display:none">
+                                <span class="text-muted small">当前照片：</span>
+                                <a id="fIdCardPhotoPreviewLink" href="#" target="_blank">
+                                    <img id="fIdCardPhotoPreview" src="" alt="身份证照片"
+                                         style="max-height:80px;border:1px solid #dee2e6;border-radius:4px" />
+                                </a>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -614,8 +645,11 @@ function openAdd() {
     document.getElementById('fEditUserId').value = 0;
     document.getElementById('fRegistrationId').value = '';   // 不是在确认扫码登记，清空关联
     document.getElementById('pwdRow').style.display = '';
-    ['fEmployeeNo','fRealName','fPosition','fPhone','fIdNumber','fContractCompany','fHireDate']
+    ['fEmployeeNo','fRealName','fPosition','fPhone','fIdNumber','fContractCompany','fHireDate',
+     'fHomeAddress','fEmergencyContactName','fEmergencyContactPhone']
         .forEach(id => document.getElementById(id).value = '');
+    document.getElementById('fIdCardPhoto').value = '';
+    document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';   // 新建员工还没有照片，不显示预览
     document.getElementById('fRole').value = 'Employee';
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
@@ -657,6 +691,11 @@ function openConfirm(data) {
     document.getElementById('fIdNumber').value   = data.idNumber;
     document.getElementById('fContractCompany').value = '';
     document.getElementById('fHireDate').value   = '';
+    document.getElementById('fHomeAddress').value = '';
+    document.getElementById('fEmergencyContactName').value = '';
+    document.getElementById('fEmergencyContactPhone').value = '';
+    document.getElementById('fIdCardPhoto').value = '';
+    document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';
     document.getElementById('fRole').value       = 'Employee';
     document.getElementById('fDeptId').value     = SELECTED_DEPT !== null ? SELECTED_DEPT : '';
     document.getElementById('fGroupId').value    = '';
@@ -695,6 +734,17 @@ function openEdit(data) {
     document.getElementById('fIdNumber').value   = data.idNumber || '';
     document.getElementById('fContractCompany').value = data.contractCompany || '';
     document.getElementById('fHireDate').value   = data.hireDate;
+    document.getElementById('fHomeAddress').value = data.homeAddress || '';
+    document.getElementById('fEmergencyContactName').value  = data.emergencyContactName || '';
+    document.getElementById('fEmergencyContactPhone').value = data.emergencyContactPhone || '';
+    document.getElementById('fIdCardPhoto').value = '';   // 文件框永远从空开始，不选=保留原照片
+    if (data.idCardPhotoUrl) {
+        document.getElementById('fIdCardPhotoPreviewWrap').style.display = '';
+        document.getElementById('fIdCardPhotoPreview').src = data.idCardPhotoUrl;
+        document.getElementById('fIdCardPhotoPreviewLink').href = data.idCardPhotoUrl;
+    } else {
+        document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';
+    }
     // 直接告诉管理员这个人有没有绑定钉钉——绑定了，改资料/删除才会同步到钉钉，没绑定就只改本地
     document.getElementById('fDingTalkStatus').innerHTML = data.dingTalkUserId
         ? '<i class="bi bi-link-45deg text-primary"></i> 已绑定钉钉账号，保存/删除时会同步到钉钉通讯录'

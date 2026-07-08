@@ -169,6 +169,10 @@ public class UserService(
         existing.IdNumber           = user.IdNumber;
         existing.ContractCompany    = user.ContractCompany;
         existing.HireDate           = user.HireDate;
+        existing.HomeAddress            = user.HomeAddress;
+        existing.EmergencyContactName   = user.EmergencyContactName;
+        existing.EmergencyContactPhone  = user.EmergencyContactPhone;
+        existing.IdCardPhotoUrl         = user.IdCardPhotoUrl;
         // 注意：不在这里覆盖 Email 和 DingTalkUserId。员工表单已不含这两个字段，
         // 若在这里赋值，每次编辑都会把数据库里已有的值冲成空。
         existing.UpdatedAt          = DateTime.Now;

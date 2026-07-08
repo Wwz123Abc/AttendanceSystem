@@ -63,6 +63,22 @@ public class User
     [MaxLength(100)]
     public string? ContractCompany { get; set; }
 
+    /// <summary>家庭住址</summary>
+    [MaxLength(200)]
+    public string? HomeAddress { get; set; }
+
+    /// <summary>紧急联系人姓名（不是本人，出意外时用来联系家属/朋友）</summary>
+    [MaxLength(50)]
+    public string? EmergencyContactName { get; set; }
+
+    /// <summary>紧急联系人电话</summary>
+    [MaxLength(20)]
+    public string? EmergencyContactPhone { get; set; }
+
+    /// <summary>身份证照片的访问地址（上传后存到 wwwroot/uploads 下，这里只存相对路径）</summary>
+    [MaxLength(500)]
+    public string? IdCardPhotoUrl { get; set; }
+
     [MaxLength(100)]
     public string? Email { get; set; }                      // 邮箱
 

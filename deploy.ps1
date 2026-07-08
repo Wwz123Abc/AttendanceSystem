@@ -27,7 +27,18 @@ Get-ChildItem -Path obj -Recurse -Filter "*.dswa.cache.json" -ErrorAction Silent
 Remove-Item -Recurse -Force .\publish        -ErrorAction SilentlyContinue
 Remove-Item -Force          .\publish.tar.gz -ErrorAction SilentlyContinue
 
-dotnet publish -c Release -o .\publish --nologo
+# 本机 DLP 安全软件会把编译过程中自动生成的一批中间文件（AssemblyInfo.cs、
+# staticwebassets 缓存等）悄悄加密成乱码，导致编译报 CS2015"是二进制文件"或
+# MSB4018 缓存损坏。下面这几个 -p: 参数让编译干脆不生成这些文件，绕开加密：
+# 代价只是发布出来的程序集少了版本号等描述信息，不影响功能。
+$DlpSafeFlags = @(
+    "-p:StaticWebAssetsCacheDefineStaticWebAssetsEnabled=false"
+    "-p:GenerateAssemblyInfo=false"
+    "-p:GenerateTargetFrameworkAttribute=false"
+    "-p:GenerateRazorAssemblyInfo=false"
+)
+
+dotnet publish -c Release -o .\publish --nologo @DlpSafeFlags
 if ($LASTEXITCODE -ne 0)                       { Fail "dotnet publish 失败" }
 if (-not (Test-Path .\publish\AttendanceSystem.dll)) { Fail "发布产物缺失 AttendanceSystem.dll" }
 
@@ -47,7 +58,7 @@ if ($WithMigration) {
         Remove-Item -Force -ErrorAction SilentlyContinue
     $efOk = $false
     try {
-        dotnet build .\AttendanceSystem.csproj -c Debug -p:StaticWebAssetsEnabled=false --nologo -v quiet | Out-Null
+        dotnet build .\AttendanceSystem.csproj -c Debug --nologo -v quiet @DlpSafeFlags | Out-Null
         dotnet ef migrations script --idempotent --no-build -o migrate.gen.sql 2>$null
         if ($LASTEXITCODE -eq 0 -and (Test-Path .\migrate.gen.sql) -and ((Get-Item .\migrate.gen.sql).Length -gt 0)) {
             Move-Item -Force .\migrate.gen.sql .\migrate.sql

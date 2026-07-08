@@ -21,6 +21,7 @@ public class UserManageModel(
     IAttendanceGroupService groupService,
     IEmployeeRegistrationService registrationService,
     IOptions<AppSettingsOptions> appOptions,
+    IWebHostEnvironment env,                    // 用来定位 wwwroot 目录存身份证照片
     AttendanceDbContext db) : PageModel
 {
     public List<User>            Users       { get; set; } = [];
@@ -65,6 +66,10 @@ public class UserManageModel(
     [BindProperty] public string? IdNumber       { get; set; }
     [BindProperty] public string? ContractCompany { get; set; }
     [BindProperty] public string? HireDate       { get; set; }
+    [BindProperty] public string? HomeAddress            { get; set; }
+    [BindProperty] public string? EmergencyContactName   { get; set; }
+    [BindProperty] public string? EmergencyContactPhone  { get; set; }
+    [BindProperty] public IFormFile? IdCardPhoto         { get; set; }   // 身份证照片，不选就是不改
     [BindProperty] public int     EditUserId     { get; set; }
 
     /// <summary>本次"新建员工"是不是在确认某条扫码登记（非空=确认通过后要联动把那条登记标记为已确认）。</summary>
@@ -135,6 +140,7 @@ public class UserManageModel(
         {
             ValidateContact(requirePhone: true);
             var newUser = BuildUser();
+            newUser.IdCardPhotoUrl = await SaveIdCardPhotoAsync(newUser.EmployeeNo, null);
             // 部门长期跟随了某个考勤组时，自动归入该组；部门没配跟随关系则维持表单里手动选的考勤组
             if (DeptId.HasValue)
             {
@@ -160,8 +166,10 @@ public class UserManageModel(
         try
         {
             ValidateContact(requirePhone: false);
+            var oldPhotoUrl = (await userService.GetUserByIdAsync(EditUserId))?.IdCardPhotoUrl;
             var user = BuildUser();
             user.Id = EditUserId;
+            user.IdCardPhotoUrl = await SaveIdCardPhotoAsync(user.EmployeeNo, oldPhotoUrl);
             // 部门长期跟随了某个考勤组时，自动归入该组；部门没配跟随关系则维持表单里手动选的考勤组
             if (DeptId.HasValue)
             {
@@ -302,9 +310,47 @@ public class UserManageModel(
         Phone             = string.IsNullOrWhiteSpace(Phone)          ? null : Phone.Trim(),
         IdNumber          = string.IsNullOrWhiteSpace(IdNumber)       ? null : IdNumber.Trim().ToUpperInvariant(),
         ContractCompany   = string.IsNullOrWhiteSpace(ContractCompany) ? null : ContractCompany.Trim(),
-        HireDate          = string.IsNullOrEmpty(HireDate)            ? null : DateOnly.Parse(HireDate)
+        HireDate          = string.IsNullOrEmpty(HireDate)            ? null : DateOnly.Parse(HireDate),
+        HomeAddress            = string.IsNullOrWhiteSpace(HomeAddress)           ? null : HomeAddress.Trim(),
+        EmergencyContactName   = string.IsNullOrWhiteSpace(EmergencyContactName)  ? null : EmergencyContactName.Trim(),
+        EmergencyContactPhone  = string.IsNullOrWhiteSpace(EmergencyContactPhone) ? null : EmergencyContactPhone.Trim()
         // DingTalkUserId 不在员工表单里维护，新建时留空，由「从钉钉导入/自动映射」填充
+        // IdCardPhotoUrl 不在这里赋值，由 SaveIdCardPhotoAsync() 上传后单独设置
     };
+
+    /// <summary>
+    /// 保存上传的身份证照片：没选新文件就保留原地址（编辑时常常不重新上传）；
+    /// 选了新文件就存到 wwwroot/{上传目录}/idcards/{工号}/ 下，并删掉旧照片文件（避免残留占硬盘空间）。
+    /// </summary>
+    private async Task<string?> SaveIdCardPhotoAsync(string employeeNo, string? oldUrl)
+    {
+        if (IdCardPhoto is null || IdCardPhoto.Length == 0) return oldUrl;   // 没上传新照片，保留原值
+
+        if (IdCardPhoto.Length > 10 * 1024 * 1024)
+            throw new InvalidOperationException("身份证照片不能超过 10MB");
+        var ext = Path.GetExtension(IdCardPhoto.FileName).ToLowerInvariant();
+        if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
+            throw new InvalidOperationException("身份证照片只支持 jpg / png / webp 格式");
+
+        var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
+        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
+        var dir        = Path.Combine(webRoot, uploadPath, "idcards", employeeNo);
+        Directory.CreateDirectory(dir);
+
+        var fileName = $"{Guid.NewGuid():N}{ext}";   // 用随机名，避免重名覆盖
+        var path     = Path.Combine(dir, fileName);
+        await using (var fs = System.IO.File.Create(path))
+            await IdCardPhoto.CopyToAsync(fs);
+
+        // 换了新照片，把旧文件删掉，避免每次改资料都留一张占硬盘空间
+        if (!string.IsNullOrEmpty(oldUrl))
+        {
+            var oldPath = Path.Combine(webRoot, oldUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
+        }
+
+        return $"/{uploadPath}/idcards/{employeeNo}/{fileName}";
+    }
 
     private static EmployeeStatus? ParseStatus(string? s) => s switch
     {
