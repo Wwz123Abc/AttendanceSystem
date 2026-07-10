@@ -291,6 +291,12 @@
                         </a>
                     </li>
                     <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/EmployeeInfo") ? "active" : "")"
+                           href="/Admin/EmployeeInfo">
+                            <i class="bi bi-person-vcard"></i>员工信息
+                        </a>
+                    </li>
+                    <li>
                         <a class="nav-link @(currentPath.StartsWith("/Admin/DepartmentManage") ? "active" : "")"
                            href="/Admin/DepartmentManage">
                             <i class="bi bi-diagram-3"></i>部门管理

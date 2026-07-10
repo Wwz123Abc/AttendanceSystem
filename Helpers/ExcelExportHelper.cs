@@ -2,6 +2,7 @@ using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
 using NPOI.SS.Util;
 using AttendanceSystem.Models.DTOs;
+using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 
 namespace AttendanceSystem.Helpers;
@@ -276,6 +277,65 @@ public static class ExcelExportHelper
 
         ICellStyle orangeOrRed(int v) => v > 0 ? ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index) : dataStyle;
         ICellStyle redIfPositive(int v) => v > 0 ? redStyle : dataStyle;
+    }
+
+    // ── 报表 4：员工信息表（"员工信息"页按部门/关键字筛选后导出，一行一个人）───────
+    public static byte[] ExportEmployeeList(List<User> users)
+    {
+        var wb    = new XSSFWorkbook();
+        var sheet = wb.CreateSheet("员工信息");
+
+        var titleStyle  = TitleStyle(wb);
+        var headerStyle = HeaderStyle(wb);
+        var dataStyle   = DataStyle(wb);
+        var bandedStyle = BandedStyle(wb);
+
+        string[] headers =
+        [
+            "工号", "姓名", "角色", "用工性质", "状态", "部门", "考勤组", "岗位",
+            "手机号", "身份证号", "合同公司", "入职日期", "家庭住址",
+            "紧急联系人", "紧急联系人电话", "钉钉绑定"
+        ];
+
+        var titleRow = sheet.CreateRow(0);
+        SetCell(titleRow, 0, $"员工信息表（共 {users.Count} 人）", titleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, headers.Length - 1));
+        titleRow.HeightInPoints = 28;
+
+        var headerRow = sheet.CreateRow(1);
+        headerRow.HeightInPoints = 20;
+        for (var i = 0; i < headers.Length; i++)
+        {
+            SetCell(headerRow, i, headers[i], headerStyle);
+            sheet.SetColumnWidth(i, 14 * 256);
+        }
+        sheet.SetAutoFilter(new CellRangeAddress(1, 1, 0, headers.Length - 1));
+        ApplyLookAndFeel(sheet, freezeCols: 2, freezeRows: 2, repeatHeaderRows: 2);   // 冻结"工号/姓名"这两列+标题表头
+
+        for (var r = 0; r < users.Count; r++)
+        {
+            var u = users[r];
+            var row = sheet.CreateRow(r + 2);
+            var baseStyle = r % 2 == 1 ? bandedStyle : dataStyle;
+            SetCell(row, 0,  u.EmployeeNo, baseStyle);
+            SetCell(row, 1,  u.RealName, baseStyle);
+            SetCell(row, 2,  u.Role.ToDisplayName(), baseStyle);
+            SetCell(row, 3,  u.EmploymentTypeText, baseStyle);
+            SetCell(row, 4,  u.Status.ToDisplayName(), baseStyle);
+            SetCell(row, 5,  u.Department?.DeptName ?? "", baseStyle);
+            SetCell(row, 6,  u.AttendanceGroup?.GroupName ?? "", baseStyle);
+            SetCell(row, 7,  u.Position ?? "", baseStyle);
+            SetCell(row, 8,  u.Phone ?? "", baseStyle);
+            SetCell(row, 9,  u.IdNumber ?? "", baseStyle);
+            SetCell(row, 10, u.ContractCompany ?? "", baseStyle);
+            SetCell(row, 11, u.HireDate?.ToString("yyyy-MM-dd") ?? "", baseStyle);
+            SetCell(row, 12, u.HomeAddress ?? "", baseStyle);
+            SetCell(row, 13, u.EmergencyContactName ?? "", baseStyle);
+            SetCell(row, 14, u.EmergencyContactPhone ?? "", baseStyle);
+            SetCell(row, 15, string.IsNullOrEmpty(u.DingTalkUserId) ? "未绑定" : "已绑定", baseStyle);
+        }
+
+        return ToBytes(wb);
     }
 
     // ── 下面是“样式工厂”：各做一种单元格外观（字体/颜色/边框/对齐）─────────────

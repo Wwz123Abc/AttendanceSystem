@@ -27,17 +27,26 @@
 
 <div class="d-flex gap-3 align-items-start">
 
-    <!-- ── 左侧：切换员工 ──────────────────────────────────────────────── -->
+    <!-- ── 左侧：按部门筛选 / 搜索 / 切换员工 / 导出 ──────────────────────── -->
     <div class="card no-print" style="width:260px;flex-shrink:0">
-        <div class="card-header py-2"><i class="bi bi-search me-1"></i>切换员工</div>
+        <div class="card-header py-2"><i class="bi bi-search me-1"></i>筛选员工</div>
         <div class="p-2">
-            <form method="get" class="d-flex gap-1">
-                <input type="text" name="keyword" value="@Model.Keyword" class="form-control form-control-sm"
-                       placeholder="姓名 / 工号" />
-                <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button>
+            <form method="get" class="d-flex flex-column gap-2">
+                <select name="deptId" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="">全部部门</option>
+                    @foreach (var d in Model.DeptOptions)
+                    {
+                        <option value="@d.Id" selected="@(d.Id == Model.DeptId)">@(new string('　', d.Depth))@d.Name</option>
+                    }
+                </select>
+                <div class="d-flex gap-1">
+                    <input type="text" name="keyword" value="@Model.Keyword" class="form-control form-control-sm"
+                           placeholder="姓名 / 工号" />
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button>
+                </div>
             </form>
         </div>
-        <div class="list-group list-group-flush" style="max-height:65vh;overflow:auto">
+        <div class="list-group list-group-flush" style="max-height:55vh;overflow:auto">
             @if (!Model.QuickList.Any())
             {
                 <div class="text-muted small p-3">没有匹配的员工</div>
@@ -45,7 +54,7 @@
             @foreach (var u in Model.QuickList)
             {
                 var on = e?.Id == u.Id;
-                <a href="?id=@u.Id&keyword=@Uri.EscapeDataString(Model.Keyword ?? "")"
+                <a href="?id=@u.Id&keyword=@Uri.EscapeDataString(Model.Keyword ?? "")&deptId=@Model.DeptId"
                    class="list-group-item list-group-item-action d-flex justify-content-between align-items-center @(on ? "active" : "")">
                     <span class="text-truncate">
                         @u.RealName
@@ -57,6 +66,13 @@
                     }
                 </a>
             }
+        </div>
+        <div class="p-2 border-top">
+            <div class="text-muted small mb-1">按当前筛选条件，共 @Model.TotalMatched 人</div>
+            <a class="btn btn-outline-success btn-sm w-100"
+               href="?handler=Export&keyword=@Uri.EscapeDataString(Model.Keyword ?? "")&deptId=@Model.DeptId">
+                <i class="bi bi-file-earmark-excel me-1"></i>导出为 Excel
+            </a>
         </div>
     </div>
 
