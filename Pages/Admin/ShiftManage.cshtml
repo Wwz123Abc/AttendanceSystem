@@ -160,15 +160,22 @@
                                 <a href="javascript:void(0)" onclick="checkAll(false)">清空</a>
                             </div>
                         </div>
-                        <div class="mb-2">
-                            <label class="form-label small mb-1">按部门筛选</label>
-                            <select id="deptFilter" class="form-select form-select-sm" onchange="filterMembersByDept(this.value)">
-                                <option value="">全部部门</option>
-                                @foreach (var deptName in Model.Members.Select(m => m.DeptName ?? "未分配").Distinct().OrderBy(n => n))
-                                {
-                                    <option value="@deptName">@deptName</option>
-                                }
-                            </select>
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label small mb-1">按部门筛选</label>
+                                <select id="deptFilter" class="form-select form-select-sm" onchange="filterMembers()">
+                                    <option value="">全部部门</option>
+                                    @foreach (var deptName in Model.Members.Select(m => m.DeptName ?? "未分配").Distinct().OrderBy(n => n))
+                                    {
+                                        <option value="@deptName">@deptName</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small mb-1">搜索姓名/工号</label>
+                                <input type="text" id="memberSearch" class="form-control form-control-sm"
+                                       placeholder="输入姓名或工号…" oninput="filterMembers()" />
+                            </div>
                         </div>
                         <div id="employeeSelect" style="max-height:260px;overflow:auto;border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:.5rem">
                             @foreach (var grp in Model.Members.GroupBy(m => m.GroupName))
@@ -176,7 +183,7 @@
                                 <div class="fw-semibold small text-primary mt-1 border-bottom pb-1 grp-header">@grp.Key</div>
                                 @foreach (var m in grp)
                                 {
-                                    <div class="form-check" data-dept="@(m.DeptName ?? "未分配")">
+                                    <div class="form-check" data-dept="@(m.DeptName ?? "未分配")" data-search="@($"{m.RealName} {m.EmployeeNo}".ToLower())">
                                         <input class="form-check-input member-chk" type="checkbox"
                                                name="AssignUserIds" value="@m.UserId" id="mem@m.UserId" />
                                         <label class="form-check-label small" for="mem@m.UserId">@m.RealName（@m.EmployeeNo）</label>
@@ -390,11 +397,16 @@ function checkAll(v) {
     });
 }
 
-// 按部门筛选批量排班的候选人名单：只显示选中部门的人，其余人隐藏（不影响已勾选状态，取消筛选还能看到）；
-// 一个考勤组下的人如果因为筛选全部被隐藏，连组名标题一起隐藏，不留一个空标题
-function filterMembersByDept(dept) {
+// 筛选批量排班的候选人名单：部门下拉 + 姓名/工号搜索框，两个条件同时生效（都满足才显示）；
+// 不影响已勾选状态，清空筛选条件还能看到。一个考勤组下的人如果因为筛选全部被隐藏，
+// 连组名标题一起隐藏，不留一个空标题。
+function filterMembers() {
+    const dept = document.getElementById('deptFilter').value;
+    const kw   = document.getElementById('memberSearch').value.trim().toLowerCase();
     document.querySelectorAll('#employeeSelect .form-check').forEach(row => {
-        row.style.display = (dept === '' || row.dataset.dept === dept) ? '' : 'none';
+        const deptOk = dept === '' || row.dataset.dept === dept;
+        const kwOk   = kw === '' || (row.dataset.search || '').includes(kw);
+        row.style.display = (deptOk && kwOk) ? '' : 'none';
     });
     document.querySelectorAll('#employeeSelect .grp-header').forEach(header => {
         let sib = header.nextElementSibling, anyVisible = false;
