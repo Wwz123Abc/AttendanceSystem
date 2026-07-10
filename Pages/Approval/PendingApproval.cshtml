@@ -19,28 +19,65 @@
 
 <div class="card">
     <div class="card-header">待审批列表（共 @Model.PendingItems.Count 条）</div>
-    <div class="card-body p-0">
+    <div class="card-body">
+        @if (Model.PendingItems.Count > 0)
+        {
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <!-- 按申请类型分类的标签：点一下只看这一类，"全部"看所有 -->
+                <div class="btn-group" id="typeTabs" role="group">
+                    <button type="button" class="btn btn-sm btn-primary" data-type="all">
+                        全部 <span class="badge bg-light text-dark ms-1">@Model.PendingItems.Count</span>
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-type="@ApprovalType.PunchReplenishment">
+                        补卡 <span class="badge bg-light text-dark ms-1">@Model.PendingItems.Count(i => i.ApprovalType == ApprovalType.PunchReplenishment)</span>
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-type="@ApprovalType.Leave">
+                        请假 <span class="badge bg-light text-dark ms-1">@Model.PendingItems.Count(i => i.ApprovalType == ApprovalType.Leave)</span>
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-type="@ApprovalType.Overtime">
+                        加班 <span class="badge bg-light text-dark ms-1">@Model.PendingItems.Count(i => i.ApprovalType == ApprovalType.Overtime)</span>
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-type="@ApprovalType.BusinessTrip">
+                        出差 <span class="badge bg-light text-dark ms-1">@Model.PendingItems.Count(i => i.ApprovalType == ApprovalType.BusinessTrip)</span>
+                    </button>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted small" id="selectedCountText">已选 0 条</span>
+                    <button type="button" class="btn btn-success btn-sm" id="batchApproveBtn" disabled
+                            data-bs-toggle="modal" data-bs-target="#approveModal" data-action="batch-approve">
+                        <i class="bi bi-check2-all me-1"></i>批量通过
+                    </button>
+                    <button type="button" class="btn btn-danger btn-sm" id="batchRejectBtn" disabled
+                            data-bs-toggle="modal" data-bs-target="#approveModal" data-action="batch-reject">
+                        批量驳回
+                    </button>
+                </div>
+            </div>
+        }
         <div class="table-responsive">
             <table class="table table-hover mb-0">
                 <thead>
                     <tr>
+                        <th style="width:36px"><input type="checkbox" id="selectAllCheckbox" disabled="@(Model.PendingItems.Count == 0)"></th>
                         <th>单号</th>
                         <th>申请人</th>
                         <th>部门</th>
                         <th>类型</th>
+                        <th>详情</th>
                         <th>提交时间</th>
                         <th>原因</th>
                         <th style="width:180px">操作</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="approvalRows">
                     @if (!Model.PendingItems.Any())
                     {
-                        <tr><td colspan="7" class="empty-state"><i class="bi bi-inbox"></i>暂无待审批记录</td></tr>
+                        <tr><td colspan="9" class="empty-state"><i class="bi bi-inbox"></i>暂无待审批记录</td></tr>
                     }
                     @foreach (var item in Model.PendingItems)
                     {
-                        <tr>
+                        <tr data-type="@item.ApprovalType">
+                            <td><input type="checkbox" class="row-check" value="@item.Id"></td>
                             <td class="small text-muted">@item.RequestNo</td>
                             <td>
                                 @item.ApplicantName
@@ -48,6 +85,7 @@
                             </td>
                             <td class="small">@item.DeptName</td>
                             <td><span class="badge bg-secondary">@item.ApprovalTypeText</span></td>
+                            <td class="small">@DetailText(item)</td>
                             <td class="small">@item.SubmittedAtText</td>
                             <td class="small text-truncate" style="max-width:120px">@item.Reason</td>
                             <td>
@@ -75,6 +113,22 @@
     </div>
 </div>
 
+@functions {
+    /// <summary>按申请类型拼一句简短的"详情"文字，直接显示在列表里，不用点进去才看得到具体时间/时长。</summary>
+    string DetailText(ApprovalRequestDto i) => i.ApprovalType switch
+    {
+        ApprovalType.PunchReplenishment =>
+            $"{i.PunchDate:yyyy-MM-dd} {(i.PunchType == PunchType.ClockIn ? "上班卡" : "下班卡")} {i.PunchTime:HH:mm}",
+        ApprovalType.Leave =>
+            $"{i.LeaveTypeText} {i.LeaveStartTime:yyyy-MM-dd HH:mm} ~ {i.LeaveEndTime:yyyy-MM-dd HH:mm}（{i.LeaveDurationHours:0.#}h）",
+        ApprovalType.Overtime =>
+            $"{i.OvertimeStartTime:yyyy-MM-dd HH:mm} ~ {i.OvertimeEndTime:yyyy-MM-dd HH:mm}（{i.OvertimeDurationHours:0.#}h）",
+        ApprovalType.BusinessTrip =>
+            $"{(string.IsNullOrWhiteSpace(i.BusinessTripDestination) ? "" : i.BusinessTripDestination + " ")}{i.BusinessTripStartTime:yyyy-MM-dd} ~ {i.BusinessTripEndTime:yyyy-MM-dd}（{i.BusinessTripDurationDays:0.#}天）",
+        _ => "—"
+    };
+}
+
 <!-- 审批操作 Modal -->
 <div class="modal fade" id="approveModal" tabindex="-1">
     <div class="modal-dialog">
@@ -86,6 +140,8 @@
             <form method="post">
                 <div class="modal-body">
                     <input type="hidden" asp-for="RequestId" id="modalRequestId" />
+                    <!-- 批量操作时，JS 会在这里塞入若干个 name="BatchIds" 的隐藏字段（勾选了哪些申请单） -->
+                    <div id="batchIdsContainer"></div>
                     <div class="mb-3">
                         <label class="form-label" id="commentLabel">审批意见（可选）</label>
                         <textarea asp-for="Comment" id="commentInput" class="form-control" rows="3" maxlength="1000" placeholder="请填写审批意见..."></textarea>
@@ -117,24 +173,89 @@
 
 @section Scripts {
 <script>
-// "通过"和"驳回"这两个按钮共用同一个弹窗(approveModal)，不是各做一个弹窗。
-// 点哪个按钮，就把按钮上标的数据（data-id=处理哪张申请单、data-action=通过还是驳回）读出来，
-// 现改这个弹窗的标题、按钮文字/颜色、以及提交时要打到哪个后台接口(Approve 还是 Reject)。
+// ── 按类型分类(Tab) + 批量勾选 ────────────────────────────────────────────
+// 每一行 <tr> 上都标了 data-type="补卡/请假/加班/出差的枚举名"，切标签就是按这个属性显示/隐藏对应的行，
+// 不用重新向后台请求数据（列表本来就已经全部加载好了）。
+const typeTabs = document.getElementById('typeTabs');
+const allRows  = [...document.querySelectorAll('#approvalRows tr[data-type]')];
+const selectAllCheckbox  = document.getElementById('selectAllCheckbox');
+const selectedCountText  = document.getElementById('selectedCountText');
+const batchApproveBtn    = document.getElementById('batchApproveBtn');
+const batchRejectBtn     = document.getElementById('batchRejectBtn');
+
+function visibleRows() { return allRows.filter(r => r.style.display !== 'none'); }
+function selectedIds()  { return allRows.filter(r => r.querySelector('.row-check').checked).map(r => r.querySelector('.row-check').value); }
+
+// 刷新右上角"已选 N 条"文字，以及"批量通过/驳回"按钮的可点状态（一条都没选就不让点）
+function updateSelectedCount() {
+    const n = selectedIds().length;
+    if (selectedCountText) selectedCountText.textContent = `已选 ${n} 条`;
+    if (batchApproveBtn) batchApproveBtn.disabled = n === 0;
+    if (batchRejectBtn)  batchRejectBtn.disabled  = n === 0;
+}
+
+if (typeTabs) {
+    typeTabs.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-type]');
+        if (!btn) return;
+        typeTabs.querySelectorAll('button').forEach(b => b.classList.replace('btn-primary', 'btn-outline-secondary'));
+        btn.classList.replace('btn-outline-secondary', 'btn-primary');
+        const type = btn.dataset.type;
+        allRows.forEach(r => r.style.display = (type === 'all' || r.dataset.type === type) ? '' : 'none');
+        // 切换分类后清空之前的勾选：避免出现"选中的行被筛掉看不见了，但批量按钮还显示选了几条"这种confusing状态
+        allRows.forEach(r => { r.querySelector('.row-check').checked = false; });
+        if (selectAllCheckbox) selectAllCheckbox.checked = false;
+        updateSelectedCount();
+    });
+}
+
+allRows.forEach(r => r.querySelector('.row-check').addEventListener('change', updateSelectedCount));
+
+if (selectAllCheckbox) {
+    // 全选只勾选当前"看得见"的行（被分类标签筛掉的行不受影响），符合"眼见为实"的直觉
+    selectAllCheckbox.addEventListener('change', () => {
+        visibleRows().forEach(r => { r.querySelector('.row-check').checked = selectAllCheckbox.checked; });
+        updateSelectedCount();
+    });
+}
+
+// ── 审批确认弹窗：单条通过/驳回、批量通过/驳回，四种情况共用同一个弹窗 ──────────
+// 点哪个按钮，就把按钮上标的数据（data-id=单条时处理哪张申请单、data-action=四种情况之一）读出来，
+// 现改这个弹窗的标题、按钮文字/颜色、提交去哪个后台接口，批量时还要把勾选的申请单 id 逐个塞成隐藏字段。
 const approveModal = document.getElementById('approveModal');
 approveModal.addEventListener('show.bs.modal', function(e) {
     const btn = e.relatedTarget;   // relatedTarget = 触发弹窗打开的那个按钮
-    const id = btn.dataset.id;
-    const action = btn.dataset.action;
-    document.getElementById('modalRequestId').value = id;
-    document.getElementById('approveModalTitle').textContent = action === 'approve' ? '确认通过申请' : '确认驳回申请';
+    const action  = btn.dataset.action;             // approve / reject / batch-approve / batch-reject
+    const isBatch = action.startsWith('batch-');
+    const approved = action === 'approve' || action === 'batch-approve';
+    const ids = isBatch ? selectedIds() : [];
+
+    document.getElementById('modalRequestId').value = btn.dataset.id || '';
+
+    document.getElementById('approveModalTitle').textContent = isBatch
+        ? `确认批量${approved ? '通过' : '驳回'}（共 ${ids.length} 条）`
+        : (approved ? '确认通过申请' : '确认驳回申请');
+
     const submitBtn = document.getElementById('approveBtn');
-    submitBtn.textContent = action === 'approve' ? '确认通过' : '确认驳回';
-    submitBtn.className = action === 'approve' ? 'btn btn-success' : 'btn btn-danger';
-    submitBtn.formAction = action === 'approve' ? '?handler=Approve' : '?handler=Reject';
+    submitBtn.textContent = approved ? '确认通过' : '确认驳回';
+    submitBtn.className = approved ? 'btn btn-success' : 'btn btn-danger';
+    submitBtn.formAction = isBatch
+        ? (approved ? '?handler=BatchApprove' : '?handler=BatchReject')
+        : (approved ? '?handler=Approve' : '?handler=Reject');
+
+    // 批量模式：把当前勾选的申请单 id 逐个塞成隐藏字段，随表单一起提交给后台（对应 BindProperty List<int> BatchIds）
+    const container = document.getElementById('batchIdsContainer');
+    container.innerHTML = '';
+    ids.forEach(v => {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'BatchIds'; inp.value = v;
+        container.appendChild(inp);
+    });
+
     // 驳回必须说明原因，方便申请人知道被拒的理由；通过则和以前一样，意见选填
     const commentInput = document.getElementById('commentInput');
-    commentInput.required = action !== 'approve';
-    document.getElementById('commentLabel').textContent = action === 'approve' ? '审批意见（可选）' : '驳回原因（必填）';
+    commentInput.required = !approved;
+    document.getElementById('commentLabel').textContent = approved ? '审批意见（可选）' : '驳回原因（必填）';
 });
 
 const APPROVAL_DETAILS = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
