@@ -50,7 +50,6 @@
                 clockIn    = c.Record?.ClockInText ?? "--",
                 clockOut   = c.Record?.ClockOutText ?? "--",
                 hours      = c.Record != null ? c.Record.ActualWorkHours.ToString("F1") : "--",
-                overtime   = c.Record != null && c.Record.OvertimeHours > 0 ? c.Record.OvertimeHours.ToString("F1") : "",
                 late       = c.Record != null && c.Record.LateMinutes > 0 ? c.Record.LateMinutes.ToString() : "",
                 early      = c.Record != null && c.Record.EarlyLeaveMinutes > 0 ? c.Record.EarlyLeaveMinutes.ToString() : "",
                 note       = c.Record?.ApprovalNote ?? "",
@@ -132,12 +131,6 @@
             <div class="card text-center py-2 stat-card border-start-primary">
                 <div class="fw-bold text-primary">@s.TotalWorkHours.ToString("F1")</div>
                 <div class="text-muted small">总工时(h)</div>
-            </div>
-        </div>
-        <div class="col-6 col-md-2">
-            <div class="card text-center py-2">
-                <div class="fw-bold">@s.TotalOvertimeHours.ToString("F1")</div>
-                <div class="text-muted small">加班(h)</div>
             </div>
         </div>
     </div>
@@ -268,7 +261,6 @@ function showDay(dateStr) {
         <dt class="col-4">下班打卡</dt><dd class="col-8">${d.clockOut}</dd>
         <dt class="col-4">实际工时</dt><dd class="col-8">${d.hours === '--' ? '--' : d.hours + ' 小时'}</dd>`;
 
-    if (d.overtime) rows += `<dt class="col-4">加班时长</dt><dd class="col-8">${d.overtime} 小时</dd>`;
     if (d.late)     rows += `<dt class="col-4">迟到</dt><dd class="col-8 text-danger">${d.late} 分钟</dd>`;
     if (d.early)     rows += `<dt class="col-4">早退</dt><dd class="col-8 text-danger">${d.early} 分钟</dd>`;
     if (d.shiftName) rows += `

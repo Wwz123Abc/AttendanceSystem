@@ -89,14 +89,13 @@
                         <th>工时(h)</th>
                         <th>迟到</th>
                         <th>早退</th>
-                        <th>加班(h)</th>
                         <th>备注</th>
                     </tr>
                 </thead>
                 <tbody>
                     @if (!Model.Records.Any())
                     {
-                        <tr><td colspan="10" class="empty-state"><i class="bi bi-inbox"></i>暂无记录</td></tr>
+                        <tr><td colspan="9" class="empty-state"><i class="bi bi-inbox"></i>暂无记录</td></tr>
                     }
                     @foreach (var r in Model.Records)
                     {
@@ -124,9 +123,6 @@
                             </td>
                             <td class="@(r.EarlyLeaveMinutes > 0 ? "text-warning" : "text-muted")">
                                 @(r.EarlyLeaveMinutes > 0 ? $"{r.EarlyLeaveMinutes}分" : "--")
-                            </td>
-                            <td class="@(r.OvertimeHours > 0 ? "text-info" : "text-muted")">
-                                @(r.OvertimeHours > 0 ? r.OvertimeHours.ToString("F1") : "--")
                             </td>
                             <td class="text-muted small">@r.ApprovalNote</td>
                         </tr>
