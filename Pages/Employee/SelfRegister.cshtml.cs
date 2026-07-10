@@ -45,6 +45,10 @@ public class SelfRegisterModel(
         {
             if (IdCardPhoto is null || IdCardPhoto.Length == 0)
                 throw new InvalidOperationException("请上传身份证照片");
+            // 手机号留空提交时模型绑定会把它转成 null；这里先兜底检查一下，
+            // 否则下面存照片要用手机号建目录，Phone.Trim() 会先于 SubmitAsync 里更完整的格式校验抛出空引用异常
+            if (string.IsNullOrWhiteSpace(Phone))
+                throw new InvalidOperationException("请填写手机号");
             var photoUrl = await SaveIdCardPhotoAsync();
             await registrationService.SubmitAsync(new SubmitRegistrationDto
             {

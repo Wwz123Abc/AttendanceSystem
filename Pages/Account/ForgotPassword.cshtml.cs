@@ -52,6 +52,14 @@ public class ForgotPasswordModel(IPasswordResetService resetService) : PageModel
     {
         CodeSent = true;   // 无论结果如何都停留在第二步表单，不要退回第一步
 
+        // 工号/手机号本应由第一步表单的隐藏字段带过来；这页不需要登录就能访问，
+        // 防一手直接绕过第一步发来的畸形请求（缺这两项），避免下面 Trim() 时空引用异常
+        if (string.IsNullOrWhiteSpace(EmployeeNo) || string.IsNullOrWhiteSpace(Phone))
+        {
+            ErrorMessage = "请先完成第一步获取验证码";
+            CodeSent     = false;
+            return Page();
+        }
         if (string.IsNullOrWhiteSpace(Code) || string.IsNullOrWhiteSpace(NewPassword))
         {
             ErrorMessage = "请输入验证码和新密码";

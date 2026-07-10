@@ -121,8 +121,9 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
         try
         {
             if (GroupId == 0) throw new Exception("请选择该班次所属的考勤组");
+            // 先判断原始值是否为空，再 Trim：字段留空提交时模型绑定会把它转成 null，直接 Trim() 会抛空引用异常
+            if (string.IsNullOrWhiteSpace(ShiftName)) throw new Exception("请填写班次名称");
             var name = ShiftName.Trim();
-            if (string.IsNullOrEmpty(name)) throw new Exception("请填写班次名称");
             if (name.Length > 50) throw new Exception("班次名称不能超过 50 个字");
             if (!TimeOnly.TryParse(WorkStart, out var ws)) throw new Exception("上班时间格式不正确");
             if (!TimeOnly.TryParse(WorkEnd, out var we)) throw new Exception("下班时间格式不正确");

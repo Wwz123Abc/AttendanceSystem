@@ -37,9 +37,11 @@ public class HolidayManageModel(AttendanceDbContext db) : PageModel
     {
         try
         {
-            var name = HolidayName.Trim();
-            if (string.IsNullOrEmpty(name))
+            // 先判断原始值是否为空，再 Trim：字段留空提交时模型绑定会把它转成 null，
+            // 直接 Trim() 会抛空引用异常（虽然外层有 catch 兜底，但会显示成一句读不懂的技术错误）
+            if (string.IsNullOrWhiteSpace(HolidayName))
                 throw new InvalidOperationException("请填写假期名称");
+            var name = HolidayName.Trim();
             if (name.Length > 100)
                 throw new InvalidOperationException("假期名称不能超过 100 个字");
             if (!DateOnly.TryParse(HolidayDate, out var date))

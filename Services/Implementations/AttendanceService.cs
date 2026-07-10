@@ -1048,9 +1048,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
     /// <summary>
     /// Haversine 公式：根据两点的经纬度，算出它们在地球表面的直线距离（米）。
-    /// 用于定位打卡时判断“离打卡点多远”。
+    /// 用于定位打卡时判断“离打卡点多远”，钉钉打卡定位比对也复用这个公式。
     /// </summary>
-    /// <summary>算地球上两个经纬度坐标之间的直线距离（米）。定位打卡校验、钉钉打卡定位比对都复用这个公式。</summary>
     public static double HaversineMeters(double lat1, double lon1, double lat2, double lon2)
     {
         const double R = 6371000; // 地球平均半径（米）

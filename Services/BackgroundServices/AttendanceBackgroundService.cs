@@ -160,6 +160,12 @@ public class AttendanceBackgroundService(
             }
             else if (record.ClockOutTime is null)
             {
+                // 夜班（跨天班次）今天刚打上班卡，要到明天凌晨才下班——现在人还在班上，不是"没打卡"，
+                // 等明天下班打卡时这条记录会正常续上；这里提前标记会导致刚上班没多久的夜班员工被误报，
+                // 而且下班打卡时只有"早退"才会纠正状态（见 AttendanceService.PunchAsync），正常下班这个误标记不会被清掉
+                if (todayAssignmentByUser.TryGetValue(user.Id, out var crossDayAssign) && crossDayAssign.ShiftSchedule.IsCrossDay)
+                    continue;
+
                 // 打了上班卡但没打下班卡 → 未打卡，并发提醒
                 record.AttendanceStatus = AttendanceStatus.NotPunched;
                 record.UpdatedAt        = DateTime.Now;
