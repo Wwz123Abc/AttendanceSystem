@@ -414,6 +414,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 if (user.HireDate is { } hireDate && date < hireDate)
                 {
                     row.DailyHours.Add(null);
+                    row.DailyIsNightShift.Add(false);
                     continue;
                 }
 
@@ -424,6 +425,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 var isHolidayOff = holiday is not null && !isCompDay;                                              // 法定节假日/公司休息（非补班）
                 var isShiftRest  = !isCompDay && assign is not null && assign.ShiftSchedule.IsRestDay(date.DayOfWeek);  // 排的班自己配置的每周休息日
                 var isWeekendOff = !isCompDay && assign is null && date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;  // 没排班时按全局周末兜底
+
+                // 当天是不是上的夜班：排班里配的是跨天班次/名字带"夜"就算；没排班时按打卡时间兜底
+                // （18 点后上班，或下班跨到了第二天），口径和 ComputeNightShiftDaysRangeAsync 保持一致。
+                var isNightShift = assign is not null && (assign.ShiftSchedule.IsCrossDay || assign.ShiftSchedule.ShiftName.Contains('夜'));
+                if (!isNightShift && rec?.ClockInTime is { } nci)
+                {
+                    if (nci.Hour >= 18) isNightShift = true;
+                    else if (rec.ClockOutTime is { } nco && nco.Date > nci.Date) isNightShift = true;
+                }
+                row.DailyIsNightShift.Add(isNightShift);
 
                 int? dayHours = null;
                 if (rec is not null)

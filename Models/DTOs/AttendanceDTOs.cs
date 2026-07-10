@@ -147,6 +147,10 @@ public class TemplateReportRowDto
     /// 下标和 TemplateReportResultDto.Dates 一一对应。</summary>
     public List<int?> DailyHours { get; set; } = [];
 
+    /// <summary>每天是不是上的夜班（跨天班次，或没排班时按打卡时间兜底判断）；导出 Excel 时用来把当天格子标黄。
+    /// 下标和 DailyHours/TemplateReportResultDto.Dates 一一对应。</summary>
+    public List<bool> DailyIsNightShift { get; set; } = [];
+
     public int     ActualWorkdays  { get; set; }   // 出勤天数
     public int     RestDays        { get; set; }   // 休息天数（周末/法定节假日/公司休息日，不含调班补班日）
     public decimal TotalWorkHours  { get; set; }   // 工作时长（合计，保留小数，不取整——和每日格子的取整规则不同）

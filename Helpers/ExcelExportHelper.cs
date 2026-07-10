@@ -170,13 +170,13 @@ public static class ExcelExportHelper
         var wb    = new XSSFWorkbook();
         var sheet = wb.CreateSheet("月度汇总");
 
+        // 这份报表颜色统一改成白色（不再有隔行斑马纹/周末浅黄底）；
+        // 只在"考勤结果"那组每日格子里，识别出当天是夜班的话单独标黄，一眼看出谁那天上的夜班。
         var titleStyle   = TitleStyle(wb);
         var subTitleStyle = DataStyle(wb);
-        var headerStyle  = HeaderStyle(wb);
+        var headerStyle  = HeaderStyleNoFill(wb);
         var dataStyle    = DataStyle(wb);
-        var bandedStyle       = BandedStyle(wb);          // 隔行浅色底（姓名/部门等固定列 + 尾部统计列）
-        var weekendHeaderStyle = WeekendHeaderStyle(wb);   // 周六/周日日期表头
-        var weekendDataStyle   = WeekendDataStyle(wb);     // 周六/周日那一整列的每日工时格子
+        var nightShiftStyle = NightShiftStyle(wb);   // 夜班当天的格子：黄底
         var redStyle     = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);
 
         var dayCount  = result.Dates.Count;
@@ -210,15 +210,13 @@ public static class ExcelExportHelper
         ];
         for (var i = 0; i < tailHeaders.Length; i++) SetCell(headerRow, fixedCols + dayCount + i, tailHeaders[i], headerStyle);
 
-        // 第 3 行：每天的日期表头（周六/周日用"六"/"日"代替日期数字，和参考模板一致；周末额外给浅黄底，一眼分清工作日/周末）
+        // 第 3 行：每天的日期表头（周六/周日用"六"/"日"代替日期数字，和参考模板一致）
         var dayHeaderRow = sheet.CreateRow(3);
-        var isWeekendCol = new bool[dayCount];
         for (var i = 0; i < dayCount; i++)
         {
             var date  = result.Dates[i];
-            isWeekendCol[i] = date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
             var label = date.DayOfWeek switch { DayOfWeek.Saturday => "六", DayOfWeek.Sunday => "日", _ => date.Day.ToString() };
-            SetCell(dayHeaderRow, fixedCols + i, label, isWeekendCol[i] ? weekendHeaderStyle : headerStyle);
+            SetCell(dayHeaderRow, fixedCols + i, label, headerStyle);
         }
 
         // 列宽：姓名/部门等给宽一点，每日格子给窄一点
@@ -230,12 +228,12 @@ public static class ExcelExportHelper
         for (var i = 0; i < tailHeaders.Length; i++) sheet.SetColumnWidth(fixedCols + dayCount + i, 11 * 256);
         ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 4, repeatHeaderRows: 4);   // 冻结前 6 列（姓名..合同公司）+ 前 4 行（标题/生成时间/表头/日期表头）
 
-        // 从第 4 行起：每个员工一行；固定列/尾部统计列隔行浅色底，每日格子按周末/工作日区分底色
+        // 从第 4 行起：每个员工一行；固定列/尾部统计列统一白底，每日格子里当天是夜班的才标黄
         for (var r = 0; r < result.Rows.Count; r++)
         {
             var row = result.Rows[r];
             var xRow = sheet.CreateRow(r + 4);
-            var baseStyle = r % 2 == 1 ? bandedStyle : dataStyle;
+            var baseStyle = dataStyle;
 
             SetCell(xRow, 0, row.RealName,             baseStyle);
             SetCell(xRow, 1, row.GroupName ?? "",       baseStyle);
@@ -246,9 +244,9 @@ public static class ExcelExportHelper
 
             for (var i = 0; i < dayCount; i++)
             {
-                // 每日格子不管有没有值都要创建，周末底色才能连成一整列（不然没打卡的周末格子会漏掉、看着断断续续）
+                // 每日格子不管有没有值都要创建，夜班黄底才能连成一整块（不然没打卡的夜班格子会漏标）
                 var cell = xRow.CreateCell(fixedCols + i);
-                cell.CellStyle = isWeekendCol[i] ? weekendDataStyle : baseStyle;
+                cell.CellStyle = row.DailyIsNightShift[i] ? nightShiftStyle : baseStyle;
                 if (row.DailyHours[i] is { } h) cell.SetCellValue(h);
             }
 
@@ -404,20 +402,25 @@ public static class ExcelExportHelper
         return s;
     }
 
-    // 周六/周日的日期表头：浅黄底，一眼区分工作日和周末，不用数日子
-    private static ICellStyle WeekendHeaderStyle(IWorkbook wb)
+    // 模板月度汇总表专用：表头去掉灰底、改成白底（这份报表颜色统一改成白色）。
+    private static ICellStyle HeaderStyleNoFill(IWorkbook wb)
     {
-        var s = HeaderStyle(wb);
-        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.LightYellow.Index;
-        s.FillPattern = FillPattern.SolidForeground;
+        var s = wb.CreateCellStyle();
+        var f = wb.CreateFont();
+        f.FontName = ReportFontName;
+        f.IsBold = true;
+        s.SetFont(f);
+        s.Alignment   = HorizontalAlignment.Center;
+        s.VerticalAlignment = VerticalAlignment.Center;
+        ApplyBorder(s);
         return s;
     }
 
-    // 周六/周日那一整列的每日工时格子：同样浅黄底，跟表头呼应，整列竖着看也能一眼分清楚
-    private static ICellStyle WeekendDataStyle(IWorkbook wb)
+    // 模板月度汇总表专用：夜班当天的每日格子标黄，一眼看出这个人这天上的是夜班
+    private static ICellStyle NightShiftStyle(IWorkbook wb)
     {
         var s = DataStyle(wb);
-        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.LightYellow.Index;
+        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.Yellow.Index;
         s.FillPattern = FillPattern.SolidForeground;
         return s;
     }
