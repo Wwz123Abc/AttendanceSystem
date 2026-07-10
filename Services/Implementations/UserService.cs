@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
@@ -94,6 +95,15 @@ public class UserService(
             await db.SaveChangesAsync();
             logger.LogInformation("创建员工 {UserId} 时同步创建钉钉账号成功，钉钉 userid={DingTalkUserId}", user.Id, user.DingTalkUserId);
             return null;
+        }
+        catch (DingTalkApiException ex) when (ex.ErrCode == 40103)
+        {
+            // errcode=40103：不是失败，是钉钉的正常流程——这个手机号还不是企业钉钉里的成员，
+            // 钉钉给对方发了一条"加入企业"的邀请，要等对方本人同意之后才会正式成为企业成员。
+            // 这种情况下钉钉不会立刻给 userid，所以 DingTalkUserId 暂时留空；对方同意邀请后
+            // 需要管理员自己去钉钉通讯录确认、或用"自动映射 userid"功能补上关联。
+            logger.LogInformation("创建员工 {UserId}：钉钉已发出加入企业邀请，等待对方同意", user.Id);
+            return "钉钉已同步创建，已发出邀请，对方同意后即可加入组织。";
         }
         catch (Exception ex)
         {
@@ -396,6 +406,52 @@ public class UserService(
         if (excludeUserId.HasValue)
             query = query.Where(u => u.Id != excludeUserId.Value);   // 排除自己这条
         return await query.AnyAsync();
+    }
+
+    /// <summary>各"公司"部门名 -> 工号前缀。只认这几个部门名字，其余部门（总公司、平湖、新能源装备等）不自动生成。</summary>
+    private static readonly Dictionary<string, string> CompanyPrefixByDeptName = new()
+    {
+        ["深圳GA"]   = "GA",
+        ["科瑞科技"] = "KJ",
+        ["成都鹰诺"] = "IN",
+        ["鼎力"]     = "DL",
+        ["新能源"]   = "XNY",
+    };
+
+    /// <summary>按部门自动生成下一个工号：从该部门往上找最近的"公司"节点，取前缀 + 该前缀已用到的最大流水号+1（5位，不足补零）。</summary>
+    public async Task<string?> GenerateNextEmployeeNoAsync(int? departmentId)
+    {
+        if (!departmentId.HasValue) return null;
+
+        var deptsById = (await db.Departments
+                .Select(d => new { d.Id, d.DeptName, d.ParentId })
+                .ToListAsync())
+            .ToDictionary(d => d.Id);
+
+        // 从本部门往上走，直到找到一个匹配已知公司名单的节点（最多走 50 层，防止脏数据成环死循环）
+        string? prefix = null;
+        int? curId = departmentId;
+        for (var i = 0; i < 50 && curId.HasValue; i++)
+        {
+            if (!deptsById.TryGetValue(curId.Value, out var dept)) break;
+            if (CompanyPrefixByDeptName.TryGetValue(dept.DeptName, out var p)) { prefix = p; break; }
+            curId = dept.ParentId;
+        }
+        if (prefix is null) return null;   // 找不到匹配的公司，不自动生成，改回手动填写
+
+        // 只认「前缀 + 至少5位数字」这种严格格式的已有工号，避免误认成别的工号（比如手工建的临时工号）
+        var pattern = new Regex($"^{Regex.Escape(prefix)}(\\d{{5,}})$");
+        var maxNum = (await db.Users
+                .Where(u => u.EmployeeNo.StartsWith(prefix))
+                .Select(u => u.EmployeeNo)
+                .ToListAsync())
+            .Select(no => pattern.Match(no))
+            .Where(m => m.Success)
+            .Select(m => int.Parse(m.Groups[1].Value))
+            .DefaultIfEmpty(0)
+            .Max();
+
+        return $"{prefix}{maxNum + 1:D5}";
     }
 
     // ── 密码工具 ──────────────────────────────────────────────────────────────

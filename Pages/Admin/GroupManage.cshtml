@@ -136,7 +136,7 @@
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label fw-semibold">考勤组名称 <span class="text-danger">*</span></label>
-                            <input asp-for="GroupName" id="fGroupName" class="form-control" required />
+                            <input asp-for="GroupName" id="fGroupName" class="form-control" required maxlength="100" />
                         </div>
                         <div class="col-md-3">
                             <label class="form-label fw-semibold">午休时长（分钟）</label>
@@ -163,7 +163,7 @@
                                         <input class="form-check-input dept-checkbox" type="checkbox"
                                                name="SelectedDeptIds" value="@d.Id" id="dept_@d.Id"
                                                data-id="@d.Id" data-parent="@(d.ParentId?.ToString() ?? "")"
-                                               onchange="onDeptCheckboxChange(this)" />
+                                               onchange="onDeptCheckboxChange(this); filterApprovers();" />
                                         <label class="form-check-label" for="dept_@d.Id">
                                             @d.Name
                                             @if (!string.IsNullOrEmpty(linkedGroup))
@@ -200,12 +200,12 @@
                             <hr class="my-1" />
                             <label class="form-label fw-semibold">
                                 审批人
-                                <small class="text-muted fw-normal">（可多选；本组员工提交申请时从这里面选一个人来审批；一个都不选则自动退回员工的直属上级）</small>
+                                <small class="text-muted fw-normal">（可多选；本组员工提交申请时从这里面选一个人来审批；一个都不选则自动退回员工的直属上级；名单会跟着上面"所属部门"的勾选自动筛选，都不勾则显示全部人选）</small>
                             </label>
                             <div id="approverList" class="border rounded p-2" style="max-height:180px;overflow-y:auto;">
                                 @foreach (var u in Model.ApproverOptions)
                                 {
-                                    <div class="form-check">
+                                    <div class="form-check" data-dept="@u.DepartmentId">
                                         <input class="form-check-input approver-checkbox" type="checkbox"
                                                name="ApproverUserIds" value="@u.Id" id="approver_@u.Id" />
                                         <label class="form-check-label" for="approver_@u.Id">
@@ -230,8 +230,41 @@
     </div>
 </div>
 
+<!-- 高德地图选点 Modal：搜地址/在地图上点选/拖动图钉，取代手动查经纬度 -->
+<div class="modal fade" id="amapPickerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">地图选点</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="position-relative mb-2">
+                    <input type="text" id="amapAddressInput" class="form-control" autocomplete="off"
+                           placeholder="输入地址关键字搜索，支持全球任意地点，如：科瑞技术总部大楼 / Eiffel Tower" />
+                    <div id="amapSearchResults" class="list-group position-absolute w-100 shadow-sm"
+                         style="z-index:1060;max-height:240px;overflow:auto;display:none;top:100%"></div>
+                </div>
+                <div id="amapPickerMap" style="width:100%;height:360px;border:1px solid #dee2e6;border-radius:4px"></div>
+                <div class="form-text mt-2">也可以直接在地图上点击，或拖动图钉微调到更精确的位置。境外地点由 OpenStreetMap 提供数据。</div>
+                <div id="amapPickerResult" class="mt-2 fw-semibold text-primary"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="confirmAMapPicker()">使用此位置</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 @section Scripts {
+@if (Model.AMapEnabled)
+{
+    <script>window._AMapSecurityConfig = { securityJsCode: '@Model.AMapSecurityCode' };</script>
+    <script src="https://webapi.amap.com/maps?v=2.0&key=@Model.AMapJsKey&plugin=AMap.AutoComplete,AMap.Geocoder"></script>
+}
 <script>
+const AMAP_ENABLED = @Model.AMapEnabled.ToString().ToLower();
 const modal = new bootstrap.Modal(document.getElementById('groupModal'));
 
 function openAdd() {
@@ -274,6 +307,7 @@ function setSelectedDepts(deptIds) {
     document.querySelectorAll('.dept-checkbox').forEach(cb => {
         cb.checked = deptIds.includes(parseInt(cb.value, 10));
     });
+    filterApprovers();   // 回显完部门勾选后，审批人名单也要跟着刷新一遍，不然编辑弹窗刚打开时名单和勾选状态对不上
 }
 
 // 手动勾选/取消勾选某个部门时：连带把它所有下级部门也一起勾上/取消（勾选大部门=连它底下的小部门一起跟这个考勤组）
@@ -283,6 +317,19 @@ function onDeptCheckboxChange(checkbox) {
     document.querySelectorAll(`.dept-checkbox[data-parent="${deptId}"]`).forEach(child => {
         child.checked = checked;
         onDeptCheckboxChange(child);   // 递归处理下一级
+    });
+}
+
+// 审批人名单跟着"所属部门"的勾选联动筛选：只显示所属部门在已勾选范围内的人；
+// 一个部门都没勾时不做限制，显示全部候选人（避免刚打开新建弹窗、还没勾部门时名单就是空的）。
+// 只是隐藏显示，不会连带取消已经勾选的审批人——防止切换部门勾选时，误把管理员已经选好的人清掉。
+function filterApprovers() {
+    const checkedDeptIds = new Set(
+        [...document.querySelectorAll('#deptTreeList .dept-checkbox:checked')].map(cb => cb.value)
+    );
+    document.querySelectorAll('#approverList .form-check').forEach(row => {
+        const show = checkedDeptIds.size === 0 || checkedDeptIds.has(row.dataset.dept);
+        row.style.display = show ? '' : 'none';
     });
 }
 
@@ -297,27 +344,31 @@ function toggleLocation(enabled) {
 function addLocationRow(data) {
     data = data || { name: '', lat: '', lng: '', radius: 500 };
     const div = document.createElement('div');
-    div.className = 'row g-2 align-items-end mb-2 location-row';
+    div.className = 'location-row position-relative border rounded-3 p-3 pt-4 mb-3 bg-body-tertiary';
     div.innerHTML = `
-        <div class="col-md-4">
-            <label class="form-label small mb-1">地点名称</label>
-            <input type="text" class="form-control form-control-sm" data-field="Name" placeholder="如：总部大楼" />
-        </div>
-        <div class="col-md-3">
-            <label class="form-label small mb-1">纬度</label>
-            <input type="number" step="0.000001" class="form-control form-control-sm" data-field="Latitude" />
-        </div>
-        <div class="col-md-3">
-            <label class="form-label small mb-1">经度</label>
-            <input type="number" step="0.000001" class="form-control form-control-sm" data-field="Longitude" />
-        </div>
-        <div class="col-md-1">
-            <label class="form-label small mb-1">半径(米)</label>
-            <input type="number" min="50" max="5000" class="form-control form-control-sm" data-field="Radius" />
-        </div>
-        <div class="col-md-1 d-flex gap-1">
-            <button type="button" class="btn btn-outline-secondary btn-sm" title="获取当前位置" onclick="fillMyLocation(this)"><i class="bi bi-geo-alt"></i></button>
-            <button type="button" class="btn btn-outline-danger btn-sm" title="删除" onclick="removeLocationRow(this)"><i class="bi bi-trash"></i></button>
+        <span class="badge bg-secondary-subtle text-secondary-emphasis position-absolute top-0 start-0 mt-2 ms-2 location-index">地点</span>
+        <button type="button" class="btn-close position-absolute top-0 end-0 mt-2 me-2" title="删除这个地点" onclick="removeLocationRow(this)"></button>
+        <div class="row g-2">
+            <div class="col-12 col-md-5">
+                <label class="form-label small mb-1 text-muted">地点名称</label>
+                <input type="text" maxlength="200" class="form-control form-control-sm" data-field="Name" placeholder="如：总部大楼" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1 text-muted">纬度</label>
+                <input type="number" step="0.000001" min="-90" max="90" class="form-control form-control-sm" data-field="Latitude" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1 text-muted">经度</label>
+                <input type="number" step="0.000001" min="-180" max="180" class="form-control form-control-sm" data-field="Longitude" />
+            </div>
+            <div class="col-6 col-md-1">
+                <label class="form-label small mb-1 text-muted">半径(米)</label>
+                <input type="number" min="0" max="5000" class="form-control form-control-sm" data-field="Radius" />
+            </div>
+            <div class="col-6 col-md-2 d-flex align-items-end gap-1">
+                ${AMAP_ENABLED ? '<button type="button" class="btn btn-outline-primary btn-sm flex-fill" title="搜地址/地图选点" onclick="openAMapPicker(this)"><i class="bi bi-map"></i> 选点</button>' : ''}
+                <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" title="获取当前位置" onclick="fillMyLocation(this)"><i class="bi bi-geo-alt"></i></button>
+            </div>
         </div>
     `;
     div.querySelector('[data-field="Name"]').value = data.name ?? '';
@@ -333,12 +384,15 @@ function removeLocationRow(btn) {
     renumberLocationRows();
 }
 
-// 重新按当前 DOM 顺序，把每一行的 name 属性编成 Locations[0]、Locations[1]……连续序号
+// 重新按当前 DOM 顺序，把每一行的 name 属性编成 Locations[0]、Locations[1]……连续序号，
+// 顺带把左上角的"地点 N"角标也刷新一遍（增删之后序号要跟着变）
 function renumberLocationRows() {
     document.querySelectorAll('#locationRows .location-row').forEach((row, idx) => {
         row.querySelectorAll('[data-field]').forEach(input => {
             input.name = `Locations[${idx}].${input.dataset.field}`;
         });
+        const badge = row.querySelector('.location-index');
+        if (badge) badge.textContent = `地点 ${idx + 1}`;
     });
 }
 
@@ -356,6 +410,235 @@ function fillMyLocation(btn) {
         row.querySelector('[data-field="Latitude"]').value = pos.coords.latitude.toFixed(6);
         row.querySelector('[data-field="Longitude"]').value = pos.coords.longitude.toFixed(6);
     }, () => alert('获取位置失败，请手动输入'));
+}
+
+// ── 高德地图选点：搜地址/点地图/拖图钉，取代手动查经纬度 ──────────────────────────
+// 高德地图用的是 GCJ-02（"火星坐标系"），和员工手机打卡时浏览器 GPS 给出的 WGS-84 坐标
+// 不是一回事，中国大陆范围内两者能差出几十到几百米。本系统的打卡范围判定全程用的是 WGS-84
+// （navigator.geolocation 原始坐标），所以从地图上选完点之后，必须先把坐标纠偏转换成 WGS-84
+// 再写回表单，不然算出来的"是否在范围内"会跟员工实际打卡的地方对不上。
+// gcj02ToWgs84 是业界公开的坐标纠偏算法（GCJ-02 转 WGS-84 的标准迭代逼近公式），只是本地数学换算。
+function gcj02ToWgs84(lng, lat) {
+    const PI = Math.PI, A = 6378245.0, EE = 0.00669342162296594323;
+    function outOfChina(lng, lat) { return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271; }
+    function transformLat(x, y) {
+        let ret = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+        ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+        ret += (20 * Math.sin(y * PI) + 40 * Math.sin(y / 3 * PI)) * 2 / 3;
+        ret += (160 * Math.sin(y / 12 * PI) + 320 * Math.sin(y * PI / 30)) * 2 / 3;
+        return ret;
+    }
+    function transformLng(x, y) {
+        let ret = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+        ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+        ret += (20 * Math.sin(x * PI) + 40 * Math.sin(x / 3 * PI)) * 2 / 3;
+        ret += (150 * Math.sin(x / 12 * PI) + 300 * Math.sin(x / 30 * PI)) * 2 / 3;
+        return ret;
+    }
+    if (outOfChina(lng, lat)) return [lng, lat];
+    let dLat = transformLat(lng - 105, lat - 35);
+    let dLng = transformLng(lng - 105, lat - 35);
+    const radLat = lat / 180 * PI;
+    let magic = Math.sin(radLat);
+    magic = 1 - EE * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
+    dLng = (dLng * 180) / (A / sqrtMagic * Math.cos(radLat) * PI);
+    return [lng * 2 - (lng + dLng), lat * 2 - (lat + dLat)];
+}
+
+// WGS-84（GPS 原始坐标）→ GCJ-02：和上面反过来的换算，纯本地数学公式，
+// 用来把全球搜索（Nominatim 返回的就是 WGS-84）结果放到高德地图上正确的位置显示。
+function wgs84ToGcj02(lng, lat) {
+    const PI = Math.PI, A = 6378245.0, EE = 0.00669342162296594323;
+    function outOfChina(lng, lat) { return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271; }
+    function transformLat(x, y) {
+        let ret = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+        ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+        ret += (20 * Math.sin(y * PI) + 40 * Math.sin(y / 3 * PI)) * 2 / 3;
+        ret += (160 * Math.sin(y / 12 * PI) + 320 * Math.sin(y * PI / 30)) * 2 / 3;
+        return ret;
+    }
+    function transformLng(x, y) {
+        let ret = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+        ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+        ret += (20 * Math.sin(x * PI) + 40 * Math.sin(x / 3 * PI)) * 2 / 3;
+        ret += (150 * Math.sin(x / 12 * PI) + 300 * Math.sin(x / 30 * PI)) * 2 / 3;
+        return ret;
+    }
+    if (outOfChina(lng, lat)) return [lng, lat];
+    let dLat = transformLat(lng - 105, lat - 35);
+    let dLng = transformLng(lng - 105, lat - 35);
+    const radLat = lat / 180 * PI;
+    let magic = Math.sin(radLat);
+    magic = 1 - EE * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
+    dLng = (dLng * 180) / (A / sqrtMagic * Math.cos(radLat) * PI);
+    return [lng + dLng, lat + dLat];
+}
+
+let amapMap, amapMarker, amapGeocoder, amapAutoComplete, amapTargetRow, amapPickerState, amapSearchTimer;
+
+// 首次打开选点弹窗时才初始化地图（弹窗没显示之前容器没有尺寸，地图会渲染不正常）
+function initAMapPicker() {
+    if (amapMap) return;
+    amapMap = new AMap.Map('amapPickerMap', { zoom: 15, center: [113.75, 22.98] });
+    amapMarker = new AMap.Marker({ position: amapMap.getCenter(), draggable: true, cursor: 'move' });
+    amapMarker.setMap(amapMap);
+
+    // AMap.Geocoder / AMap.AutoComplete 是"插件"：虽然上面加载地图脚本的地址里已经带了 plugin= 参数，
+    // 但那只是让浏览器提前把插件代码下载好，不代表这两个类此刻就能直接 new 出来——必须用 AMap.plugin(...)
+    // 包一层回调，确认插件真正加载完成后再使用；之前没包这一层，导致偶尔"点了搜索没反应"。
+    AMap.plugin(['AMap.Geocoder', 'AMap.AutoComplete'], () => {
+        amapGeocoder     = new AMap.Geocoder();
+        amapAutoComplete = new AMap.AutoComplete({});   // 不绑定 input，只用来在下面手动调用 .search()
+    });
+
+    amapMarker.on('dragend', () => {
+        const pos = amapMarker.getPosition();
+        reverseGeocodeAMap([pos.lng, pos.lat]);
+    });
+    amapMap.on('click', e => {
+        hideAMapSearchResults();
+        amapMarker.setPosition(e.lnglat);
+        reverseGeocodeAMap([e.lnglat.lng, e.lnglat.lat]);
+    });
+
+    document.getElementById('amapAddressInput').addEventListener('input', onAMapAddressInput);
+}
+
+// 反查某个坐标（高德 GCJ-02）对应的地址文字（拖图钉/点地图之后用）
+function reverseGeocodeAMap(gcjLngLat) {
+    if (!amapGeocoder) { setAMapPickerState(gcj02ToWgs84(gcjLngLat[0], gcjLngLat[1]), ''); return; }
+    amapGeocoder.getAddress(gcjLngLat, (status, result) => {
+        const name = (status === 'complete' && result.regeocode) ? result.regeocode.formattedAddress : '';
+        setAMapPickerState(gcj02ToWgs84(gcjLngLat[0], gcjLngLat[1]), name);
+    });
+}
+
+// 记下当前选中的坐标（统一存 WGS-84，和数据库口径一致）+ 地址文字，供"使用此位置"按钮取用
+function setAMapPickerState(wgsLngLat, name) {
+    amapPickerState = { wgs: wgsLngLat, name };
+    document.getElementById('amapPickerResult').textContent =
+        (name ? `已选：${name}　` : '') + `坐标：${wgsLngLat[1].toFixed(6)}, ${wgsLngLat[0].toFixed(6)}`;
+}
+
+// ── 地址搜索：中国境内用高德的地点提示（更准更快），境外/全球用 OpenStreetMap 的 Nominatim
+// 免费查询接口（不需要密钥，覆盖全球），两边结果合并显示在同一个下拉列表里，按输入停顿 400ms
+// 后再查（不是每敲一个字就查一次），避免搜索请求过于频繁。
+function onAMapAddressInput(e) {
+    clearTimeout(amapSearchTimer);
+    const keyword = e.target.value.trim();
+    if (keyword.length < 2) { hideAMapSearchResults(); return; }
+    amapSearchTimer = setTimeout(() => runAMapAddressSearch(keyword), 400);
+}
+
+async function runAMapAddressSearch(keyword) {
+    const [amapTips, globalTips] = await Promise.all([searchAMapTips(keyword), searchGlobalNominatim(keyword)]);
+    const items = [
+        ...amapTips.map(t => ({ label: [t.name, t.district].filter(Boolean).join('　'), gcj: [t.location.lng, t.location.lat], wgs: null, source: '国内' })),
+        ...globalTips.map(r => ({ label: r.display_name, gcj: null, wgs: [parseFloat(r.lon), parseFloat(r.lat)], source: '全球' }))
+    ];
+    renderAMapSearchResults(items);
+}
+
+function searchAMapTips(keyword) {
+    return new Promise(resolve => {
+        if (!amapAutoComplete) { resolve([]); return; }
+        amapAutoComplete.search(keyword, (status, result) => {
+            resolve(status === 'complete' && result.tips ? result.tips.filter(t => t.location) : []);
+        });
+    });
+}
+
+// Nominatim 是 OpenStreetMap 提供的免费公共地理编码服务，全球覆盖、不需要申请密钥，
+// 但有使用频率限制，所以上面用 400ms 防抖 + 至少输入 2 个字才查，避免请求过于频繁。
+async function searchGlobalNominatim(keyword) {
+    try {
+        const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=6&q=${encodeURIComponent(keyword)}`);
+        return resp.ok ? await resp.json() : [];
+    } catch { return []; }   // 查不到 / 网络问题就当没有全球结果，不影响国内结果照常显示
+}
+
+function renderAMapSearchResults(items) {
+    const box = document.getElementById('amapSearchResults');
+    if (items.length === 0) { hideAMapSearchResults(); return; }
+    box.innerHTML = items.map((it, i) =>
+        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">` +
+        `<span class="badge bg-secondary-subtle text-secondary-emphasis me-1">${it.source}</span>${it.label}</button>`
+    ).join('');
+    box.style.display = 'block';
+    box.querySelectorAll('[data-idx]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const it = items[parseInt(btn.dataset.idx, 10)];
+            document.getElementById('amapAddressInput').value = it.label;
+            hideAMapSearchResults();
+            if (it.gcj) {   // 国内结果：高德给的是 GCJ-02，地图直接用，存库前再转成 WGS-84
+                amapMap.setCenter(it.gcj); amapMap.setZoom(17); amapMarker.setPosition(it.gcj);
+                setAMapPickerState(gcj02ToWgs84(it.gcj[0], it.gcj[1]), it.label);
+            } else {   // 全球结果：Nominatim 给的本来就是 WGS-84，直接存；地图显示要先转成 GCJ-02
+                const gcj = wgs84ToGcj02(it.wgs[0], it.wgs[1]);
+                amapMap.setCenter(gcj); amapMap.setZoom(17); amapMarker.setPosition(gcj);
+                setAMapPickerState(it.wgs, it.label);
+            }
+        });
+    });
+}
+
+function hideAMapSearchResults() {
+    const box = document.getElementById('amapSearchResults');
+    box.style.display = 'none';
+    box.innerHTML = '';
+}
+
+// 点弹窗里搜索框/结果列表以外的地方（比如地图、空白处）时，把结果下拉收起来
+document.getElementById('amapPickerModal').addEventListener('click', e => {
+    if (!e.target.closest('#amapAddressInput') && !e.target.closest('#amapSearchResults')) hideAMapSearchResults();
+});
+
+// 点某一行的"地图选点"按钮：记下目标行，打开弹窗，首次显示时才初始化地图（此时容器才有尺寸）
+function openAMapPicker(btn) {
+    amapTargetRow = btn.closest('.location-row');
+    document.getElementById('amapAddressInput').value = '';
+    hideAMapSearchResults();
+    const modalEl = document.getElementById('amapPickerModal');
+    const pickerModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    const onShown = () => {
+        initAMapPicker();
+        if (typeof amapMap.resize === 'function') amapMap.resize();   // 弹窗打开前地图容器是隐藏的，尺寸不对，显示后要重算一次
+
+        const lat = amapTargetRow.querySelector('[data-field="Latitude"]').value;
+        const lng = amapTargetRow.querySelector('[data-field="Longitude"]').value;
+        if (lat && lng) {
+            // 这一行已经存过坐标：数据库里存的是 WGS-84，地图上要用高德的 GCJ-02 显示，
+            // 严格反向纠偏比较复杂，这里就近似当作同一个点定位过去（供人眼观察大致方位、不影响最终保存的坐标），
+            // 保存时仍然是按这次在地图上重新选的点重新计算 WGS-84，不会把近似值带回数据库。
+            const lnglat = [parseFloat(lng), parseFloat(lat)];
+            amapMap.setCenter(lnglat);
+            amapMarker.setPosition(lnglat);
+            reverseGeocodeAMap(lnglat);
+        } else if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(pos => {
+                const lnglat = [pos.coords.longitude, pos.coords.latitude];
+                amapMap.setCenter(lnglat);
+                amapMarker.setPosition(lnglat);
+                reverseGeocodeAMap(lnglat);
+            });
+        }
+        modalEl.removeEventListener('shown.bs.modal', onShown);
+    };
+    modalEl.addEventListener('shown.bs.modal', onShown);
+    pickerModal.show();
+}
+
+// 点"使用此位置"：把（WGS-84 的）经纬度和地址名称写回目标行的表单
+function confirmAMapPicker() {
+    if (!amapPickerState) { alert('请先搜索地址，或在地图上点选/拖动图钉'); return; }
+    if (amapPickerState.name) amapTargetRow.querySelector('[data-field="Name"]').value = amapPickerState.name;
+    amapTargetRow.querySelector('[data-field="Latitude"]').value = amapPickerState.wgs[1].toFixed(6);
+    amapTargetRow.querySelector('[data-field="Longitude"]').value = amapPickerState.wgs[0].toFixed(6);
+    bootstrap.Modal.getInstance(document.getElementById('amapPickerModal')).hide();
 }
 </script>
 }

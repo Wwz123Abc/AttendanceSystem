@@ -196,7 +196,7 @@ public class DingTalkSyncService(
                 record.ActualWorkHours = AttendanceService.ComputeWorkHours(rci, rco, lunch, dinner);
 
                 record.OvertimeHours = shiftByUserDate.TryGetValue((uid, date), out var shift)
-                    ? AttendanceService.CalcOvertimeHours(rco, shift)
+                    ? AttendanceService.CalcOvertimeHours(date, rco, shift)
                     : Math.Max(0, Math.Round(record.ActualWorkHours - 8m, 2));
             }
             result.RecordUpserted++;
@@ -382,7 +382,7 @@ public class DingTalkSyncService(
                                .ToDictionary(u => u.DingTalkUserId!, u => u);
         var byEmpNo    = locals.GroupBy(u => u.EmployeeNo).ToDictionary(g => g.Key, g => g.First());
         var usedEmpNos = locals.Select(u => u.EmployeeNo).ToHashSet();
-        var defaultPwdHash = UserService.HashPassword(configuration["AppSettings:DefaultPassword"] ?? "Abc@12345");
+        var defaultPwdHash = UserService.HashPassword(configuration["AppSettings:DefaultPassword"] ?? "123456");
 
         foreach (var du in dingUsers)
         {

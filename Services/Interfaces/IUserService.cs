@@ -56,4 +56,10 @@ public interface IUserService
     Task<User?>   GetUserWithDetailsAsync(int userId);
     /// <summary>判断工号是否已存在（可排除指定用户，用于更新校验）。</summary>
     Task<bool>    IsEmployeeNoExistsAsync(string employeeNo, int? excludeUserId = null);
+    /// <summary>
+    /// 按部门自动生成下一个工号（前缀+5位流水号，如 IN00001）。
+    /// 从该部门往上找最近的一个"公司"节点（深圳GA/科瑞科技/成都鹰诺/鼎力/新能源），
+    /// 找不到匹配的公司则返回 null（表示不自动生成，改回手动填写）。
+    /// </summary>
+    Task<string?> GenerateNextEmployeeNoAsync(int? departmentId);
 }

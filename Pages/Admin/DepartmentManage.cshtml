@@ -114,7 +114,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">排序（越小越靠前）</label>
-                        <input asp-for="SortIndex" type="number" class="form-control" id="fSortIndex" value="0" />
+                        <input asp-for="SortIndex" type="number" min="0" max="9999" class="form-control" id="fSortIndex" value="0" />
                     </div>
                     <div class="form-check form-switch">
                         <input asp-for="IsActive" class="form-check-input" type="checkbox" id="fIsActive" />

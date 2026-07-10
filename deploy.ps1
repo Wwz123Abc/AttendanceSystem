@@ -1,21 +1,27 @@
 ﻿# ============================================================
 #  一键本地部署脚本  deploy.ps1
-#  作用：发布 → 打包 → 上传到服务器（①②③），并提示/执行服务器升级（④）
+#  作用：发布 → 打包 → 上传到服务器（①②③）→ 自动 SSH 远程执行 upgrade.sh 升级（④）
 #
-#  用法（在本项目目录的 PowerShell 里）：
-#    .\deploy.ps1                 普通部署（没改数据库时用这个）
-#    .\deploy.ps1 -WithMigration  改过数据库结构时用：会一并生成并上传 migrate.sql
-#    .\deploy.ps1 -RunUpgrade     上传后自动 SSH 进服务器执行 upgrade.sh（需再输一次密码）
-#  两个开关可同时用：.\deploy.ps1 -WithMigration -RunUpgrade
+#  现在已配置好到服务器的 SSH 免密登录，默认就是"全自动"：
+#    .\deploy.ps1                 一条命令走完 ①②③④，全程不用输密码
+#  唯一还会等你确认的地方：如果 upgrade.sh 检测到 migrate.sql，会问一句
+#  『发现 migrate.sql，是否应用?[y/N]』——这一步故意留着手动确认，
+#  避免数据库结构变更在没人看的情况下被静默执行。
+#
+#  不想自动做某一步时，用下面的开关跳过：
+#    .\deploy.ps1 -SkipMigration   不生成/上传 migrate.sql（确定这次没改数据库结构时用）
+#    .\deploy.ps1 -SkipUpgrade     只发布上传，不自动 SSH 升级服务器（自己手动去服务器执行 upgrade.sh）
 # ============================================================
 param(
-    [string]$Server  = "root@49.232.210.129",   # 服务器登录
-    [switch]$WithMigration,                       # 改过数据库 → 生成并上传 migrate.sql
-    [switch]$RunUpgrade                            # 上传后自动远程执行 upgrade.sh
+    [string]$Server  = "root@49.232.210.129",   # 服务器登录（已配置 SSH 密钥，免密）
+    [switch]$SkipMigration,                       # 跳过生成/上传 migrate.sql
+    [switch]$SkipUpgrade                           # 跳过自动远程执行 upgrade.sh
 )
+$WithMigration = -not $SkipMigration
+$RunUpgrade    = -not $SkipUpgrade
 
 $ErrorActionPreference = "Stop"
-$Proj = "C:\Users\wuwenzhe\Desktop\AttendanceSystem"
+$Proj = "C:\Users\w\Desktop\AttendanceSystem(1)\AttendanceSystem"
 Set-Location $Proj
 
 function Fail($msg) { Write-Host "❌ $msg" -ForegroundColor Red; exit 1 }
@@ -31,11 +37,14 @@ Remove-Item -Force          .\publish.tar.gz -ErrorAction SilentlyContinue
 # staticwebassets 缓存等）悄悄加密成乱码，导致编译报 CS2015"是二进制文件"或
 # MSB4018 缓存损坏。下面这几个 -p: 参数让编译干脆不生成这些文件，绕开加密：
 # 代价只是发布出来的程序集少了版本号等描述信息，不影响功能。
+# 注意：不能加 -p:GenerateRazorAssemblyInfo=false ——曾经加过，编译能通过、
+# 也测不出问题，但发布出来的版本在服务器上会导致所有 Razor 页面（/Login 等）404，
+# 只有 Controller 接口还能用。2026-07-08 那次事故就是这个参数导致网站直接打不开，
+# 排查后确认必须去掉，即使这个参数本身看起来和"加密构建文件"这个问题关系不大。
 $DlpSafeFlags = @(
     "-p:StaticWebAssetsCacheDefineStaticWebAssetsEnabled=false"
     "-p:GenerateAssemblyInfo=false"
     "-p:GenerateTargetFrameworkAttribute=false"
-    "-p:GenerateRazorAssemblyInfo=false"
 )
 
 dotnet publish -c Release -o .\publish --nologo @DlpSafeFlags
@@ -77,7 +86,7 @@ if ($WithMigration) {
 }
 
 # —— ③ 上传到服务器 ——————————————————————————————————————
-Write-Host "==> [3/4] 上传到服务器（请输入服务器密码）..." -ForegroundColor Cyan
+Write-Host "==> [3/4] 上传到服务器..." -ForegroundColor Cyan
 scp publish.tar.gz "${Server}:/root/"
 if ($LASTEXITCODE -ne 0) { Fail "上传 publish.tar.gz 失败（检查网络/安全组 22 端口/密码）" }
 if ($WithMigration) {

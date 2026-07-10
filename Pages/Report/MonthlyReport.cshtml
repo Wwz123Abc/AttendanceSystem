@@ -2,6 +2,26 @@
 @model AttendanceSystem.Pages.Report.MonthlyReportModel
 @{
     ViewData["Title"] = "月度报表";
+
+    // 分页/翻页链接：把当前的筛选条件（起止日期/勾选的部门/关键字）原样带上，只换页码
+    string Q(int p)
+    {
+        var parts = new List<string>
+        {
+            "start=" + Model.Start.ToString("yyyy-MM-dd"),
+            "end="   + Model.End.ToString("yyyy-MM-dd")
+        };
+        foreach (var id in Model.SelectedDeptIds) parts.Add("deptIds=" + id);
+        if (!string.IsNullOrEmpty(Model.Keyword)) parts.Add("keyword=" + Uri.EscapeDataString(Model.Keyword));
+        if (p > 1) parts.Add("p=" + p);
+        return "?" + string.Join("&", parts);
+    }
+
+    // 数字类的格子：0 就留空、非 0 才显示——和导出的 Excel 是同一套"0 不显示，方便一眼看出谁有问题"的规则
+    string NI(int v)     => v == 0 ? "" : v.ToString();
+    string ND(decimal v) => v == 0 ? "" : v.ToString("0.##");
+
+    var totalCols = 6 + Model.Dates.Count + 18;   // 固定列 + 每日格子 + 尾部统计列(17) + 操作列(1)，空数据行合并单元格用
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -9,47 +29,37 @@
 </div>
 
 <div class="card mb-4">
+    <div class="card-header"><i class="bi bi-funnel me-1"></i>筛选条件</div>
     <div class="card-body py-3">
-        <form method="get" class="d-flex align-items-center gap-3 flex-wrap">
-            <label class="fw-semibold mb-0">年份</label>
-            <select name="year" class="form-select form-select-sm" style="width:100px">
-                @for (int y = DateTime.Today.Year; y >= DateTime.Today.Year - 2; y--)
-                {
-                    <option value="@y" selected="@(y == Model.Year)">@y 年</option>
-                }
-            </select>
-            <label class="fw-semibold mb-0">月份</label>
-            <select name="month" class="form-select form-select-sm" style="width:90px">
-                @for (int m = 1; m <= 12; m++)
-                {
-                    <option value="@m" selected="@(m == Model.Month)">@m 月</option>
-                }
-            </select>
-            <button type="submit" class="btn btn-primary btn-sm">
-                <i class="bi bi-search me-1"></i>查询
-            </button>
-        </form>
-    </div>
-</div>
-
-<div class="card mb-4">
-    <div class="card-header"><i class="bi bi-file-earmark-spreadsheet me-1"></i>模板格式月度汇总表（按公司要求的模板导出，含每日打卡明细）</div>
-    <div class="card-body py-3">
-        <form method="get" asp-page-handler="ExportTemplate">
+        <form method="get" id="filterForm">
             @* GET 表单提交时，浏览器只会保留表单里的字段拼成新的查询字符串，action 地址里 asp-page-handler
-               生成的 "?handler=ExportTemplate" 会被整个丢弃——所以必须再放一个同名的隐藏字段，
-               "handler" 这个值才能真正跟着提交上去，不然点了按钮会悄悄回到默认的 OnGetAsync（看起来就像没反应）。 *@
-            <input type="hidden" name="handler" value="ExportTemplate" />
-            <input type="hidden" name="year" value="@Model.Year" />
-            <input type="hidden" name="month" value="@Model.Month" />
-            <div class="mb-2 small text-muted">
-                统计周期：@(Model.Month == 1 ? Model.Year - 1 : Model.Year)年@(Model.Month == 1 ? 12 : Model.Month - 1)月26日 至 @(Model.Year)年@(Model.Month)月25日（用上面选的"年份/月份"决定周期）
+               生成的 "?handler=xxx" 会被整个丢弃——所以用一个隐藏字段配合按钮的 onclick 来指定要走哪个处理方法。 *@
+            <input type="hidden" name="handler" id="formHandler" value="" />
+            <div class="row g-2 mb-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small mb-1">开始日期</label>
+                    <input type="date" name="start" class="form-control form-control-sm"
+                           value="@Model.Start.ToString("yyyy-MM-dd")" required />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1">结束日期</label>
+                    <input type="date" name="end" class="form-control form-control-sm"
+                           value="@Model.End.ToString("yyyy-MM-dd")" required />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small mb-1">姓名 / 工号</label>
+                    <input type="text" name="keyword" class="form-control form-control-sm" style="width:160px"
+                           placeholder="按姓名或工号搜索" value="@Model.Keyword" />
+                </div>
+                <div class="col-auto">
+                    <div class="form-text mb-1">默认是"上月26日至本月25日"，可以改成任意起止日期；搜索只影响下方表格显示，不影响导出范围</div>
+                </div>
             </div>
             <label class="form-label fw-semibold mb-1">
-                导出范围
-                <small class="text-muted fw-normal">（勾选公司=连它下面所有部门一起导出，范围大；只勾具体部门=只导出这个部门，范围小；都不勾=导出全公司所有人）</small>
+                范围
+                <small class="text-muted fw-normal">（勾选公司=连它下面所有部门一起，范围大；只勾具体部门=只看这个部门，范围小；都不勾=全公司所有人）</small>
             </label>
-            <div id="reportDeptTree" class="border rounded p-2 mb-2" style="max-height:240px;overflow-y:auto;">
+            <div id="reportDeptTree" class="border rounded p-2 mb-2" style="max-height:200px;overflow-y:auto;">
                 @foreach (var d in Model.DeptTree)
                 {
                     <div class="form-check" style="padding-left:@(1.5 + d.Depth * 1.2)rem">
@@ -58,6 +68,7 @@
                             <input class="form-check-input dept-checkbox" type="checkbox"
                                    name="deptIds" value="@d.RealDeptId" id="rdept_@d.NodeId"
                                    data-id="@d.NodeId" data-parent="@d.ParentNodeId"
+                                   checked="@(Model.SelectedDeptIds.Contains(d.RealDeptId.Value) ? "checked" : null)"
                                    onchange="onReportDeptCheckboxChange(this)" />
                             <label class="form-check-label" for="rdept_@d.NodeId">@d.Name</label>
                         }
@@ -75,64 +86,106 @@
                     <div class="text-muted small">暂无部门，请先到"部门管理"创建部门</div>
                 }
             </div>
-            <button type="submit" class="btn btn-success btn-sm">
-                <i class="bi bi-download me-1"></i>导出模板汇总表
-            </button>
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary btn-sm" onclick="document.getElementById('formHandler').value=''">
+                    <i class="bi bi-search me-1"></i>查询
+                </button>
+                <button type="submit" class="btn btn-success btn-sm" onclick="document.getElementById('formHandler').value='ExportTemplate'">
+                    <i class="bi bi-download me-1"></i>导出模板汇总表（按当前起止日期/范围）
+                </button>
+            </div>
         </form>
     </div>
 </div>
 
 <div class="card">
     <div class="card-header">
-        @Model.Year 年 @Model.Month 月 部门考勤汇总（共 @Model.Summaries.Count 人）
+        @Model.Start.ToString("yyyy-MM-dd") 至 @Model.End.ToString("yyyy-MM-dd") 考勤汇总（共 @Model.TotalMatched 人）
     </div>
     <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover mb-0">
-                <thead>
+        <div class="table-responsive" style="max-height:70vh;">
+            <table class="table table-hover table-bordered table-sm mb-0 align-middle" style="white-space:nowrap;">
+                <thead class="table-light">
                     <tr>
-                        <th>工号</th>
-                        <th>姓名</th>
-                        <th>部门</th>
-                        <th>应出勤</th>
-                        <th>实出勤</th>
-                        <th>夜班</th>
-                        <th>迟到</th>
-                        <th>早退</th>
-                        <th>缺勤</th>
-                        <th>请假(天)</th>
-                        <th>加班(h)</th>
-                        <th>总工时(h)</th>
-                        <th>操作</th>
+                        <th rowspan="2" class="bg-light" style="position:sticky;left:0;z-index:3;min-width:80px">姓名</th>
+                        <th rowspan="2" style="min-width:160px">考勤组</th>
+                        <th rowspan="2" style="min-width:120px">部门</th>
+                        <th rowspan="2" class="bg-light" style="position:sticky;left:80px;z-index:3;min-width:90px">工号</th>
+                        <th rowspan="2" style="min-width:90px">职位</th>
+                        <th rowspan="2" style="min-width:100px">合同公司</th>
+                        <th colspan="@Model.Dates.Count" class="text-center">考勤结果</th>
+                        <th rowspan="2">出勤天数</th>
+                        <th rowspan="2">休息天数</th>
+                        <th rowspan="2">总工时</th>
+                        <th rowspan="2">迟到时长</th>
+                        <th rowspan="2">早退次数</th>
+                        <th rowspan="2">迟到次数</th>
+                        <th rowspan="2">早退时长</th>
+                        <th rowspan="2">上班缺卡次数</th>
+                        <th rowspan="2">下班缺卡次数</th>
+                        <th rowspan="2">旷工天数</th>
+                        <th rowspan="2">出差时长</th>
+                        <th rowspan="2">外出时长</th>
+                        <th rowspan="2">夜班次数</th>
+                        <th rowspan="2">加班总时长</th>
+                        <th rowspan="2">工作日加班</th>
+                        <th rowspan="2">休息日加班</th>
+                        <th rowspan="2">节假日加班</th>
+                        <th rowspan="2">操作</th>
+                    </tr>
+                    <tr>
+                        @foreach (var d in Model.Dates)
+                        {
+                            var isWeekend = d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+                            <th class="text-center @(isWeekend ? "table-warning" : "")" style="min-width:32px">
+                                @(d.DayOfWeek == DayOfWeek.Saturday ? "六" : d.DayOfWeek == DayOfWeek.Sunday ? "日" : d.Day.ToString())
+                            </th>
+                        }
                     </tr>
                 </thead>
                 <tbody>
-                    @if (!Model.Summaries.Any())
+                    @if (!Model.Rows.Any())
                     {
-                        <tr><td colspan="13" class="empty-state"><i class="bi bi-inbox"></i>暂无数据</td></tr>
+                        <tr><td colspan="@totalCols" class="empty-state"><i class="bi bi-inbox"></i>暂无数据</td></tr>
                     }
-                    @foreach (var s in Model.Summaries)
+                    @foreach (var row in Model.Rows)
                     {
                         <tr>
-                            <td class="small text-muted">@s.EmployeeNo</td>
-                            <td class="fw-semibold">@s.RealName</td>
-                            <td class="small">@s.DeptName</td>
-                            <td>@s.ExpectedWorkdays</td>
-                            <td class="@(s.ActualWorkdays < s.ExpectedWorkdays ? "text-danger" : "text-success")">@s.ActualWorkdays</td>
-                            <td class="@(s.NightShiftDays > 0 ? "text-info fw-semibold" : "text-muted")">@s.NightShiftDays</td>
-                            <td class="@(s.LateCount > 0 ? "text-warning" : "")">@s.LateCount</td>
-                            <td class="@(s.EarlyLeaveCount > 0 ? "text-warning" : "")">@s.EarlyLeaveCount</td>
-                            <td class="@(s.AbsentDays > 0 ? "text-danger" : "")">@s.AbsentDays</td>
-                            <td>@s.LeaveDays.ToString("F1")</td>
-                            <td>@s.TotalOvertimeHours.ToString("F1")</td>
-                            <td>@s.TotalWorkHours.ToString("F1")</td>
+                            <td class="fw-semibold bg-white" style="position:sticky;left:0;z-index:1">@row.RealName</td>
+                            <td class="small">@row.GroupName</td>
+                            <td class="small">@row.DeptName</td>
+                            <td class="small text-muted bg-white" style="position:sticky;left:80px;z-index:1">@row.EmployeeNo</td>
+                            <td class="small">@row.Position</td>
+                            <td class="small">@row.ContractCompany</td>
+                            @for (var i = 0; i < Model.Dates.Count; i++)
+                            {
+                                var isWeekend = Model.Dates[i].DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+                                <td class="text-center @(isWeekend ? "table-warning bg-opacity-25" : "")">@(row.DailyHours[i]?.ToString() ?? "")</td>
+                            }
+                            <td class="text-center">@row.ActualWorkdays</td>
+                            <td class="text-center">@NI(row.RestDays)</td>
+                            <td class="text-center">@row.TotalWorkHours.ToString("0.##")</td>
+                            <td class="text-center @(row.LateMinutes > 0 ? "text-warning" : "")">@NI(row.LateMinutes)</td>
+                            <td class="text-center @(row.EarlyLeaveCount > 0 ? "text-warning" : "")">@NI(row.EarlyLeaveCount)</td>
+                            <td class="text-center @(row.LateCount > 0 ? "text-warning" : "")">@NI(row.LateCount)</td>
+                            <td class="text-center @(row.EarlyLeaveMinutes > 0 ? "text-warning" : "")">@NI(row.EarlyLeaveMinutes)</td>
+                            <td class="text-center @(row.MissingClockInCount > 0 ? "text-danger" : "")">@NI(row.MissingClockInCount)</td>
+                            <td class="text-center @(row.MissingClockOutCount > 0 ? "text-danger" : "")">@NI(row.MissingClockOutCount)</td>
+                            <td class="text-center @(row.AbsentDays > 0 ? "text-danger fw-semibold" : "")">@NI(row.AbsentDays)</td>
+                            <td class="text-center">@ND(row.BusinessTripHours)</td>
+                            <td class="text-center">@ND(row.OutHours)</td>
+                            <td class="text-center">@NI(row.NightShiftDays)</td>
+                            <td class="text-center">@ND(row.TotalOvertimeHours)</td>
+                            <td class="text-center">@ND(row.WeekdayOvertimeHours)</td>
+                            <td class="text-center">@ND(row.RestDayOvertimeHours)</td>
+                            <td class="text-center">@ND(row.HolidayOvertimeHours)</td>
                             <td>
                                 <a asp-page-handler="ExportDetail"
-                                   asp-route-userId="@s.UserId"
+                                   asp-route-userId="@row.UserId"
                                    asp-route-year="@Model.Year"
                                    asp-route-month="@Model.Month"
-                                   class="btn btn-outline-primary btn-sm">
-                                    <i class="bi bi-download"></i> 明细
+                                   class="btn btn-outline-primary btn-sm" title="导出这个人的每日明细">
+                                    <i class="bi bi-download"></i>
                                 </a>
                             </td>
                         </tr>
@@ -141,6 +194,35 @@
             </table>
         </div>
     </div>
+
+    @{
+        var totalPages = (int)Math.Ceiling(Model.TotalMatched / (double)MonthlyReportModel.PageSize);
+        var cur = Model.PageIndex < 1 ? 1 : Model.PageIndex;
+        var winFrom = Math.Max(1, cur - 2);
+        var winTo   = Math.Min(totalPages, cur + 2);
+    }
+    @if (totalPages > 1)
+    {
+        <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="text-muted small">共 @Model.TotalMatched 人 · 第 @cur / @totalPages 页</span>
+            <nav>
+                <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item @(cur <= 1 ? "disabled" : "")">
+                        <a class="page-link" href="@Q(cur - 1)">上一页</a>
+                    </li>
+                    @for (var pg = winFrom; pg <= winTo; pg++)
+                    {
+                        <li class="page-item @(pg == cur ? "active" : "")">
+                            <a class="page-link" href="@Q(pg)">@pg</a>
+                        </li>
+                    }
+                    <li class="page-item @(cur >= totalPages ? "disabled" : "")">
+                        <a class="page-link" href="@Q(cur + 1)">下一页</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+    }
 </div>
 
 @section Scripts {

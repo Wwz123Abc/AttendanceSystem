@@ -84,6 +84,10 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
         {
             if (string.IsNullOrWhiteSpace(DeptName))
                 throw new InvalidOperationException("请填写部门名称");
+            if (DeptName.Trim().Length > 100)
+                throw new InvalidOperationException("部门名称不能超过 100 个字");
+            if (SortIndex is < 0 or > 9999)
+                throw new InvalidOperationException("排序号请填 0-9999 之间");
 
             var dept = new Department
             {
@@ -113,6 +117,10 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
                        ?? throw new InvalidOperationException("部门不存在");
             if (string.IsNullOrWhiteSpace(DeptName))
                 throw new InvalidOperationException("请填写部门名称");
+            if (DeptName.Trim().Length > 100)
+                throw new InvalidOperationException("部门名称不能超过 100 个字");
+            if (SortIndex is < 0 or > 9999)
+                throw new InvalidOperationException("排序号请填 0-9999 之间");
             if (ParentId == EditId)
                 throw new InvalidOperationException("上级部门不能是自己");
             if (ParentId.HasValue && await IsDescendantAsync(ParentId.Value, EditId))

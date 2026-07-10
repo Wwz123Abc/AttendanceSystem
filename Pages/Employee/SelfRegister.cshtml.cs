@@ -43,6 +43,8 @@ public class SelfRegisterModel(
     {
         try
         {
+            if (IdCardPhoto is null || IdCardPhoto.Length == 0)
+                throw new InvalidOperationException("请上传身份证照片");
             var photoUrl = await SaveIdCardPhotoAsync();
             await registrationService.SubmitAsync(new SubmitRegistrationDto
             {
@@ -67,7 +69,7 @@ public class SelfRegisterModel(
 
     /// <summary>
     /// 保存上传的身份证照片（这一步在员工还没有工号之前发生，所以按手机号建目录）。
-    /// 没上传就返回 null，正常（身份证照片不是必填项，管理员确认时也可以后补）。
+    /// 身份证照片是必填项，调用前 OnPostAsync 已经检查过一定选了文件，这里的空值判断只是兜底。
     /// </summary>
     private async Task<string?> SaveIdCardPhotoAsync()
     {

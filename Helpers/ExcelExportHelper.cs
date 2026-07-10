@@ -152,8 +152,9 @@ public static class ExcelExportHelper
             SetCell(row, 2, rec.ClockInText,                 baseStyle);
             SetCell(row, 3, rec.ClockOutText,                baseStyle);
             SetCell(row, 4, rec.StatusText,                  statusStyle);
-            SetCell(row, 5, (double)rec.ActualWorkHours,     baseStyle);
-            SetCell(row, 6, (double)rec.OvertimeHours,       baseStyle);
+            // 工时/加班按"半小时"为最小单位展示（不足半小时舍去），和月度汇总的合计口径一致
+            SetCell(row, 5, HalfFloor(rec.ActualWorkHours),  baseStyle);
+            SetCell(row, 6, HalfFloor(rec.OvertimeHours),    baseStyle);
             SetCell(row, 7, rec.LateMinutes,
                 rec.LateMinutes > 0 ? orangeStyle : baseStyle);
             SetCell(row, 8, rec.ApprovalNote ?? "",          baseStyle);
@@ -178,8 +179,8 @@ public static class ExcelExportHelper
         var redStyle     = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);
 
         var dayCount  = result.Dates.Count;
-        var fixedCols = 8;                       // 姓名/考勤组/部门/工号/职位/UserId/工时/夜班天数
-        var tailCols  = 16;                       // 出勤天数..节假日加班
+        var fixedCols = 6;                       // 姓名/考勤组/部门/工号/职位/合同公司
+        var tailCols  = 17;                       // 出勤天数..节假日加班（含夜班次数）
         var totalCols = fixedCols + dayCount + tailCols;
 
         // 第 0 行：大标题（统计日期区间）
@@ -196,14 +197,14 @@ public static class ExcelExportHelper
         // 第 2 行：主表头
         var headerRow = sheet.CreateRow(2);
         headerRow.HeightInPoints = 20;
-        string[] fixedHeaders = ["姓名", "考勤组", "部门", "工号", "职位", "UserId", "工时", "夜班天数"];
+        string[] fixedHeaders = ["姓名", "考勤组", "部门", "工号", "职位", "合同公司"];
         for (var i = 0; i < fixedHeaders.Length; i++) SetCell(headerRow, i, fixedHeaders[i], headerStyle);
         SetCell(headerRow, fixedCols, "考勤结果", headerStyle);
         if (dayCount > 1) sheet.AddMergedRegion(new CellRangeAddress(2, 2, fixedCols, fixedCols + dayCount - 1));
         string[] tailHeaders =
         [
-            "出勤天数", "休息天数", "工作时长", "迟到时长", "早退次数", "迟到次数", "早退时长",
-            "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长",
+            "出勤天数", "休息天数", "总工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
+            "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长", "夜班次数",
             "加班总时长", "工作日加班", "休息日加班", "节假日加班"
         ];
         for (var i = 0; i < tailHeaders.Length; i++) SetCell(headerRow, fixedCols + dayCount + i, tailHeaders[i], headerStyle);
@@ -226,7 +227,7 @@ public static class ExcelExportHelper
         for (var i = 3; i < fixedCols; i++) sheet.SetColumnWidth(i, 12 * 256);
         for (var i = 0; i < dayCount; i++) sheet.SetColumnWidth(fixedCols + i, 5 * 256);
         for (var i = 0; i < tailHeaders.Length; i++) sheet.SetColumnWidth(fixedCols + dayCount + i, 11 * 256);
-        ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 4, repeatHeaderRows: 4);   // 冻结前 8 列（姓名..夜班天数）+ 前 4 行（标题/生成时间/表头/日期表头）
+        ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 4, repeatHeaderRows: 4);   // 冻结前 6 列（姓名..合同公司）+ 前 4 行（标题/生成时间/表头/日期表头）
 
         // 从第 4 行起：每个员工一行；固定列/尾部统计列隔行浅色底，每日格子按周末/工作日区分底色
         for (var r = 0; r < result.Rows.Count; r++)
@@ -235,14 +236,12 @@ public static class ExcelExportHelper
             var xRow = sheet.CreateRow(r + 4);
             var baseStyle = r % 2 == 1 ? bandedStyle : dataStyle;
 
-            SetCell(xRow, 0, row.RealName,        baseStyle);
-            SetCell(xRow, 1, row.GroupName ?? "", baseStyle);
-            SetCell(xRow, 2, row.DeptName ?? "",  baseStyle);
-            SetCell(xRow, 3, row.EmployeeNo ?? "", baseStyle);
-            SetCell(xRow, 4, row.Position ?? "",  baseStyle);
-            SetCell(xRow, 5, row.DingTalkUserId ?? "", baseStyle);
-            if (row.StandardDailyHours is { } sh) SetCell(xRow, 6, (double)sh, baseStyle);
-            SetCellIfNonZero(xRow, 7, row.NightShiftDays, baseStyle);
+            SetCell(xRow, 0, row.RealName,             baseStyle);
+            SetCell(xRow, 1, row.GroupName ?? "",       baseStyle);
+            SetCell(xRow, 2, row.DeptName ?? "",        baseStyle);
+            SetCell(xRow, 3, row.EmployeeNo ?? "",      baseStyle);
+            SetCell(xRow, 4, row.Position ?? "",        baseStyle);
+            SetCell(xRow, 5, row.ContractCompany ?? "", baseStyle);
 
             for (var i = 0; i < dayCount; i++)
             {
@@ -266,6 +265,7 @@ public static class ExcelExportHelper
             if (row.BusinessTripHours > 0) SetCell(xRow, c, (double)row.BusinessTripHours, baseStyle);
             c++;
             c++;   // 外出时长：系统没有这个概念，恒不写值（留空）
+            SetCellIfNonZero(xRow, c++, row.NightShiftDays, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.TotalOvertimeHours, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.WeekdayOvertimeHours, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.RestDayOvertimeHours, baseStyle);
@@ -408,6 +408,10 @@ public static class ExcelExportHelper
     {
         var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;
     }
+
+    // 把工时数规范成"半小时"为最小单位（不足半小时舍去）：1.2→1.0，1.7→1.5。
+    // 报表里的工时数字统一走这一道，只会出现整数或 x.5（和服务层 AttendanceService.FloorToHalf 同一口径）。
+    private static double HalfFloor(decimal hours) => (double)(Math.Floor(hours * 2) / 2);
 
     // 值为 0 时不写（留空白格子），非 0 才写——模板月度汇总表里，迟到/早退/缺卡/旷工这类"异常次数"
     // 统一按这个规则显示，0 次留空更方便肉眼一眼看出哪些人有问题，不用满屏都是 0。

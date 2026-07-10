@@ -37,13 +37,26 @@ public class HolidayManageModel(AttendanceDbContext db) : PageModel
     {
         try
         {
+            var name = HolidayName.Trim();
+            if (string.IsNullOrEmpty(name))
+                throw new InvalidOperationException("请填写假期名称");
+            if (name.Length > 100)
+                throw new InvalidOperationException("假期名称不能超过 100 个字");
+            if (!DateOnly.TryParse(HolidayDate, out var date))
+                throw new InvalidOperationException("请选择正确的日期");
+            if (!Enum.TryParse<Models.Enums.HolidayType>(HolidayType, out var type))
+                throw new InvalidOperationException("请选择正确的假期类型");
+            var desc = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim();
+            if (desc?.Length > 500)
+                throw new InvalidOperationException("备注不能超过 500 个字");
+
             var holiday = new Holiday
             {
-                HolidayName       = HolidayName.Trim(),
-                HolidayDate       = DateOnly.Parse(HolidayDate),                   // 文字转日期
-                HolidayType       = Enum.Parse<Models.Enums.HolidayType>(HolidayType),
+                HolidayName       = name,
+                HolidayDate       = date,
+                HolidayType       = type,
                 AttendanceGroupId = GroupId,
-                Description       = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim(),
+                Description       = desc,
                 CreatedAt         = DateTime.Now
             };
             db.Holidays.Add(holiday);

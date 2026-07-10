@@ -160,13 +160,23 @@
                                 <a href="javascript:void(0)" onclick="checkAll(false)">清空</a>
                             </div>
                         </div>
+                        <div class="mb-2">
+                            <label class="form-label small mb-1">按部门筛选</label>
+                            <select id="deptFilter" class="form-select form-select-sm" onchange="filterMembersByDept(this.value)">
+                                <option value="">全部部门</option>
+                                @foreach (var deptName in Model.Members.Select(m => m.DeptName ?? "未分配").Distinct().OrderBy(n => n))
+                                {
+                                    <option value="@deptName">@deptName</option>
+                                }
+                            </select>
+                        </div>
                         <div id="employeeSelect" style="max-height:260px;overflow:auto;border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:.5rem">
                             @foreach (var grp in Model.Members.GroupBy(m => m.GroupName))
                             {
-                                <div class="fw-semibold small text-primary mt-1 border-bottom pb-1">@grp.Key</div>
+                                <div class="fw-semibold small text-primary mt-1 border-bottom pb-1 grp-header">@grp.Key</div>
                                 @foreach (var m in grp)
                                 {
-                                    <div class="form-check">
+                                    <div class="form-check" data-dept="@(m.DeptName ?? "未分配")">
                                         <input class="form-check-input member-chk" type="checkbox"
                                                name="AssignUserIds" value="@m.UserId" id="mem@m.UserId" />
                                         <label class="form-check-label small" for="mem@m.UserId">@m.RealName（@m.EmployeeNo）</label>
@@ -253,7 +263,7 @@
                         </div>
                         <div class="col-8">
                             <label class="form-label fw-semibold">班次名称</label>
-                            <input asp-for="ShiftName" id="fSName" class="form-control" required />
+                            <input asp-for="ShiftName" id="fSName" class="form-control" required maxlength="50" />
                         </div>
                         <div class="col-4">
                             <label class="form-label fw-semibold">标识颜色</label>
@@ -373,9 +383,27 @@ function toggleEmployeeSelect(allSelected) {
     document.getElementById('employeeSelect').style.display = allSelected ? 'none' : 'block';
     document.getElementById('pickTools').style.display = allSelected ? 'none' : 'block';
 }
-// "全选"/"清空"按钮：把员工名单里的每个复选框都统一勾上或去掉勾
+// "全选"/"清空"按钮：只对当前"按部门筛选"后还看得见的人生效，筛掉不显示的人不会被误勾/误清空
 function checkAll(v) {
-    document.querySelectorAll('.member-chk').forEach(c => c.checked = v);
+    document.querySelectorAll('.member-chk').forEach(c => {
+        if (c.closest('.form-check').style.display !== 'none') c.checked = v;
+    });
+}
+
+// 按部门筛选批量排班的候选人名单：只显示选中部门的人，其余人隐藏（不影响已勾选状态，取消筛选还能看到）；
+// 一个考勤组下的人如果因为筛选全部被隐藏，连组名标题一起隐藏，不留一个空标题
+function filterMembersByDept(dept) {
+    document.querySelectorAll('#employeeSelect .form-check').forEach(row => {
+        row.style.display = (dept === '' || row.dataset.dept === dept) ? '' : 'none';
+    });
+    document.querySelectorAll('#employeeSelect .grp-header').forEach(header => {
+        let sib = header.nextElementSibling, anyVisible = false;
+        while (sib && !sib.classList.contains('grp-header')) {
+            if (sib.style.display !== 'none') { anyVisible = true; break; }
+            sib = sib.nextElementSibling;
+        }
+        header.style.display = anyVisible ? '' : 'none';
+    });
 }
 // 搜索过滤考勤组（勾选状态不受影响，隐藏的已勾选项仍会一起提交）
 function filterGroups(q) {

@@ -97,7 +97,7 @@
                     <div id="businessTripFields" class="d-none">
                         <div class="mb-3">
                             <label class="form-label">出差目的地 <small class="text-muted">（可选）</small></label>
-                            <input asp-for="BusinessTripDestination" class="form-control" placeholder="如：上海分公司" />
+                            <input asp-for="BusinessTripDestination" class="form-control" maxlength="200" placeholder="如：上海分公司" />
                         </div>
                         <div class="mb-3">
                             <label class="form-label">出差开始</label>
@@ -130,7 +130,7 @@
 
                     <div class="mb-3">
                         <label class="form-label">申请原因</label>
-                        <textarea asp-for="Reason" class="form-control" rows="3" placeholder="请填写申请原因..."></textarea>
+                        <textarea asp-for="Reason" class="form-control" rows="3" maxlength="1000" placeholder="请填写申请原因..."></textarea>
                     </div>
 
                     <div class="mb-3">

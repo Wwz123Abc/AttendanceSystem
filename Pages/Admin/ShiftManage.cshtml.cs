@@ -24,8 +24,8 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     public DateOnly ViewStart { get; set; }
     public DateOnly ViewEnd   { get; set; }
 
-    /// <summary>合并成员的一行：某人属于哪个组。</summary>
-    public record MemberRow(int UserId, string RealName, string EmployeeNo, int GroupId, string GroupName);
+    /// <summary>合并成员的一行：某人属于哪个组、哪个部门（部门用于批量排班时按部门筛选，一个考勤组可能横跨多个部门）。</summary>
+    public record MemberRow(int UserId, string RealName, string EmployeeNo, int GroupId, string GroupName, string? DeptName);
 
     /// <summary>一行排班展示：某天某班次有哪些人。</summary>
     public record AssignmentRow(DateOnly WorkDate, string ShiftName, string Color, List<string> People)
@@ -90,12 +90,13 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
             .OrderBy(s => s.AttendanceGroup.GroupName).ThenBy(s => s.ShiftName)
             .ToListAsync();
 
-        // 选中组的合并成员（跨组）
+        // 选中组的合并成员（跨组）；带上部门名，方便批量排班时按部门筛选
         Members = await db.Users
             .Include(u => u.AttendanceGroup)
+            .Include(u => u.Department)
             .Where(u => u.IsActive && u.AttendanceGroupId != null && SelectedGroupIds.Contains(u.AttendanceGroupId.Value))
             .OrderBy(u => u.AttendanceGroup!.GroupName).ThenBy(u => u.RealName)
-            .Select(u => new MemberRow(u.Id, u.RealName, u.EmployeeNo, u.AttendanceGroupId!.Value, u.AttendanceGroup!.GroupName))
+            .Select(u => new MemberRow(u.Id, u.RealName, u.EmployeeNo, u.AttendanceGroupId!.Value, u.AttendanceGroup!.GroupName, u.Department != null ? u.Department.DeptName : null))
             .ToListAsync();
 
         // 展示窗口内的排班记录（选中组成员的），按「日期 + 班次」聚合
@@ -119,9 +120,20 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     {
         try
         {
-            var ws = TimeOnly.Parse(WorkStart);
-            var we = TimeOnly.Parse(WorkEnd);
             if (GroupId == 0) throw new Exception("请选择该班次所属的考勤组");
+            var name = ShiftName.Trim();
+            if (string.IsNullOrEmpty(name)) throw new Exception("请填写班次名称");
+            if (name.Length > 50) throw new Exception("班次名称不能超过 50 个字");
+            if (!TimeOnly.TryParse(WorkStart, out var ws)) throw new Exception("上班时间格式不正确");
+            if (!TimeOnly.TryParse(WorkEnd, out var we)) throw new Exception("下班时间格式不正确");
+            if (!CrossDay && we == ws) throw new Exception("下班时间不能和上班时间相同（如果是跨天班次，请勾选「跨天」）");
+            if (LateTol is < 0 or > 60) throw new Exception("迟到容忍分钟数请填 0-60 之间");
+            if (EarlyTol is < 0 or > 60) throw new Exception("早退容忍分钟数请填 0-60 之间");
+            if (EarliestIn < 0) throw new Exception("最多提前打卡分钟数不能为负数");
+            if (OtThresh is < 0 or > 120) throw new Exception("加班判定阈值请填 0-120 分钟之间");
+            if (StdHours is <= 0 or > 24) throw new Exception("标准工时请填 0-24 小时之间");
+            if (!System.Text.RegularExpressions.Regex.IsMatch(ShiftColor, "^#[0-9A-Fa-f]{6}$"))
+                throw new Exception("班次颜色格式不正确");
 
             // 把勾选的星期几（0=周日...6=周六）拼成逗号分隔的字符串存起来
             var restDaysCsv = string.Join(",", RestDays.Where(d => d is >= 0 and <= 6).Distinct().OrderBy(d => d));

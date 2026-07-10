@@ -19,6 +19,8 @@ public class ApplySubmitModel(
     public List<ApproverOptionDto> ApproverOptions { get; set; } = [];
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage   { get; set; }
+    /// <summary>部分附件因超大/类型不支持被跳过时的提示（不算失败，随成功消息一起显示）。</summary>
+    public string? AttachmentWarning { get; set; }
 
     // 表单字段（全用字符串接收，提交后再转成对应类型）
     [BindProperty] public string  ApprovalType  { get; set; } = "Leave";   // 申请类型
@@ -69,6 +71,13 @@ public class ApplySubmitModel(
                 return Page();
             }
 
+            if (!Enum.TryParse<Models.Enums.ApprovalType>(ApprovalType, out var approvalType))
+                throw new InvalidOperationException("请选择正确的申请类型");
+            if (!string.IsNullOrWhiteSpace(Reason) && Reason.Trim().Length > 1000)
+                throw new InvalidOperationException("申请理由不能超过 1000 个字");
+            if (!string.IsNullOrWhiteSpace(BusinessTripDestination) && BusinessTripDestination.Trim().Length > 200)
+                throw new InvalidOperationException("出差目的地不能超过 200 个字");
+
             // 先保存附件，拿到它们的访问地址
             var attachmentUrls = new List<string>();
             if (Attachments.Count > 0)
@@ -76,7 +85,7 @@ public class ApplySubmitModel(
 
             var dto = new SubmitApprovalDto
             {
-                ApprovalType   = Enum.Parse<Models.Enums.ApprovalType>(ApprovalType),
+                ApprovalType   = approvalType,
                 Reason         = Reason,
                 AttachmentUrls = attachmentUrls,
                 ApproverUserId = ApproverUserId
@@ -108,7 +117,7 @@ public class ApplySubmitModel(
             }
 
             await approvalService.SubmitApprovalAsync(CurrentUserId, dto);
-            SuccessMessage = "申请提交成功！";
+            SuccessMessage = "申请提交成功！" + (AttachmentWarning is null ? "" : $"（{AttachmentWarning}）");
         }
         catch (Exception ex)
         {
@@ -178,7 +187,11 @@ public class ApplySubmitModel(
         return RedirectToPage();
     }
 
-    /// <summary>把上传的附件存到 wwwroot 下，返回它们的访问地址列表。</summary>
+    /// <summary>附件允许的文件类型，和页面上传框的 accept 属性保持一致（防止绕过页面直接 POST 任意文件类型，比如可执行文件）。</summary>
+    private static readonly string[] AllowedAttachmentExtensions =
+        [".jpg", ".jpeg", ".png", ".gif", ".pdf", ".doc", ".docx", ".xls", ".xlsx"];
+
+    /// <summary>把上传的附件存到 wwwroot 下，返回它们的访问地址列表；跳过的文件（超大/类型不对）会记下原因，最后拼进提示里。</summary>
     private async Task<List<string>> SaveAttachmentsAsync()
     {
         var uid        = CurrentUserId;
@@ -187,17 +200,22 @@ public class ApplySubmitModel(
         var dir        = Path.Combine(webRoot, uploadPath, "approvals", uid.ToString());
         Directory.CreateDirectory(dir);   // 没有就创建目录
 
-        var urls = new List<string>();
+        var urls    = new List<string>();
+        var skipped = new List<string>();
         foreach (var file in Attachments.Take(5)) // 最多存 5 个文件
         {
-            if (file.Length > 10 * 1024 * 1024) continue; // 超过 10MB 的跳过
-            var ext      = Path.GetExtension(file.FileName);
+            if (file.Length > 10 * 1024 * 1024) { skipped.Add($"{file.FileName}（超过 10MB）"); continue; }
+            var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+            if (!AllowedAttachmentExtensions.Contains(ext)) { skipped.Add($"{file.FileName}（不支持的文件类型）"); continue; }
+
             var fileName = $"{Guid.NewGuid():N}{ext}";     // 用随机名，避免重名覆盖
             var path     = Path.Combine(dir, fileName);
             await using var fs = System.IO.File.Create(path);
             await file.CopyToAsync(fs);                     // 写入文件
             urls.Add($"/{uploadPath}/approvals/{uid}/{fileName}");
         }
+        if (skipped.Count > 0)
+            AttachmentWarning = "以下附件未能上传，已跳过：" + string.Join("；", skipped);
         return urls;
     }
 }

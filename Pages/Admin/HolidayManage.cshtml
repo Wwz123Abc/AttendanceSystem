@@ -97,7 +97,7 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">假期名称 <span class="text-danger">*</span></label>
-                        <input asp-for="HolidayName" class="form-control" required placeholder="如：元旦、春节..." />
+                        <input asp-for="HolidayName" class="form-control" required maxlength="100" placeholder="如：元旦、春节..." />
                     </div>
                     <div class="mb-3">
                         <label class="form-label">日期 <span class="text-danger">*</span></label>
@@ -121,7 +121,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">说明</label>
-                        <textarea asp-for="Description" class="form-control" rows="2"></textarea>
+                        <textarea asp-for="Description" class="form-control" rows="2" maxlength="500"></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">

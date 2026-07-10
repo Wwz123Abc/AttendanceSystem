@@ -125,6 +125,13 @@ public class UserManageModel(
         return File(png, "image/png");
     }
 
+    /// <summary>
+    /// "新增员工"弹窗里选定部门后，前端调这个接口拿自动生成的工号（AJAX）。
+    /// 该部门不属于已知的几个公司时返回 employeeNo=null，前端保持工号栏为空，改回手动填写。
+    /// </summary>
+    public async Task<JsonResult> OnGetGenerateEmployeeNoAsync(int deptId)
+        => new(new { employeeNo = await userService.GenerateNextEmployeeNoAsync(deptId) });
+
     /// <summary>驳回一条扫码登记（不建账号）。</summary>
     public async Task<IActionResult> OnPostRejectRegistrationAsync(int id)
     {
@@ -286,28 +293,54 @@ public class UserManageModel(
 
     // ── 工具方法 ──────────────────────────────────────────────────────────────
     /// <summary>
-    /// 校验手机号格式（11 位中国大陆手机号）。
+    /// 校验整张表单：工号/姓名必填且不超长、角色/入职日期格式正确、手机号/紧急联系人电话/身份证号格式正确、
+    /// 岗位/合同公司/住址/紧急联系人姓名不超长。任何一项不合格都会抛异常，页面会把异常消息当提示显示出来。
     /// <paramref name="requirePhone"/>=true 时手机号还不能为空——新建员工要求必填手机号，
     /// 保证以后每个员工都能用"忘记密码"（工号+手机号+钉钉验证码）自助找回；
     /// 编辑老员工时不强制补填，避免历史上没留手机号的员工卡在其它字段也改不了。
     /// </summary>
     private void ValidateContact(bool requirePhone)
     {
+        if (string.IsNullOrWhiteSpace(EmployeeNo))
+            throw new InvalidOperationException("请填写工号");
+        if (EmployeeNo.Trim().Length > 50)
+            throw new InvalidOperationException("工号不能超过 50 个字");
+        if (string.IsNullOrWhiteSpace(RealName))
+            throw new InvalidOperationException("请填写姓名");
+        if (RealName.Trim().Length > 50)
+            throw new InvalidOperationException("姓名不能超过 50 个字");
+        if (!Enum.TryParse<UserRole>(Role, out _))
+            throw new InvalidOperationException("请选择正确的角色");
+        if (!string.IsNullOrEmpty(HireDate) && !DateOnly.TryParse(HireDate, out _))
+            throw new InvalidOperationException("入职日期格式不正确");
+
         if (requirePhone && string.IsNullOrWhiteSpace(Phone))
             throw new InvalidOperationException("请填写手机号（用于以后自助找回密码）");
         if (!string.IsNullOrWhiteSpace(Phone) &&
             !System.Text.RegularExpressions.Regex.IsMatch(Phone.Trim(), @"^1[3-9]\d{9}$"))
             throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
+        if (!string.IsNullOrWhiteSpace(EmergencyContactPhone) &&
+            !System.Text.RegularExpressions.Regex.IsMatch(EmergencyContactPhone.Trim(), @"^1[3-9]\d{9}$"))
+            throw new InvalidOperationException("请输入正确格式的紧急联系人电话（11 位中国大陆手机号）");
         if (!string.IsNullOrWhiteSpace(IdNumber) &&
             !System.Text.RegularExpressions.Regex.IsMatch(IdNumber.Trim(), @"^\d{17}[\dXx]$"))
             throw new InvalidOperationException("请输入正确格式的身份证号（18 位）");
+
+        if (!string.IsNullOrWhiteSpace(Position) && Position.Trim().Length > 100)
+            throw new InvalidOperationException("岗位不能超过 100 个字");
+        if (!string.IsNullOrWhiteSpace(ContractCompany) && ContractCompany.Trim().Length > 100)
+            throw new InvalidOperationException("合同公司不能超过 100 个字");
+        if (!string.IsNullOrWhiteSpace(HomeAddress) && HomeAddress.Trim().Length > 200)
+            throw new InvalidOperationException("家庭住址不能超过 200 个字");
+        if (!string.IsNullOrWhiteSpace(EmergencyContactName) && EmergencyContactName.Trim().Length > 50)
+            throw new InvalidOperationException("紧急联系人姓名不能超过 50 个字");
     }
 
     private User BuildUser() => new()
     {
         EmployeeNo        = EmployeeNo.Trim(),
         RealName          = RealName.Trim(),
-        Role              = Enum.Parse<UserRole>(Role),
+        Role              = Enum.TryParse<UserRole>(Role, out var role) ? role : UserRole.Employee,
         DepartmentId      = DeptId,
         AttendanceGroupId = GroupId,
         SupervisorUserId  = SuperId,
@@ -315,12 +348,13 @@ public class UserManageModel(
         Phone             = string.IsNullOrWhiteSpace(Phone)          ? null : Phone.Trim(),
         IdNumber          = string.IsNullOrWhiteSpace(IdNumber)       ? null : IdNumber.Trim().ToUpperInvariant(),
         ContractCompany   = string.IsNullOrWhiteSpace(ContractCompany) ? null : ContractCompany.Trim(),
-        HireDate          = string.IsNullOrEmpty(HireDate)            ? null : DateOnly.Parse(HireDate),
+        HireDate          = !string.IsNullOrEmpty(HireDate) && DateOnly.TryParse(HireDate, out var hd) ? hd : null,
         HomeAddress            = string.IsNullOrWhiteSpace(HomeAddress)           ? null : HomeAddress.Trim(),
         EmergencyContactName   = string.IsNullOrWhiteSpace(EmergencyContactName)  ? null : EmergencyContactName.Trim(),
         EmergencyContactPhone  = string.IsNullOrWhiteSpace(EmergencyContactPhone) ? null : EmergencyContactPhone.Trim()
         // DingTalkUserId 不在员工表单里维护，新建时留空，由「从钉钉导入/自动映射」填充
         // IdCardPhotoUrl 不在这里赋值，由 SaveIdCardPhotoAsync() 上传后单独设置
+        // Role/HireDate 这里用 TryParse 兜底而不是再抛异常：ValidateContact() 已经校验过一遍，正常流程走不到 fallback 分支
     };
 
     /// <summary>

@@ -133,9 +133,10 @@ public class TemplateReportRowDto
     public string  RealName       { get; set; } = string.Empty;
     public string? GroupName      { get; set; }   // 考勤组
     public string? DeptName       { get; set; }   // 部门
-    public string? EmployeeNo     { get; set; }   // 工号
-    public string? Position       { get; set; }   // 职位
-    public string? DingTalkUserId { get; set; }   // 钉钉 UserId
+    public string? EmployeeNo      { get; set; }   // 工号
+    public string? Position        { get; set; }   // 职位
+    public string? ContractCompany { get; set; }   // 合同公司
+    public string? DingTalkUserId  { get; set; }   // 钉钉 UserId（导出报表不显示，仅内部保留）
 
     /// <summary>标准工时（取这段时间里用得最多的那个班次的标准工时，没排过班就是空）</summary>
     public decimal? StandardDailyHours { get; set; }

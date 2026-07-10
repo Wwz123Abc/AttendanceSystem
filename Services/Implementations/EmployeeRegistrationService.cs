@@ -20,13 +20,35 @@ public class EmployeeRegistrationService(AttendanceDbContext db) : IEmployeeRegi
 
         if (string.IsNullOrEmpty(realName))
             throw new InvalidOperationException("请填写姓名");
+        if (realName.Length > 50)
+            throw new InvalidOperationException("姓名不能超过 50 个字");
         if (!Regex.IsMatch(phone, @"^1[3-9]\d{9}$"))
             throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
         if (!Regex.IsMatch(idNumber, @"^\d{17}[\dX]$"))
             throw new InvalidOperationException("请输入正确格式的身份证号（18 位）");
-        // 岗位是页面下拉框固定选项，这里再校验一遍，防止绕过页面直接提交乱填的值
-        if (!string.IsNullOrWhiteSpace(dto.Position) && !IEmployeeRegistrationService.AllowedPositions.Contains(dto.Position))
+
+        // 岗位/劳务公司/住址/紧急联系人/身份证照片：以前是选填，现在改成全部必填，
+        // 员工扫码登记时必须一次性把资料填完整，管理员确认录入时才不用再补问一遍。
+        if (string.IsNullOrWhiteSpace(dto.Position) || !IEmployeeRegistrationService.AllowedPositions.Contains(dto.Position))
             throw new InvalidOperationException("请选择正确的岗位选项");
+        if (string.IsNullOrWhiteSpace(dto.ContractCompany))
+            throw new InvalidOperationException("请填写劳务公司");
+        if (dto.ContractCompany.Trim().Length > 100)
+            throw new InvalidOperationException("劳务公司不能超过 100 个字");
+        if (string.IsNullOrWhiteSpace(dto.HomeAddress))
+            throw new InvalidOperationException("请填写家庭住址");
+        if (dto.HomeAddress.Trim().Length > 200)
+            throw new InvalidOperationException("家庭住址不能超过 200 个字");
+        if (string.IsNullOrWhiteSpace(dto.EmergencyContactName))
+            throw new InvalidOperationException("请填写紧急联系人姓名");
+        if (dto.EmergencyContactName.Trim().Length > 50)
+            throw new InvalidOperationException("紧急联系人姓名不能超过 50 个字");
+        if (string.IsNullOrWhiteSpace(dto.EmergencyContactPhone))
+            throw new InvalidOperationException("请填写紧急联系人电话");
+        if (!Regex.IsMatch(dto.EmergencyContactPhone.Trim(), @"^1[3-9]\d{9}$"))
+            throw new InvalidOperationException("请输入正确格式的紧急联系人电话（11 位中国大陆手机号）");
+        if (string.IsNullOrWhiteSpace(dto.IdCardPhotoUrl))
+            throw new InvalidOperationException("请上传身份证照片");
 
         // 已经是在职员工了，不用再登记一遍，让员工直接联系管理员处理
         var alreadyEmployee = await db.Users.AnyAsync(u => u.Phone == phone || u.IdNumber == idNumber);

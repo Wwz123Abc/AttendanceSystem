@@ -7,8 +7,8 @@ public class AppSettingsOptions
 {
     public const string SectionName = "AppSettings";
 
-    /// <summary>新员工（含钉钉导入）默认初始密码。</summary>
-    public string DefaultPassword { get; set; } = "Abc@12345";
+    /// <summary>新员工（含钉钉导入）默认初始密码。这里是代码兜底值，appsettings.json 里配置的值优先。</summary>
+    public string DefaultPassword { get; set; } = "123456";
 
     /// <summary>登录有效期（小时）。</summary>
     public int TokenExpireHours { get; set; } = 8;

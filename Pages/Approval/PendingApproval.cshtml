@@ -87,8 +87,8 @@
                 <div class="modal-body">
                     <input type="hidden" asp-for="RequestId" id="modalRequestId" />
                     <div class="mb-3">
-                        <label class="form-label">审批意见（可选）</label>
-                        <textarea asp-for="Comment" class="form-control" rows="3" placeholder="请填写审批意见..."></textarea>
+                        <label class="form-label" id="commentLabel">审批意见（可选）</label>
+                        <textarea asp-for="Comment" id="commentInput" class="form-control" rows="3" maxlength="1000" placeholder="请填写审批意见..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -131,6 +131,10 @@ approveModal.addEventListener('show.bs.modal', function(e) {
     submitBtn.textContent = action === 'approve' ? '确认通过' : '确认驳回';
     submitBtn.className = action === 'approve' ? 'btn btn-success' : 'btn btn-danger';
     submitBtn.formAction = action === 'approve' ? '?handler=Approve' : '?handler=Reject';
+    // 驳回必须说明原因，方便申请人知道被拒的理由；通过则和以前一样，意见选填
+    const commentInput = document.getElementById('commentInput');
+    commentInput.required = action !== 'approve';
+    document.getElementById('commentLabel').textContent = action === 'approve' ? '审批意见（可选）' : '驳回原因（必填）';
 });
 
 const APPROVAL_DETAILS = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(

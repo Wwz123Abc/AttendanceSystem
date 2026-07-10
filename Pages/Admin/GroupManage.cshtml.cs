@@ -2,8 +2,10 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Admin;
@@ -13,8 +15,18 @@ namespace AttendanceSystem.Pages.Admin;
 /// 支持配一个或多个打卡地点、勾选长期跟随本组的部门（替代以前"一个部门一个考勤组"的自动同步）。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class GroupManageModel(AttendanceDbContext db, IAttendanceGroupService groupService) : PageModel
+public class GroupManageModel(
+    AttendanceDbContext db,
+    IAttendanceGroupService groupService,
+    IOptions<AMapOptions> amapOptions) : PageModel
 {
+    /// <summary>高德地图 Web端(JS API) Key（配置了才会在页面上加载地图选点功能）。</summary>
+    public string AMapJsKey => amapOptions.Value.JsApiKey;
+    /// <summary>高德地图安全密钥（配套 Key 一起用）。</summary>
+    public string AMapSecurityCode => amapOptions.Value.SecurityJsCode;
+    /// <summary>是否已配置好高德地图 Key，决定"地图选点"按钮要不要显示。</summary>
+    public bool AMapEnabled => !string.IsNullOrWhiteSpace(AMapJsKey);
+
     // 列表里每项是 (考勤组, 该组在职人数)
     public List<(AttendanceGroup Group, int UserCount)> Groups { get; set; } = [];
     public string? SuccessMessage { get; set; }
@@ -120,6 +132,17 @@ public class GroupManageModel(AttendanceDbContext db, IAttendanceGroupService gr
     public async Task<IActionResult> OnPostSaveAsync()
     {
         if (string.IsNullOrWhiteSpace(GroupName)) { ErrorMessage = "考勤组名称不能为空"; await OnGetAsync(); return Page(); }
+        if (GroupName.Trim().Length > 100) { ErrorMessage = "考勤组名称不能超过 100 个字"; await OnGetAsync(); return Page(); }
+        if (LunchBreak is < 0 or > 120) { ErrorMessage = "午休时长请填 0-120 分钟之间"; await OnGetAsync(); return Page(); }
+        if (DinnerBreak is < 0 or > 120) { ErrorMessage = "晚餐时长请填 0-120 分钟之间"; await OnGetAsync(); return Page(); }
+        foreach (var loc in Locations)
+        {
+            if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;   // 没填全经纬度的行本来就会被跳过，不用校验
+            if (loc.Latitude.Value is < -90 or > 90) { ErrorMessage = "打卡地点纬度不正确（应在 -90 到 90 之间）"; await OnGetAsync(); return Page(); }
+            if (loc.Longitude.Value is < -180 or > 180) { ErrorMessage = "打卡地点经度不正确（应在 -180 到 180 之间）"; await OnGetAsync(); return Page(); }
+            if (loc.Radius is < 0 or > 5000) { ErrorMessage = "打卡范围半径请填 0-5000 米之间"; await OnGetAsync(); return Page(); }
+            if (loc.Name?.Trim().Length > 200) { ErrorMessage = "打卡地点名称不能超过 200 个字"; await OnGetAsync(); return Page(); }
+        }
 
         try
         {

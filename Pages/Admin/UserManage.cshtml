@@ -424,11 +424,11 @@
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label">工号 <span class="text-danger">*</span></label>
-                            <input asp-for="EmployeeNo" class="form-control" id="fEmployeeNo" required />
+                            <input asp-for="EmployeeNo" class="form-control" id="fEmployeeNo" required maxlength="50" />
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">姓名 <span class="text-danger">*</span></label>
-                            <input asp-for="RealName" class="form-control" id="fRealName" required />
+                            <input asp-for="RealName" class="form-control" id="fRealName" required maxlength="50" />
                         </div>
                         <div class="col-md-6" id="pwdRow">
                             <label class="form-label">初始密码</label>
@@ -472,7 +472,7 @@
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">岗位</label>
-                            <input asp-for="Position" class="form-control" id="fPosition" />
+                            <input asp-for="Position" class="form-control" id="fPosition" maxlength="100" />
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">手机 <span class="text-danger" id="fPhoneReq">*</span></label>
@@ -492,20 +492,21 @@
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">合同公司</label>
-                            <input asp-for="ContractCompany" class="form-control" id="fContractCompany" placeholder="如：科瑞技术有限公司" />
+                            <input asp-for="ContractCompany" class="form-control" id="fContractCompany" maxlength="100" placeholder="如：科瑞技术有限公司" />
                             <div class="form-text">员工实际签合同、发工资的公司主体（可能和所属部门的公司不是同一家）。</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">紧急联系人姓名</label>
-                            <input asp-for="EmergencyContactName" class="form-control" id="fEmergencyContactName" placeholder="如：本人配偶/父母" />
+                            <input asp-for="EmergencyContactName" class="form-control" id="fEmergencyContactName" maxlength="50" placeholder="如：本人配偶/父母" />
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">紧急联系人电话</label>
-                            <input asp-for="EmergencyContactPhone" class="form-control" id="fEmergencyContactPhone" type="tel" maxlength="11" />
+                            <input asp-for="EmergencyContactPhone" class="form-control" id="fEmergencyContactPhone" type="tel" maxlength="11"
+                                   pattern="^1[3-9]\d{9}$" title="请输入正确格式的手机号（11 位中国大陆手机号）" />
                         </div>
                         <div class="col-md-12">
                             <label class="form-label">家庭住址</label>
-                            <input asp-for="HomeAddress" class="form-control" id="fHomeAddress" placeholder="如：广东省东莞市xx镇xx街xx号" />
+                            <input asp-for="HomeAddress" class="form-control" id="fHomeAddress" maxlength="200" placeholder="如：广东省东莞市xx镇xx街xx号" />
                         </div>
                         <div class="col-md-12">
                             <label class="form-label">身份证照片</label>
@@ -589,6 +590,22 @@ const SELECTED_DEPT = @(Model.SelectedDeptId?.ToString() ?? "null");
 
 function toggleAll(cb) { document.querySelectorAll('.row-check').forEach(c => c.checked = cb.checked); }
 
+// ── 工号自动生成：新增/确认录入时，选定部门后自动去后台按"公司"前缀+流水号生成工号 ──
+// 只在"新增"和"确认录入"这两个场景生效（编辑老员工时工号已经定了，不应该跟着部门乱变）。
+let autoFillEmployeeNo = false;
+
+async function fillEmployeeNoForDept(deptId) {
+    if (!autoFillEmployeeNo || !deptId) return;
+    try {
+        const resp = await fetch(`?handler=GenerateEmployeeNo&deptId=${deptId}`);
+        const data = await resp.json();
+        if (data.employeeNo) document.getElementById('fEmployeeNo').value = data.employeeNo;
+    } catch (e) { /* 生成失败就静默忽略，不影响手动填写工号 */ }
+}
+document.getElementById('fDeptId').addEventListener('change', function () {
+    fillEmployeeNoForDept(this.value);
+});
+
 // ── 左侧部门树：默认折叠，点箭头展开/收起（点名字仍是筛选，不受影响）────────
 function deptToggle(ev, id, icon) {
     ev.preventDefault(); ev.stopPropagation();
@@ -662,6 +679,8 @@ function openAdd() {
     document.getElementById('fPhone').required = true;             // 新建必须填手机号
     document.getElementById('fPhoneReq').style.display = '';
     document.getElementById('fDingTalkStatus').textContent = '';   // 新建员工还没有钉钉绑定状态，不显示
+    autoFillEmployeeNo = true;
+    fillEmployeeNoForDept(document.getElementById('fDeptId').value);   // 默认部门已选中时，直接按它生成一次
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
 
@@ -713,6 +732,8 @@ function openConfirm(data) {
     document.getElementById('fSuperId').value    = '';
     document.getElementById('fPhone').required   = true;
     document.getElementById('fPhoneReq').style.display = '';
+    autoFillEmployeeNo = true;
+    fillEmployeeNoForDept(document.getElementById('fDeptId').value);   // 默认部门已选中时，直接按它生成一次
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
 
@@ -726,6 +747,7 @@ function openResetPwd(id, name) {
 
 // 编辑
 function openEdit(data) {
+    autoFillEmployeeNo = false;   // 编辑老员工，工号已经定了，切换部门不应该跟着自动改工号
     document.getElementById('userModalTitle').textContent = '编辑员工 - ' + data.realName;
     document.getElementById('userForm').action = '?handler=Update';
     document.getElementById('userSubmitBtn').textContent = '保存';

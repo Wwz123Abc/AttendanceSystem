@@ -39,6 +39,10 @@ builder.Services.Configure<AppSettingsOptions>(
 var appSettings = builder.Configuration.GetSection(AppSettingsOptions.SectionName)
                       .Get<AppSettingsOptions>() ?? new AppSettingsOptions();
 
+// 高德地图 Web端(JS API) 配置：考勤组管理页"打卡地点"用来做地址搜索/地图选点
+builder.Services.Configure<AMapOptions>(
+    builder.Configuration.GetSection(AMapOptions.SectionName));
+
 // ── 登录认证：用 Cookie 记住登录状态 ─────────────────────────────────────────────
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>

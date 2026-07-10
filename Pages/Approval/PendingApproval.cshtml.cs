@@ -32,6 +32,17 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
     /// <summary>点“通过”时执行。</summary>
     public async Task<IActionResult> OnPostApproveAsync()
     {
+        // 意见是选填项：textarea 留空提交时，模型绑定会把空字符串转成 null（ASP.NET Core 默认行为），
+        // 不能直接 Comment.Trim()，否则没填意见就点“通过”必然报空引用异常
+        Comment ??= string.Empty;
+        if (Comment.Trim().Length > 1000)
+        {
+            Message   = "审批意见不能超过 1000 个字";
+            IsSuccess = false;
+            PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+            return Page();
+        }
+
         var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
         {
             ApprovalRequestId = RequestId,
@@ -44,9 +55,24 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
         return Page();
     }
 
-    /// <summary>点“驳回”时执行。</summary>
+    /// <summary>点“驳回”时执行。驳回必须填写意见，方便申请人知道被拒的原因。</summary>
     public async Task<IActionResult> OnPostRejectAsync()
     {
+        if (string.IsNullOrWhiteSpace(Comment))
+        {
+            Message   = "驳回时请填写审批意见";
+            IsSuccess = false;
+            PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+            return Page();
+        }
+        if (Comment.Trim().Length > 1000)
+        {
+            Message   = "审批意见不能超过 1000 个字";
+            IsSuccess = false;
+            PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+            return Page();
+        }
+
         var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
         {
             ApprovalRequestId = RequestId,
