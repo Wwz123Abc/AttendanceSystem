@@ -17,11 +17,12 @@ public enum AttendanceStatus
     BusinessTrip = 9  // 出差：已通过出差审批，出差期间算全勤，不需要打卡
 }
 
-/// <summary>打卡类型：这次打卡是上班还是下班。</summary>
+/// <summary>打卡类型：这次打卡是上班、下班，还是午间必打卡。</summary>
 public enum PunchType
 {
     ClockIn  = 1,  // 上班打卡
-    ClockOut = 2   // 下班打卡
+    ClockOut = 2,  // 下班打卡
+    MidCheck = 3   // 午间打卡（本地打卡页专用；钉钉同步的打卡按时间是否落在窗口内判定，不依赖这个类型，见 DingTalkSyncService）
 }
 
 /// <summary>班次类型：这个班次的上下班时间规则是哪一种。</summary>

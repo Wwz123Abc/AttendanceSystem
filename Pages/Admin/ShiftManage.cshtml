@@ -86,7 +86,13 @@
                                     @if (s.IsCrossDay) { <small class="text-muted">夜班/跨天</small> }
                                 </td>
                                 <td class="small text-muted">@s.AttendanceGroup?.GroupName</td>
-                                <td class="small">@s.WorkStartTime.ToString("HH:mm")~@s.WorkEndTime.ToString("HH:mm")</td>
+                                <td class="small">
+                                    @s.WorkStartTime.ToString("HH:mm")~@s.WorkEndTime.ToString("HH:mm")
+                                    @if (s.MidCheckStartTime is not null && s.MidCheckEndTime is not null)
+                                    {
+                                        <br /><small class="text-muted">午间必打卡 @s.MidCheckStartTime.Value.ToString("HH:mm")-@s.MidCheckEndTime.Value.ToString("HH:mm")</small>
+                                    }
+                                </td>
                                 <td class="small text-muted">
                                     @(restDays.Count > 0
                                         ? "周" + string.Join("、", restDays.OrderBy(d => (int)d).Select(d => weekShort[(int)d]))
@@ -99,7 +105,8 @@
                                                      @s.LateToleranceMinutes,@s.EarlyLeaveToleranceMinutes,
                                                      @s.EarliestClockInMinutes,@s.OvertimeThresholdMinutes,
                                                      @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,'@s.Color',
-                                                     '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(restDays.Select(d => (int)d)))')">
+                                                     '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(restDays.Select(d => (int)d)))',
+                                                     '@(s.MidCheckStartTime?.ToString("HH:mm"))','@(s.MidCheckEndTime?.ToString("HH:mm"))')">
                                         <i class="bi bi-pencil"></i>
                                     </button>
                                     <form method="post" asp-page-handler="DeleteShift" class="d-inline"
@@ -306,6 +313,18 @@
                                 <label class="form-check-label" for="fCross">跨天班次（夜班）</label>
                             </div>
                         </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">
+                                午间必打卡开始 <small class="text-muted fw-normal">（选填）</small>
+                            </label>
+                            <input asp-for="MidCheckStart" id="fMS" type="time" class="form-control" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold">
+                                午间必打卡结束 <small class="text-muted fw-normal">（两个都留空＝不要求；按本班次实际时间段设置，如下午班/晚班就填其对应中段）</small>
+                            </label>
+                            <input asp-for="MidCheckEnd" id="fME" type="time" class="form-control" />
+                        </div>
                         <div class="col-12">
                             <label class="form-label fw-semibold">
                                 每周休息日 <small class="text-muted fw-normal">（勾选的这几天不用上班；三班倒等特殊班次可以自由选，不用局限于周六周日）</small>
@@ -355,12 +374,14 @@ function openAddShift() {
     document.getElementById('fSH').value = 8;
     document.getElementById('fCross').checked = false;
     document.getElementById('fSColor').value = '#1890ff';
+    document.getElementById('fMS').value = '';
+    document.getElementById('fME').value = '';
     setRestDays([0, 6]);   // 新建默认周六周日休息，和后台的默认值保持一致
     shiftModal.show();
 }
 
 // 点某个班次的"编辑"：把这个班次现有的各项值填进弹窗表单，方便直接在原有基础上改
-function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, restDaysJson) {
+function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, restDaysJson, midStart, midEnd) {
     document.getElementById('shiftModalTitle').textContent = '编辑班次';
     document.getElementById('shiftId').value = id;   // 非 0，OnPostSaveShiftAsync 据此判断是"修改"
     document.getElementById('shiftGroupId').value = gid;
@@ -373,6 +394,8 @@ function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, 
     document.getElementById('fSH').value = sh;
     document.getElementById('fCross').checked = cross;
     document.getElementById('fSColor').value = color;
+    document.getElementById('fMS').value = midStart || '';
+    document.getElementById('fME').value = midEnd || '';
     setRestDays(JSON.parse(restDaysJson || '[]'));
     shiftModal.show();
 }

@@ -76,8 +76,12 @@ public class AttendanceRecordDto
     public DateTime? ClockInTime  { get; set; }
     public DateTime? ClockOutTime { get; set; }
 
+    /// <summary>午间必打卡时间：班次没配置午间窗口，或配了但当天没打，都是空。</summary>
+    public DateTime? MidCheckTime { get; set; }
+
     public string ClockInText  => ClockInTime?.ToString("HH:mm")  ?? "--";   // 上班时间文字，没打卡显示 --
     public string ClockOutText => ClockOutTime?.ToString("HH:mm") ?? "--";   // 下班时间文字
+    public string MidCheckText => MidCheckTime?.ToString("HH:mm") ?? "--";   // 午间打卡时间文字
 
     public AttendanceStatus AttendanceStatus  { get; set; }                  // 考勤状态
     public string           StatusText        { get; set; } = string.Empty;  // 状态中文名

@@ -36,8 +36,22 @@ public class ShiftSchedule
     /// <summary>最多可提前多少分钟打上班卡</summary>
     public int EarliestClockInMinutes { get; set; } = 60;
 
-    /// <summary>超过下班时间多少分钟才算加班</summary>
+    /// <summary>
+    /// 超过下班时间多少分钟才算加班——说明：这个字段现在没有真正被用起来。
+    /// 加班已改成"必须提交加班申请、审批通过才算钱"，不再从打卡时间自动估算，
+    /// 所以这个阈值目前不影响任何计算，跟 EarliestClockInMinutes 是同一种情况。
+    /// </summary>
     public int OvertimeThresholdMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// 午间必打卡窗口（如 8-18 点的班配 12:00~13:00）：两个都配置了才生效，留空表示这个班次不要求。
+    /// 不同班次时间段不一样，由管理员在班次管理页按这个班次自己的时间段设置（下午班/晚班配各自中段的时间）。
+    /// 窗口内只要有任意一次打卡（不分上/下班类型）就算满足；缺失则当天工时只算下午（见 AttendanceRecord.MidCheckTime）。
+    /// </summary>
+    public TimeOnly? MidCheckStartTime { get; set; }
+
+    /// <summary>午间必打卡窗口结束时间，配合 MidCheckStartTime 使用。</summary>
+    public TimeOnly? MidCheckEndTime { get; set; }
 
     /// <summary>是否跨天班次（如夜班，下班时间落到第二天）</summary>
     public bool IsCrossDay { get; set; } = false;

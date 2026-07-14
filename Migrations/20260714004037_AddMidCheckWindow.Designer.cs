@@ -4,6 +4,7 @@ using AttendanceSystem.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AttendanceSystem.Migrations
 {
     [DbContext(typeof(AttendanceDbContext))]
-    partial class AttendanceDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260714004037_AddMidCheckWindow")]
+    partial class AddMidCheckWindow
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -132,7 +135,7 @@ namespace AttendanceSystem.Migrations
 
                     b.HasIndex("ApplicantUserId", "ApprovalStatus");
 
-                    b.ToTable("ApprovalRequest", (string)null);
+                    b.ToTable("ApprovalRequest");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ApprovalStep", b =>
@@ -182,7 +185,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("ApproverUserId")
                         .HasDatabaseName("IX_ApprovalStep_ApproverUserId");
 
-                    b.ToTable("ApprovalStep", (string)null);
+                    b.ToTable("ApprovalStep");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroup", b =>
@@ -236,7 +239,7 @@ namespace AttendanceSystem.Migrations
                     b.HasKey("Id")
                         .HasName("PK_AttendanceGroup");
 
-                    b.ToTable("AttendanceGroup", (string)null);
+                    b.ToTable("AttendanceGroup");
 
                     b.HasData(
                         new
@@ -279,7 +282,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("AttendanceGroupId", "UserId")
                         .IsUnique();
 
-                    b.ToTable("AttendanceGroupApprover", (string)null);
+                    b.ToTable("AttendanceGroupApprover");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroupLocation", b =>
@@ -318,7 +321,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("AttendanceGroupId")
                         .HasDatabaseName("IX_AttendanceGroupLocation_AttendanceGroupId");
 
-                    b.ToTable("AttendanceGroupLocation", (string)null);
+                    b.ToTable("AttendanceGroupLocation");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendancePunch", b =>
@@ -377,7 +380,7 @@ namespace AttendanceSystem.Migrations
 
                     b.HasIndex("UserId", "PunchTime");
 
-                    b.ToTable("AttendancePunch", (string)null);
+                    b.ToTable("AttendancePunch");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceRecord", b =>
@@ -470,7 +473,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("UserId", "WorkDate")
                         .IsUnique();
 
-                    b.ToTable("AttendanceRecord", (string)null);
+                    b.ToTable("AttendanceRecord");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Department", b =>
@@ -536,7 +539,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("ParentId")
                         .HasDatabaseName("IX_Department_ParentId");
 
-                    b.ToTable("Department", (string)null);
+                    b.ToTable("Department");
 
                     b.HasData(
                         new
@@ -640,7 +643,7 @@ namespace AttendanceSystem.Migrations
 
                     b.HasIndex("Phone");
 
-                    b.ToTable("EmployeeRegistration", (string)null);
+                    b.ToTable("EmployeeRegistration");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Holiday", b =>
@@ -687,7 +690,7 @@ namespace AttendanceSystem.Migrations
 
                     b.HasIndex("HolidayDate", "AttendanceGroupId");
 
-                    b.ToTable("Holiday", (string)null);
+                    b.ToTable("Holiday");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.MonthlyAttendanceSummary", b =>
@@ -765,7 +768,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("UserId", "Year", "Month")
                         .IsUnique();
 
-                    b.ToTable("MonthlyAttendanceSummary", (string)null);
+                    b.ToTable("MonthlyAttendanceSummary");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Notification", b =>
@@ -821,7 +824,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("UserId")
                         .HasDatabaseName("IX_Notification_UserId");
 
-                    b.ToTable("Notification", (string)null);
+                    b.ToTable("Notification");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftAssignment", b =>
@@ -862,7 +865,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("UserId", "WorkDate")
                         .IsUnique();
 
-                    b.ToTable("ShiftAssignment", (string)null);
+                    b.ToTable("ShiftAssignment");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftSchedule", b =>
@@ -958,7 +961,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("AttendanceGroupId")
                         .HasDatabaseName("IX_ShiftSchedule_AttendanceGroupId");
 
-                    b.ToTable("ShiftSchedule", (string)null);
+                    b.ToTable("ShiftSchedule");
 
                     b.HasData(
                         new
@@ -1124,7 +1127,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("SupervisorUserId")
                         .HasDatabaseName("IX_User_SupervisorUserId");
 
-                    b.ToTable("User", (string)null);
+                    b.ToTable("User");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ApprovalRequest", b =>

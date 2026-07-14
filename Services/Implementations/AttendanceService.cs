@@ -146,6 +146,12 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             lateMinutes             = lateMin > 0 ? lateMin : null;
             message = lateMin > 0 ? $"上班打卡成功，迟到 {lateMin} 分钟" : "上班打卡成功";
         }
+        else if (request.PunchType == PunchType.MidCheck)   // ── 午间打卡 ──
+        {
+            // 打卡流水已经在上面写好了；这里不改上下班时间/状态，工时结算在下班打卡时统一算（见 ResolveEffectiveClockInAsync）
+            status  = record.AttendanceStatus;
+            message = "午间打卡成功";
+        }
         else                                          // ── 下班卡 ──
         {
             record.ClockOutTime = punchTime;
@@ -162,11 +168,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 message = "下班打卡成功";
             }
 
-            // 上下班卡都齐了，算实际工时和加班时长
+            // 上下班卡都齐了，算实际工时（不早于应上班时间、不晚于应下班时间——早到晚走都不多算钱）。
+            // 加班不再从打卡时间估算：只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
             if (record.ClockInTime.HasValue)
             {
-                record.ActualWorkHours  = CalcWorkHours(record.ClockInTime.Value, punchTime, user.AttendanceGroupId);
-                record.OvertimeHours    = CalcOvertimeHours(workDate, punchTime, shift);
+                var effectiveClockIn   = await ResolveEffectiveClockInAsync(record, workDate, record.ClockInTime.Value, shift);
+                var effectiveClockOut  = ClampEffectiveClockOut(workDate, punchTime, shift);
+                record.ActualWorkHours = CalcWorkHours(effectiveClockIn, effectiveClockOut, user.AttendanceGroupId);
             }
         }
 
@@ -572,10 +580,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             {
                 if (r.ActualWorkHours <= 0 && r.ClockInTime is { } ci && r.ClockOutTime is { } co && co > ci)
                 {
-                    r.ActualWorkHours = ComputeWorkHours(ci, co, lunch, dinner);
-                    r.OvertimeHours   = shiftByDate.TryGetValue(r.WorkDate, out var shift)
-                        ? CalcOvertimeHours(r.WorkDate, co, shift)
-                        : Math.Max(0, Math.Round(r.ActualWorkHours - 8m, 2));   // 无排班时：超 8 小时的部分估为加班
+                    // 老数据补算工时口径要和写入时一致：早到晚走都不多算钱，加班只认审批（这里不猜、不动 OvertimeHours）
+                    shiftByDate.TryGetValue(r.WorkDate, out var shift);
+                    var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, r.MidCheckTime);
+                    var effCo = ClampEffectiveClockOut(r.WorkDate, co, shift);
+                    r.ActualWorkHours = ComputeWorkHours(effCi, effCo, lunch, dinner);
                 }
                 // 每天的工时/加班按"半小时"为最小单位取整后再累加（不足半小时舍去），
                 // 保证月度报表上的合计只会是整数或 x.5，不会出现 113.38 这种零碎小数
@@ -724,8 +733,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
              .FirstOrDefaultAsync(a => a.UserId == userId && a.WorkDate == date);
 
     /// <summary>
-    /// 审批通过后回写考勤：补卡 → 补填上/下班时间；请假 → 把请假区间内每天置为「请假」。
-    /// 只处理状态为「已通过」的申请。
+    /// 审批通过后回写考勤：补卡 → 补填上/下班时间；加班 → 按审批单时长累加加班工时（加班不再从
+    /// 打卡时间估算，必须走这里）；请假/出差 → 把区间内每天置为对应状态。只处理状态为「已通过」的申请。
     /// </summary>
     public async Task UpdateAttendanceAfterApprovalAsync(int approvalRequestId)
     {
@@ -752,22 +761,42 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             record.ApprovalNote = $"补卡已审批通过（{approval.RequestNo}）";
             record.UpdatedAt    = DateTime.Now;
 
-            // 补齐上下班两次卡后：重算当天实际工时和加班（工资按工时结算，补完卡必须把工时补准），
+            // 补齐上下班两次卡后：重算当天实际工时（工资按工时结算，补完卡必须把工时补准），
             // 并解除“旷工/未打卡”状态（否则人有全天工时却仍被记旷工，工资和出勤对不上）。
+            // 加班不再从打卡时间估算，只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
             if (record.ClockInTime is { } ci && record.ClockOutTime is { } co && co > ci)
             {
-                var applicant = await db.Users.FindAsync(approval.ApplicantUserId);
-                record.ActualWorkHours = CalcWorkHours(ci, co, applicant?.AttendanceGroupId);
-
-                // 加班：当天有排班就按班次的下班时间+起算阈值精确算，没排班就不猜（和本地打卡口径一致）
+                var applicant   = await db.Users.FindAsync(approval.ApplicantUserId);
                 var shiftAssign = await GetShiftAssignmentAsync(approval.ApplicantUserId, record.WorkDate);
-                record.OvertimeHours = shiftAssign is not null ? CalcOvertimeHours(record.WorkDate, co, shiftAssign.ShiftSchedule) : 0;
+
+                // 工时口径和本地打卡一致：早到晚走都不多算钱，班次配了午间必打卡窗口、当天又没有打卡落在窗口内，只算下午
+                var effectiveClockIn  = await ResolveEffectiveClockInAsync(record, record.WorkDate, ci, shiftAssign?.ShiftSchedule);
+                var effectiveClockOut = ClampEffectiveClockOut(record.WorkDate, co, shiftAssign?.ShiftSchedule);
+                record.ActualWorkHours = CalcWorkHours(effectiveClockIn, effectiveClockOut, applicant?.AttendanceGroupId);
 
                 if (record.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.NotPunched)
                     record.AttendanceStatus = record.LateMinutes > 0       ? AttendanceStatus.Late
                                             : record.EarlyLeaveMinutes > 0 ? AttendanceStatus.EarlyLeave
                                             :                                AttendanceStatus.Normal;
             }
+        }
+        // ── 加班 ──：加班时长完全以审批单为准，不从打卡时间估算；累加到当天的加班时长上
+        // （同一天可能有多张已批准的加班单，所以是加，不是覆盖）
+        else if (approval.ApprovalType == ApprovalType.Overtime && approval.OvertimeStartTime.HasValue
+                 && approval.OvertimeDurationHours is > 0)
+        {
+            var workDate = DateOnly.FromDateTime(approval.OvertimeStartTime.Value);
+            var record = await db.AttendanceRecords
+                .FirstOrDefaultAsync(r => r.UserId == approval.ApplicantUserId && r.WorkDate == workDate);
+            if (record is null)
+            {
+                record = new AttendanceRecord { UserId = approval.ApplicantUserId, WorkDate = workDate };
+                db.AttendanceRecords.Add(record);
+            }
+
+            record.OvertimeHours += approval.OvertimeDurationHours.Value;
+            record.ApprovalNote   = $"加班已审批通过（{approval.RequestNo}），{approval.OvertimeDurationHours:0.##} 小时";
+            record.UpdatedAt      = DateTime.Now;
         }
         // ── 请假 ──
         else if (approval.ApprovalType == ApprovalType.Leave && approval.LeaveStartTime.HasValue)
@@ -880,6 +909,85 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>
+    /// 算"有效上班时间"（供工时计算用）：查当天有没有任意一次打卡（不分类型）落在班次配置的
+    /// 午间必打卡窗口内（没配窗口的跳过这步），顺带把命中的打卡时间写回 record.MidCheckTime，
+    /// 再交给 <see cref="ClampEffectiveClockIn"/> 统一算出最终的有效上班时间。
+    /// </summary>
+    private async Task<DateTime> ResolveEffectiveClockInAsync(
+        AttendanceRecord record, DateOnly workDate, DateTime clockIn, ShiftSchedule? shift)
+    {
+        if (shift?.MidCheckStartTime is null || shift.MidCheckEndTime is null)
+        {
+            record.MidCheckTime = null;
+        }
+        else
+        {
+            var windowStart = ResolveShiftTime(workDate, shift.MidCheckStartTime.Value, shift);
+            var windowEnd   = ResolveShiftTime(workDate, shift.MidCheckEndTime.Value, shift);
+            var hit = await db.AttendancePunches
+                .Where(p => p.UserId == record.UserId && p.PunchTime >= windowStart && p.PunchTime <= windowEnd)
+                .OrderBy(p => p.PunchTime)
+                .FirstOrDefaultAsync();
+            record.MidCheckTime = hit?.PunchTime;
+        }
+
+        return ClampEffectiveClockIn(workDate, clockIn, shift, record.MidCheckTime);
+    }
+
+    /// <summary>
+    /// 把班次里的某个"钟点"（比如午间必打卡的开始/结束时间）换算成 workDate 当天的具体时刻。
+    /// 跨天班次（夜班）要判断这个钟点是在午夜前还是午夜后：比应上班时刻还早，说明已经跨过午夜，
+    /// 落在 workDate 的第二天（比如 22:00 上班的夜班，配了 02:00~03:00 的窗口，02:00 早于 22:00，
+    /// 就该顺延到第二天凌晨，不能按 workDate 当天的 02:00 算，那样会比上班时间还早，完全不对）。
+    /// </summary>
+    public static DateTime ResolveShiftTime(DateOnly workDate, TimeOnly time, ShiftSchedule shift)
+    {
+        var dt = workDate.ToDateTime(time);
+        if (shift.IsCrossDay && time < shift.WorkStartTime) dt = dt.AddDays(1);
+        return dt;
+    }
+
+    /// <summary>
+    /// 算"有效上班时间"（供工时计算用），两条规则叠加，谁把时间往后推得更多就用谁：
+    /// 1) 不能靠提前打卡多算钱：有效上班时间不早于排班的应上班时间；
+    /// 2) 班次配了午间必打卡窗口、当天又没有任何打卡落在窗口内的，视为"上午没上班"，
+    ///    从窗口结束时间起算（只算下午，工资相关，不影响迟到/早退判定）。
+    /// ★ 全系统唯一口径：本地打卡、钉钉同步、补卡回写都调这一个，保证结果一致。
+    /// </summary>
+    public static DateTime ClampEffectiveClockIn(DateOnly workDate, DateTime clockIn, ShiftSchedule? shift, DateTime? midCheckTime)
+    {
+        var effective = clockIn;
+
+        if (shift is not null)
+        {
+            var scheduledStart = workDate.ToDateTime(shift.WorkStartTime);
+            if (scheduledStart > effective) effective = scheduledStart;
+        }
+
+        if (midCheckTime is null && shift?.MidCheckEndTime is not null)
+        {
+            var windowEnd = ResolveShiftTime(workDate, shift.MidCheckEndTime.Value, shift);
+            if (windowEnd > effective) effective = windowEnd;
+        }
+
+        return effective;
+    }
+
+    /// <summary>
+    /// 算"有效下班时间"（供工时计算用）：不能靠晚走多算钱，有效下班时间不晚于排班的应下班时间
+    /// （跨天班次顺延到第二天）；提前下班（早退）不受影响，仍按实际下班时间算，正常反映早退少算的工时。
+    /// 加班不再从打卡时间估算，只认「加班申请」审批通过后累加到 OvertimeHours 的时长。
+    /// ★ 全系统唯一口径：本地打卡、钉钉同步、补卡回写都调这一个，保证结果一致。
+    /// </summary>
+    public static DateTime ClampEffectiveClockOut(DateOnly workDate, DateTime clockOut, ShiftSchedule? shift)
+    {
+        if (shift is null) return clockOut;
+        var scheduledEnd = workDate.ToDateTime(shift.WorkEndTime);
+        if (shift.IsCrossDay) scheduledEnd = scheduledEnd.AddDays(1);
+        return scheduledEnd < clockOut ? scheduledEnd : clockOut;
+    }
+
+    /// <summary>
     /// 把工时数规范成"半小时"为最小单位：不足半小时的零头舍去（1.2→1.0，1.7→1.5，1.5 不变）。
     /// 月度报表里所有对外展示/导出的工时合计都过这一道，保证只会出现整数或 x.5，
     /// 和"每日格子舍去小数"是同一个"不足不计"的口径（工资按工时结算，宁少勿多）。
@@ -946,22 +1054,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>
-    /// 算加班工时（小时）：下班打卡超过「应下班 + 加班起算阈值」的部分才算加班；没到阈值不算。
-    /// （公开给钉钉同步复用，保证加班口径一致。）
-    /// ★ "应下班时刻"以 <paramref name="workDate"/>（这条考勤记录归属的那一天，即班次开始的那天）为基准推算，
-    /// 不能用 clockOut 打卡那一刻的日期——跨天班次下班时打卡已经是第二天了，
-    /// 拿打卡当天的日期再顺延一天会多算出一整天，导致加班时长算错（甚至算不出加班）。
-    /// </summary>
-    public static decimal CalcOvertimeHours(DateOnly workDate, DateTime clockOut, ShiftSchedule? shift)
-    {
-        if (shift is null) return 0;
-        var scheduled = workDate.ToDateTime(shift.WorkEndTime);
-        if (shift.IsCrossDay) scheduled = scheduled.AddDays(1);
-        var diff = (decimal)(clockOut - scheduled).TotalMinutes;   // 比应下班晚了多少
-        return diff > shift.OvertimeThresholdMinutes ? Math.Round(diff / 60, 2) : 0;
-    }
-
-    /// <summary>
     /// 算一段时间内的应出勤天数（逐天判断）：
     /// ● 调班补班日：哪怕是周末也算出勤；
     /// ● 普通工作日：只要不是法定节假日/公司休息日，就算出勤。
@@ -1005,6 +1097,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         WorkDate         = r.WorkDate,
         ClockInTime      = r.ClockInTime,
         ClockOutTime     = r.ClockOutTime,
+        MidCheckTime     = r.MidCheckTime,
         AttendanceStatus = r.AttendanceStatus,
         StatusText       = StatusText(r.AttendanceStatus),
         StatusCssClass   = StatusCss(r.AttendanceStatus),

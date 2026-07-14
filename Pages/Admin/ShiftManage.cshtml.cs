@@ -56,6 +56,12 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     [BindProperty] public string  ShiftColor { get; set; } = "#1890ff";
     /// <summary>每周休息日（勾选的星期几，0=周日...6=周六）</summary>
     [BindProperty] public List<int> RestDays { get; set; } = [];
+    /// <summary>
+    /// 班中必打卡窗口（可选，两个都留空=不要求）：不同班次时间段不一样，需要管理员按各班次的
+    /// 实际上下班时间自己设置（比如 8-18 点的班配 12-13 点；下午班/晚班配对应中段的时间）。
+    /// </summary>
+    [BindProperty] public string? MidCheckStart { get; set; }
+    [BindProperty] public string? MidCheckEnd   { get; set; }
 
     // ── 排班表单字段 ──
     [BindProperty] public int       AssignShiftId { get; set; }        // 排哪个班次
@@ -136,6 +142,22 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
             if (!System.Text.RegularExpressions.Regex.IsMatch(ShiftColor, "^#[0-9A-Fa-f]{6}$"))
                 throw new Exception("班次颜色格式不正确");
 
+            // 午间必打卡窗口：两个都留空＝不要求；填了就必须成对、且开始早于结束
+            // （不同班次时间不一样，由管理员按这个班次自己的上下班时间去设置对应的中段窗口，
+            //  比如 8-18 点的班配 12-13 点；下午班/晚班配各自班次中段的时间）
+            TimeOnly? midStart = null, midEnd = null;
+            var hasMidStart = !string.IsNullOrWhiteSpace(MidCheckStart);
+            var hasMidEnd   = !string.IsNullOrWhiteSpace(MidCheckEnd);
+            if (hasMidStart || hasMidEnd)
+            {
+                if (!hasMidStart || !hasMidEnd) throw new Exception("午间必打卡窗口要么都填，要么都留空");
+                if (!TimeOnly.TryParse(MidCheckStart, out var ms) || !TimeOnly.TryParse(MidCheckEnd, out var me))
+                    throw new Exception("午间必打卡窗口时间格式不正确");
+                if (me <= ms) throw new Exception("午间必打卡窗口的结束时间要晚于开始时间");
+                midStart = ms;
+                midEnd   = me;
+            }
+
             // 把勾选的星期几（0=周日...6=周六）拼成逗号分隔的字符串存起来
             var restDaysCsv = string.Join(",", RestDays.Where(d => d is >= 0 and <= 6).Distinct().OrderBy(d => d));
 
@@ -155,6 +177,8 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
                     StandardWorkHours          = StdHours,
                     Color                      = ShiftColor,
                     RestDaysOfWeek             = restDaysCsv,
+                    MidCheckStartTime          = midStart,
+                    MidCheckEndTime            = midEnd,
                     IsActive                   = true,
                     CreatedAt                  = DateTime.Now,
                     UpdatedAt                  = DateTime.Now
@@ -178,6 +202,8 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
                     s.StandardWorkHours          = StdHours;
                     s.Color                      = ShiftColor;
                     s.RestDaysOfWeek             = restDaysCsv;
+                    s.MidCheckStartTime          = midStart;
+                    s.MidCheckEndTime            = midEnd;
                     s.UpdatedAt                  = DateTime.Now;
                 }
                 SuccessMessage = $"班次「{ShiftName}」已更新";

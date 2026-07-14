@@ -66,6 +66,14 @@ public class AttendanceRecord
     /// <summary>实际下班打卡时间</summary>
     public DateTime? ClockOutTime { get; set; }
 
+    /// <summary>
+    /// 午间必打卡时间：班次配置了午间打卡窗口（ShiftSchedule.MidCheckStartTime~EndTime）时，
+    /// 当天落在这个窗口内的第一次打卡（不分上/下班类型）。为空表示该窗口内没有任何打卡——
+    /// 若班次确实配置了窗口，工时计算会按"上午没上班"只算下午工时（见 ComputeWorkHours 调用处）。
+    /// 班次没配置窗口的，这个字段永远是空，不影响任何计算。
+    /// </summary>
+    public DateTime? MidCheckTime { get; set; }
+
     /// <summary>排班应上班时间</summary>
     public DateTime? ScheduledStartTime { get; set; }
 
