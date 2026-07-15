@@ -511,6 +511,26 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         return new TemplateReportResultDto { StartDate = start, EndDate = end, Dates = dates, Rows = rows };
     }
 
+    /// <summary>取"打卡时间表"导出用的数据，人员范围口径和 <see cref="GenerateTemplateReportAsync"/> 保持一致。</summary>
+    public async Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds)
+    {
+        var relevantIds = await db.Users.Where(u => u.IsActive).Select(u => u.Id)
+            .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
+            .Distinct()
+            .ToListAsync();
+
+        var uq = db.Users.Where(u => relevantIds.Contains(u.Id)).AsQueryable();
+        if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
+        var userIds = await uq.Select(u => u.Id).ToListAsync();
+
+        return (await db.AttendanceRecords
+                .Include(r => r.User).ThenInclude(u => u.Department)
+                .Where(r => userIds.Contains(r.UserId) && r.WorkDate >= start && r.WorkDate <= end)
+                .OrderBy(r => r.User.EmployeeNo).ThenBy(r => r.WorkDate)
+                .ToListAsync())
+            .Select(ToDto).ToList();
+    }
+
     /// <summary>
     /// 生成/重算某月的考勤汇总（已存在就更新，没有就新建）。
     /// 处理范围不能只看"现在是否在职"：如果一个人这个月工作过、后来才离职（停用），

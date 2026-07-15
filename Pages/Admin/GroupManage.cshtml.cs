@@ -53,8 +53,10 @@ public class GroupManageModel(
     [BindProperty] public bool    EnableLocation { get; set; }
     [BindProperty] public int     LunchBreak     { get; set; } = 60;
     [BindProperty] public int     DinnerBreak    { get; set; } = 30;
-    /// <summary>本次勾选的审批人编号列表（可以一个都不选，届时退回直属上级/兜底管理员）</summary>
+    /// <summary>本次勾选的审批人编号列表（必须至少选一个）</summary>
     [BindProperty] public List<int> ApproverUserIds { get; set; } = [];
+    /// <summary>本次选择的审批层级："Level1"=一级（仅班组长），"Level2"=二级（班组长+直属上级）</summary>
+    [BindProperty] public string ApprovalLevel { get; set; } = "Level1";
     /// <summary>本次勾选的部门编号列表（长期跟随本组）</summary>
     [BindProperty] public List<int> SelectedDeptIds { get; set; } = [];
     /// <summary>本次填写的打卡地点列表（可以一个都不填，届时视为不限制定位）</summary>
@@ -85,9 +87,12 @@ public class GroupManageModel(
         // 把考勤组和人数配对起来
         Groups = groups.Select(g => (g, userCounts.FirstOrDefault(c => c.GroupId == g.Id)?.Count ?? 0)).ToList();
 
-        // 能当审批人的人：在职、角色不是普通员工（和以前"审批流程管理"页的筛选口径一致）
+        // 能当审批人的人：以后新增只能选"班组长"角色（一级审批人）；
+        // 但存量已经配置成审批人的历史数据（哪怕角色不是班组长）也要留在候选名单里，
+        // 保证编辑这个组的其它字段、保存时不会把这些人悄悄清掉——只有管理员自己手动取消勾选才会移除。
+        var legacyApproverIds = await db.AttendanceGroupApprovers.Select(a => a.UserId).Distinct().ToListAsync();
         ApproverOptions = await db.Users
-            .Where(u => u.IsActive && u.Role != Models.Enums.UserRole.Employee)
+            .Where(u => u.IsActive && (u.Role == Models.Enums.UserRole.TeamLeader || legacyApproverIds.Contains(u.Id)))
             .OrderBy(u => u.RealName)
             .ToListAsync();
 
@@ -135,6 +140,8 @@ public class GroupManageModel(
         if (GroupName.Trim().Length > 100) { ErrorMessage = "考勤组名称不能超过 100 个字"; await OnGetAsync(); return Page(); }
         if (LunchBreak is < 0 or > 120) { ErrorMessage = "午休时长请填 0-120 分钟之间"; await OnGetAsync(); return Page(); }
         if (DinnerBreak is < 0 or > 120) { ErrorMessage = "晚餐时长请填 0-120 分钟之间"; await OnGetAsync(); return Page(); }
+        if (ApproverUserIds.Count == 0) { ErrorMessage = "请至少选择一位审批人"; await OnGetAsync(); return Page(); }
+        if (!Enum.TryParse<Models.Enums.ApprovalLevelType>(ApprovalLevel, out var approvalLevel)) approvalLevel = Models.Enums.ApprovalLevelType.Level1;
         foreach (var loc in Locations)
         {
             if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;   // 没填全经纬度的行本来就会被跳过，不用校验
@@ -155,6 +162,7 @@ public class GroupManageModel(
                     EnableLocationPunch = EnableLocation,
                     LunchBreakMinutes   = LunchBreak,
                     DinnerBreakMinutes  = DinnerBreak,
+                    ApprovalLevel       = approvalLevel,
                     IsActive            = true,
                     CreatedAt           = DateTime.Now,
                     UpdatedAt           = DateTime.Now
@@ -172,6 +180,7 @@ public class GroupManageModel(
                     g.EnableLocationPunch = EnableLocation;
                     g.LunchBreakMinutes   = LunchBreak;
                     g.DinnerBreakMinutes  = DinnerBreak;
+                    g.ApprovalLevel       = approvalLevel;
                     g.UpdatedAt           = DateTime.Now;
                 }
                 SuccessMessage = $"考勤组「{GroupName}」已更新";

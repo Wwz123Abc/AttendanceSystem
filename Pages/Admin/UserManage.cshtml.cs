@@ -132,6 +132,24 @@ public class UserManageModel(
     public async Task<JsonResult> OnGetGenerateEmployeeNoAsync(int deptId)
         => new(new { employeeNo = await userService.GenerateNextEmployeeNoAsync(deptId) });
 
+    /// <summary>
+    /// "新增/编辑员工"弹窗里选定部门后，前端调这个接口按"该部门下角色=主管的在职员工"自动带出直属上级（AJAX）。
+    /// 唯一匹配到 1 人才会返回 supervisorId 让前端自动预选；匹配到 0 人或多人时 supervisorId 为空，
+    /// 由前端提示管理员手动选择（count 告诉前端具体是哪种情况，用来显示不同的提示文案）。
+    /// </summary>
+    public async Task<JsonResult> OnGetSuggestSupervisorAsync(int deptId)
+    {
+        var supervisors = await db.Users
+            .Where(u => u.IsActive && u.DepartmentId == deptId && u.Role == UserRole.Supervisor)
+            .Select(u => new { u.Id, u.RealName })
+            .ToListAsync();
+        return new(new
+        {
+            supervisorId = supervisors.Count == 1 ? supervisors[0].Id : (int?)null,
+            count        = supervisors.Count
+        });
+    }
+
     /// <summary>驳回一条扫码登记（不建账号）。</summary>
     public async Task<IActionResult> OnPostRejectRegistrationAsync(int id)
     {
@@ -145,7 +163,7 @@ public class UserManageModel(
     {
         try
         {
-            ValidateContact(requirePhone: true);
+            ValidateContact(requirePhone: true, requireSupervisor: true);
             var newUser = BuildUser();
             // 如果是在"确认录入"某条扫码登记，员工自己提交时可能已经上传过身份证照片；
             // 管理员这次没有重新上传的话，就沿用登记里那张，避免让员工再扫一次码补传
@@ -177,7 +195,7 @@ public class UserManageModel(
     {
         try
         {
-            ValidateContact(requirePhone: false);
+            ValidateContact(requirePhone: false, requireSupervisor: false);
             var oldPhotoUrl = (await userService.GetUserByIdAsync(EditUserId))?.IdCardPhotoUrl;
             var user = BuildUser();
             user.Id = EditUserId;
@@ -298,8 +316,10 @@ public class UserManageModel(
     /// <paramref name="requirePhone"/>=true 时手机号还不能为空——新建员工要求必填手机号，
     /// 保证以后每个员工都能用"忘记密码"（工号+手机号+钉钉验证码）自助找回；
     /// 编辑老员工时不强制补填，避免历史上没留手机号的员工卡在其它字段也改不了。
+    /// <paramref name="requireSupervisor"/>=true 时"直属上级"还不能为空——新建员工要求必选直属上级，
+    /// 保证审批流程（尤其是二级审批）总能找到人；编辑老员工时同样不强制补填，避免历史遗留数据卡住其它字段的修改。
     /// </summary>
-    private void ValidateContact(bool requirePhone)
+    private void ValidateContact(bool requirePhone, bool requireSupervisor)
     {
         if (string.IsNullOrWhiteSpace(EmployeeNo))
             throw new InvalidOperationException("请填写工号");
@@ -313,6 +333,8 @@ public class UserManageModel(
             throw new InvalidOperationException("请选择正确的角色");
         if (!string.IsNullOrEmpty(HireDate) && !DateOnly.TryParse(HireDate, out _))
             throw new InvalidOperationException("入职日期格式不正确");
+        if (requireSupervisor && !SuperId.HasValue)
+            throw new InvalidOperationException("请选择直属上级");
 
         if (requirePhone && string.IsNullOrWhiteSpace(Phone))
             throw new InvalidOperationException("请填写手机号（用于以后自助找回密码）");

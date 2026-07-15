@@ -148,6 +148,21 @@ public class MonthlyReportModel(IAttendanceService attendanceService, Attendance
         return File(bytes, XlsxContentType, $"月度汇总_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
 
+    /// <summary>
+    /// 点"导出打卡时间表"时执行：范围和"导出模板汇总表"一样，按当前起止日期/部门勾选（不受关键字搜索影响），
+    /// 但内容换成一行一人一天的打卡明细（上下班时间、工时、迟到等），方便核对具体打卡时间用。
+    /// </summary>
+    public async Task<IActionResult> OnGetExportClockTimeSheetAsync(DateOnly? start, DateOnly? end, List<int>? deptIds)
+    {
+        if (start is null || end is null) return BadRequest("请选择起止日期");
+        if (end < start) return BadRequest("结束日期不能早于开始日期");
+        if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
+
+        var records = await attendanceService.GetClockTimeSheetAsync(start.Value, end.Value, deptIds);
+        var bytes   = ExcelExportHelper.ExportClockTimeSheet(records, start.Value, end.Value);
+        return File(bytes, XlsxContentType, $"打卡时间表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
+    }
+
     /// <summary>点某人“导出明细”时执行。</summary>
     public async Task<IActionResult> OnGetExportDetailAsync(int userId, int year, int month)
     {

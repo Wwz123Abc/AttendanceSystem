@@ -275,12 +275,18 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     // ── 私有方法 ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 为申请创建审批节点（现在只会有一个节点，一步审完）：
-    /// 考勤组配了审批人名单 → 必须是员工自己从名单里选的那个人；
-    /// 组里没配名单 → 回退“直属上级”；连上级也没有 → 兜底指派一名管理员/文员，避免申请永远没人审。
+    /// 为申请创建审批节点：
+    /// 第一级——考勤组配了审批人名单 → 必须是员工自己从名单里选的那个人（名单只能是班组长）；
+    /// 组里没配名单 → 回退"直属上级"；连上级也没有 → 兜底指派一名管理员/文员，避免申请永远没人审。
+    /// 第二级——仅当考勤组的审批层级配置为"二级审批"时才会生成：自动追加申请人自己的"直属上级"作为第二个节点，
+    /// 直属上级没配时同样兜底指派一名管理员/文员。没能生成第一级节点时不会生成第二级，避免破坏"先一级后二级"的顺序。
     /// </summary>
     private async Task CreateApprovalStepsAsync(ApprovalRequest request, User applicant, int? selectedApproverUserId)
     {
+        var group = applicant.AttendanceGroupId.HasValue
+            ? await db.AttendanceGroups.FindAsync(applicant.AttendanceGroupId.Value)
+            : null;
+
         var groupApproverIds = await db.AttendanceGroupApprovers
             .Where(a => a.AttendanceGroupId == applicant.AttendanceGroupId)
             .Select(a => a.UserId)
@@ -301,6 +307,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         }
 
         if (approverId.HasValue)
+        {
             db.ApprovalSteps.Add(new ApprovalStep
             {
                 ApprovalRequestId = request.Id,
@@ -309,6 +316,22 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 ApprovalStatus    = ApprovalStatus.Pending,
                 CreatedAt         = DateTime.Now
             });
+
+            // 二级审批：一级节点通过后再自动追加一个申请人"直属上级"的节点
+            if (group?.ApprovalLevel == ApprovalLevelType.Level2)
+            {
+                var level2ApproverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
+                if (level2ApproverId.HasValue)
+                    db.ApprovalSteps.Add(new ApprovalStep
+                    {
+                        ApprovalRequestId = request.Id,
+                        ApproverUserId    = level2ApproverId.Value,
+                        StepOrder         = 2,
+                        ApprovalStatus    = ApprovalStatus.Pending,
+                        CreatedAt         = DateTime.Now
+                    });
+            }
+        }
 
         await db.SaveChangesAsync();
     }

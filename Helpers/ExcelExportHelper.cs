@@ -277,6 +277,78 @@ public static class ExcelExportHelper
         ICellStyle redIfPositive(int v) => v > 0 ? redStyle : dataStyle;
     }
 
+    // ── 报表 3.5：打卡时间表（月度报表页，按部门范围导出多个人的每日打卡明细，一行一人一天）──
+    public static byte[] ExportClockTimeSheet(List<AttendanceRecordDto> records, DateOnly start, DateOnly end)
+    {
+        var wb    = new XSSFWorkbook();
+        var sheet = wb.CreateSheet("打卡时间表");
+
+        var titleStyle    = TitleStyle(wb);
+        var subTitleStyle = DataStyle(wb);
+        var headerStyle   = HeaderStyle(wb);
+        var dataStyle     = DataStyle(wb);
+        var bandedStyle   = BandedStyle(wb);
+        // 异常状态的颜色样式，白底/斑马纹底各准备一份，避免在循环里反复新建样式对象
+        var redStyle          = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);
+        var redBandedStyle    = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index, banded: true);
+        var orangeStyle       = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index);
+        var orangeBandedStyle = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index, banded: true);
+
+        // 第 0 行：大标题（前 12 列合并）
+        var titleRow = sheet.CreateRow(0);
+        SetCell(titleRow, 0, $"员工打卡时间表 统计日期：{start:yyyy-MM-dd} 至 {end:yyyy-MM-dd}", titleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 11));
+        titleRow.HeightInPoints = 26;
+
+        // 第 1 行：报表生成时间
+        var genRow = sheet.CreateRow(1);
+        SetCell(genRow, 0, $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}", subTitleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, 11));
+
+        // 第 2 行：表头
+        string[] headers = ["工号", "姓名", "部门", "日期", "星期", "上班打卡", "下班打卡", "考勤状态", "实际工时(h)", "加班(h)", "迟到(分)", "备注/审批"];
+        var headerRow = sheet.CreateRow(2);
+        headerRow.HeightInPoints = 20;
+        for (var i = 0; i < headers.Length; i++)
+        {
+            SetCell(headerRow, i, headers[i], headerStyle);
+            sheet.SetColumnWidth(i, i switch { 2 => 16 * 256, 11 => 22 * 256, _ => 11 * 256 });
+        }
+        ApplyLookAndFeel(sheet, freezeCols: 3, freezeRows: 3, repeatHeaderRows: 3);   // 冻结"工号/姓名/部门"这几列+表头
+
+        // 每人每天一行；换到下一个人时切换一次斑马纹底色，把每个人的一段日期从视觉上分隔开
+        string? lastEmployeeNo = null;
+        var banded = false;
+        for (var i = 0; i < records.Count; i++)
+        {
+            var rec = records[i];
+            if (rec.EmployeeNo != lastEmployeeNo) { banded = !banded; lastEmployeeNo = rec.EmployeeNo; }
+            var baseStyle = banded ? bandedStyle : dataStyle;
+
+            var statusStyle = rec.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.NotPunched
+                ? (banded ? redBandedStyle : redStyle)
+                : rec.AttendanceStatus is AttendanceStatus.Late or AttendanceStatus.EarlyLeave
+                ? (banded ? orangeBandedStyle : orangeStyle)
+                : baseStyle;
+
+            var row = sheet.CreateRow(i + 3);
+            SetCell(row, 0,  rec.EmployeeNo ?? "", baseStyle);
+            SetCell(row, 1,  rec.RealName ?? "",   baseStyle);
+            SetCell(row, 2,  rec.DeptName ?? "",   baseStyle);
+            SetCell(row, 3,  rec.WorkDateText,     baseStyle);
+            SetCell(row, 4,  rec.DayOfWeekText,    baseStyle);
+            SetCell(row, 5,  rec.ClockInText,      baseStyle);
+            SetCell(row, 6,  rec.ClockOutText,     baseStyle);
+            SetCell(row, 7,  rec.StatusText,       statusStyle);
+            SetCell(row, 8,  HalfFloor(rec.ActualWorkHours), baseStyle);
+            SetCell(row, 9,  HalfFloor(rec.OvertimeHours),   baseStyle);
+            SetCell(row, 10, rec.LateMinutes, rec.LateMinutes > 0 ? (banded ? orangeBandedStyle : orangeStyle) : baseStyle);
+            SetCell(row, 11, rec.ApprovalNote ?? "", baseStyle);
+        }
+
+        return ToBytes(wb);
+    }
+
     // ── 报表 4：员工信息表（"员工信息"页按部门/关键字筛选后导出，一行一个人）───────
     public static byte[] ExportEmployeeList(List<User> users)
     {
@@ -381,9 +453,10 @@ public static class ExcelExportHelper
         return s;
     }
 
-    private static ICellStyle ColorStyle(IWorkbook wb, short colorIndex)  // 在普通样式基础上改字体颜色
+    // 在普通样式基础上改字体颜色；banded=true 则打底用斑马纹底色，方便异常字体色和分组底色同时叠加显示
+    private static ICellStyle ColorStyle(IWorkbook wb, short colorIndex, bool banded = false)
     {
-        var s = DataStyle(wb);
+        var s = banded ? BandedStyle(wb) : DataStyle(wb);
         var f = wb.CreateFont();
         f.FontName = ReportFontName;
         f.Color = colorIndex;

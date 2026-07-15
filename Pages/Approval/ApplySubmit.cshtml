@@ -54,6 +54,7 @@
                             <label class="form-label">结束时间</label>
                             <input asp-for="LeaveEnd" type="datetime-local" class="form-control" id="fLeaveEnd" required />
                         </div>
+                        <div class="form-text mb-3">开始时间最早只能选到现在往前推24小时以内。</div>
                     </div>
 
                     <!-- 补卡字段 -->
@@ -85,6 +86,7 @@
                             <label class="form-label">加班结束</label>
                             <input asp-for="OvertimeEnd" type="datetime-local" class="form-control" id="fOvertimeEnd" required />
                         </div>
+                        <div class="form-text mb-3">只能申请当天的加班，需在当天24点前提交。</div>
                     </div>
 
                     <!-- 出差字段 -->
@@ -124,7 +126,7 @@
 
                     <div class="mb-3">
                         <label class="form-label">申请原因</label>
-                        <textarea asp-for="Reason" class="form-control" rows="3" maxlength="1000" placeholder="请填写申请原因..."></textarea>
+                        <textarea asp-for="Reason" class="form-control" rows="3" maxlength="1000" placeholder="请填写申请原因..." required></textarea>
                     </div>
 
                     <div class="mb-3">
@@ -255,6 +257,10 @@ function toDateInputValue(d) {    // Date -> "yyyy-MM-dd"，date 输入框要的
 const now       = new Date();
 const nowStr    = toLocalInputValue(now);
 const todayStr  = toDateInputValue(now);
+const leaveMinDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+const leaveMinStr  = toLocalInputValue(leaveMinDate);   // 现在往前推24小时
+const todayStartStr = todayStr + 'T00:00';   // 今天0点
+const todayEndStr   = todayStr + 'T23:59';   // 今天23:59（当天24点前）
 
 const fLeaveStart = document.getElementById('fLeaveStart');
 const fLeaveEnd    = document.getElementById('fLeaveEnd');
@@ -264,8 +270,8 @@ const fOvertimeEnd   = document.getElementById('fOvertimeEnd');
 const fTripStart = document.getElementById('fTripStart');
 const fTripEnd   = document.getElementById('fTripEnd');
 
-// 请假：开始时间不能选过去；结束时间不能早于开始时间
-fLeaveStart.min = nowStr;
+// 请假：开始时间最早只能选到“现在往前推24小时”；结束时间不能早于开始时间
+fLeaveStart.min = leaveMinStr;
 fLeaveStart.addEventListener('change', function () {
     fLeaveEnd.min = this.value;
     if (fLeaveEnd.value && fLeaveEnd.value <= this.value) fLeaveEnd.value = '';
@@ -274,7 +280,9 @@ fLeaveStart.addEventListener('change', function () {
 // 补卡：补的是过去漏打的卡，日期不能选未来
 fPunchDate.max = todayStr;
 
-// 加班：结束时间不能早于开始时间（加班允许事后补报，所以不限制“过去”）
+// 加班：必须是当天的加班，当天24点前提交当日申请；结束时间不能早于开始时间
+fOvertimeStart.min = todayStartStr;
+fOvertimeStart.max = todayEndStr;
 fOvertimeStart.addEventListener('change', function () {
     fOvertimeEnd.min = this.value;
     if (fOvertimeEnd.value && fOvertimeEnd.value <= this.value) fOvertimeEnd.value = '';
@@ -292,12 +300,13 @@ document.querySelector('form[enctype]').addEventListener('submit', function (e) 
     const type = document.getElementById('applyTypeSelect').value;
     let msg = null;
     if (type === 'Leave') {
-        if (fLeaveStart.value && fLeaveStart.value < nowStr) msg = '请假开始时间不能早于现在';
+        if (fLeaveStart.value && fLeaveStart.value < leaveMinStr) msg = '请假开始时间最早只能选到现在往前推24小时以内';
         else if (fLeaveStart.value && fLeaveEnd.value && fLeaveEnd.value <= fLeaveStart.value) msg = '请假结束时间必须晚于开始时间';
     } else if (type === 'PunchReplenishment') {
         if (fPunchDate.value && fPunchDate.value > todayStr) msg = '补卡日期不能晚于今天';
     } else if (type === 'Overtime') {
-        if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value <= fOvertimeStart.value) msg = '加班结束时间必须晚于开始时间';
+        if (fOvertimeStart.value && fOvertimeStart.value.slice(0, 10) !== todayStr) msg = '加班申请必须是当天的加班，请在当天24点前提交当日申请';
+        else if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value <= fOvertimeStart.value) msg = '加班结束时间必须晚于开始时间';
     } else if (type === 'BusinessTrip') {
         if (fTripStart.value && fTripStart.value < nowStr) msg = '出差开始时间不能早于现在';
         else if (fTripStart.value && fTripEnd.value && fTripEnd.value <= fTripStart.value) msg = '出差结束时间必须晚于开始时间';

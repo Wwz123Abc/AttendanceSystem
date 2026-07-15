@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using AttendanceSystem.Models.Enums;
 
 namespace AttendanceSystem.Models.Entities;
 
@@ -25,6 +26,12 @@ public class AttendanceGroup
 
     /// <summary>负责该组的文员用户编号</summary>
     public int? ClerkUserId { get; set; }
+
+    /// <summary>
+    /// 审批层级：一级只需要班组长审批；二级在班组长审批通过后，再自动追加申请人的直属上级（主管）审批一次。
+    /// 默认一级。
+    /// </summary>
+    public ApprovalLevelType ApprovalLevel { get; set; } = ApprovalLevelType.Level1;
 
     /// <summary>是否启用定位打卡（开启后，打卡要落在下面 Locations 里任意一个地点的有效半径内才算数）</summary>
     public bool EnableLocationPunch { get; set; } = false;

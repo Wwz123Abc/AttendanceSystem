@@ -73,7 +73,9 @@ public class ApplySubmitModel(
 
             if (!Enum.TryParse<Models.Enums.ApprovalType>(ApprovalType, out var approvalType))
                 throw new InvalidOperationException("请选择正确的申请类型");
-            if (!string.IsNullOrWhiteSpace(Reason) && Reason.Trim().Length > 1000)
+            if (string.IsNullOrWhiteSpace(Reason))
+                throw new InvalidOperationException("请填写申请原因");
+            if (Reason.Trim().Length > 1000)
                 throw new InvalidOperationException("申请理由不能超过 1000 个字");
             if (!string.IsNullOrWhiteSpace(BusinessTripDestination) && BusinessTripDestination.Trim().Length > 200)
                 throw new InvalidOperationException("出差目的地不能超过 200 个字");
@@ -130,8 +132,9 @@ public class ApplySubmitModel(
 
     /// <summary>
     /// 校验各类申请的时间是否合理：
-    /// 请假——开始不能选过去、结束必须晚于开始；补卡——补的是过去漏打的卡，日期不能选未来；
-    /// 加班——结束必须晚于开始（加班允许事后补报，不限制“过去”）；
+    /// 请假——开始时间最早只能选到“现在往前推 24 小时”，结束必须晚于开始；
+    /// 补卡——补的是过去漏打的卡，日期不能选未来；
+    /// 加班——必须是当天的加班（当天 24 点前提交当日申请，不能提前申请也不能事后跨天补报），结束必须晚于开始；
     /// 出差——开始不能选过去、结束必须晚于开始（出差是提前申请的，不允许补报过去的出差）。
     /// 不合理就返回一句中文提示，合理则返回 null。
     /// </summary>
@@ -143,8 +146,8 @@ public class ApplySubmitModel(
                 return "请选择请假的开始和结束时间";
             if (!DateTime.TryParse(LeaveStart, out var start) || !DateTime.TryParse(LeaveEnd, out var end))
                 return "请假时间格式不正确";
-            if (start < DateTime.Now)
-                return "请假开始时间不能早于现在";
+            if (start < DateTime.Now.AddHours(-24))
+                return "请假开始时间最早只能选到现在往前推24小时以内";
             if (end <= start)
                 return "请假结束时间必须晚于开始时间";
         }
@@ -163,6 +166,8 @@ public class ApplySubmitModel(
                 return "请选择加班的开始和结束时间";
             if (!DateTime.TryParse(OvertimeStart, out var start) || !DateTime.TryParse(OvertimeEnd, out var end))
                 return "加班时间格式不正确";
+            if (DateOnly.FromDateTime(start) != DateOnly.FromDateTime(DateTime.Today))
+                return "加班申请必须是当天的加班，请在当天24点前提交当日申请";
             if (end <= start)
                 return "加班结束时间必须晚于开始时间";
         }

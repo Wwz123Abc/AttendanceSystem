@@ -44,4 +44,10 @@ public interface IAttendanceService
     /// （页面上是一棵"公司/部门"合并树，勾大范围的公司节点会自动展开成它下面所有部门的编号）。
     /// </summary>
     Task<TemplateReportResultDto>  GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds);
+    /// <summary>
+    /// 取"打卡时间表"导出用的数据：统计周期内，指定部门范围（含在职员工+期间内曾有记录的人）
+    /// 每个人每天的打卡明细（上下班时间、工时、迟到等），按工号、日期排序。
+    /// deptIds 为空/不传 = 不筛选（全公司），传了就只统计这些部门编号里的员工。
+    /// </summary>
+    Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds);
 }

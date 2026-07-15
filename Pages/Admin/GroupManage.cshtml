@@ -34,6 +34,7 @@
                     <th>所属部门</th>
                     <th>人员数</th>
                     <th>审批人</th>
+                    <th>审批层级</th>
                     <th>打卡地点</th>
                     <th>午休/晚餐</th>
                     <th>状态</th>
@@ -65,6 +66,11 @@
                             { <span class="text-muted">未配置（默认走直属上级）</span> }
                         </td>
                         <td class="small">
+                            <span class="badge @(g.ApprovalLevel == AttendanceSystem.Models.Enums.ApprovalLevelType.Level2 ? "bg-info text-dark" : "bg-light text-dark border")">
+                                @g.ApprovalLevel.ToDisplayName()
+                            </span>
+                        </td>
+                        <td class="small">
                             @if (!g.EnableLocationPunch)
                             {
                                 <span class="text-muted">未启用</span>
@@ -93,7 +99,8 @@
                                              @g.LunchBreakMinutes,@g.DinnerBreakMinutes,
                                              '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(approverIds))',
                                              '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(deptIds))',
-                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters })))')">
+                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters })))',
+                                             '@g.ApprovalLevel')">
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <form method="post" asp-page-handler="Toggle" class="d-inline"
@@ -115,7 +122,7 @@
                 }
                 @if (!Model.Groups.Any())
                 {
-                    <tr><td colspan="9" class="empty-state"><i class="bi bi-inbox"></i>暂无考勤组</td></tr>
+                    <tr><td colspan="10" class="empty-state"><i class="bi bi-inbox"></i>暂无考勤组</td></tr>
                 }
             </tbody>
         </table>
@@ -126,7 +133,7 @@
 <div class="modal fade" id="groupModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <form method="post" asp-page-handler="Save">
+            <form method="post" asp-page-handler="Save" id="groupForm">
                 <input type="hidden" asp-for="EditId" id="editId" />
                 <div class="modal-header">
                     <h5 class="modal-title" id="modalTitle">新建考勤组</h5>
@@ -199,23 +206,44 @@
                         <div class="col-12">
                             <hr class="my-1" />
                             <label class="form-label fw-semibold">
-                                审批人
-                                <small class="text-muted fw-normal">（可多选；本组员工提交申请时从这里面选一个人来审批；一个都不选则自动退回员工的直属上级；名单会跟着上面"所属部门"的勾选自动筛选，都不勾则显示全部人选）</small>
+                                审批层级 <span class="text-danger">*</span>
+                                <small class="text-muted fw-normal">（一级：只需下面选中的班组长审批；二级：班组长审批通过后，再自动追加申请人自己的"直属上级"审批一次）</small>
+                            </label>
+                            <div class="d-flex gap-3 mb-1">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="ApprovalLevel" id="fLevel1" value="Level1" checked />
+                                    <label class="form-check-label" for="fLevel1">一级审批（班组长）</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="ApprovalLevel" id="fLevel2" value="Level2" />
+                                    <label class="form-check-label" for="fLevel2">二级审批（班组长 + 直属上级）</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-12">
+                            <hr class="my-1" />
+                            <label class="form-label fw-semibold">
+                                审批人（班组长） <span class="text-danger">*</span>
+                                <small class="text-muted fw-normal">（必选，可多选；本组员工提交申请时从这里面选一个人来审批第一级；名单只能选"班组长"角色的人；名单会跟着上面"所属部门"的勾选自动筛选，都不勾则显示全部人选）</small>
                             </label>
                             <div id="approverList" class="border rounded p-2" style="max-height:180px;overflow-y:auto;">
                                 @foreach (var u in Model.ApproverOptions)
                                 {
+                                    var isLegacy = u.Role != Models.Enums.UserRole.TeamLeader;
                                     <div class="form-check" data-dept="@u.DepartmentId">
                                         <input class="form-check-input approver-checkbox" type="checkbox"
                                                name="ApproverUserIds" value="@u.Id" id="approver_@u.Id" />
                                         <label class="form-check-label" for="approver_@u.Id">
-                                            @u.RealName <span class="text-muted small">（@(u.Position ?? u.Role.ToString())）</span>
+                                            @u.RealName <span class="text-muted small">（@(u.Position ?? u.Role.ToDisplayName())）</span>
+                                            @if (isLegacy)
+                                            { <span class="badge bg-warning text-dark">非班组长·历史配置</span> }
                                         </label>
                                     </div>
                                 }
                                 @if (!Model.ApproverOptions.Any())
                                 {
-                                    <div class="text-muted small">暂无可选审批人（需要先有在职、且角色不是"普通员工"的用户）</div>
+                                    <div class="text-muted small">暂无可选审批人（需要先有在职的"班组长"角色用户）</div>
                                 }
                             </div>
                         </div>
@@ -278,10 +306,11 @@ function openAdd() {
     setSelectedApprovers([]);
     setSelectedDepts([]);
     setLocations([]);
+    setApprovalLevel('Level1');
     modal.show();
 }
 
-function openEdit(id, name, enableLoc, lunch, dinner, approverIdsJson, deptIdsJson, locationsJson) {
+function openEdit(id, name, enableLoc, lunch, dinner, approverIdsJson, deptIdsJson, locationsJson, approvalLevel) {
     document.getElementById('modalTitle').textContent = '编辑考勤组';
     document.getElementById('editId').value = id;
     document.getElementById('fGroupName').value = name;
@@ -292,6 +321,7 @@ function openEdit(id, name, enableLoc, lunch, dinner, approverIdsJson, deptIdsJs
     setSelectedApprovers(JSON.parse(approverIdsJson || '[]'));
     setSelectedDepts(JSON.parse(deptIdsJson || '[]'));
     setLocations(JSON.parse(locationsJson || '[]'));
+    setApprovalLevel(approvalLevel || 'Level1');
     modal.show();
 }
 
@@ -301,6 +331,18 @@ function setSelectedApprovers(approverIds) {
         cb.checked = approverIds.includes(parseInt(cb.value, 10));
     });
 }
+
+// 设置"审批层级"单选（Level1/Level2）
+function setApprovalLevel(level) {
+    document.getElementById('fLevel1').checked = level !== 'Level2';
+    document.getElementById('fLevel2').checked = level === 'Level2';
+}
+
+// 提交前兜底校验：审批人必须至少选一个（和后端校验规则保持一致，避免用户绕过看不出哪里没填就直接提交）
+document.getElementById('groupForm').addEventListener('submit', function (e) {
+    const hasApprover = document.querySelectorAll('.approver-checkbox:checked').length > 0;
+    if (!hasApprover) { e.preventDefault(); alert('请至少选择一位审批人'); }
+});
 
 // 按传入的部门编号列表，勾选/取消勾选部门树（这是回显已保存的数据，不需要级联）
 function setSelectedDepts(deptIds) {

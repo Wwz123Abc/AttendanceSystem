@@ -463,12 +463,13 @@
                             </select>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">直属上级</label>
+                            <label class="form-label">直属上级 <span class="text-danger" id="fSuperIdReq">*</span></label>
                             <select asp-for="SuperId" class="form-select" id="fSuperId">
-                                <option value="">无</option>
+                                <option value="">请选择</option>
                                 @foreach (var sup in Model.Supervisors)
                                 { <option value="@sup.Id">@sup.RealName（@sup.EmployeeNo）</option> }
                             </select>
+                            <div class="form-text" id="fSuperIdHint">选定部门后会自动带出该部门的主管，也可以手动改选。</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">岗位</label>
@@ -604,7 +605,29 @@ async function fillEmployeeNoForDept(deptId) {
 }
 document.getElementById('fDeptId').addEventListener('change', function () {
     fillEmployeeNoForDept(this.value);
+    suggestSupervisorForDept(this.value);
 });
+
+// ── 直属上级自动带出：选定部门后，按"该部门下角色=主管的在职员工"自动预选直属上级 ──
+// 唯一匹配才自动选中；0 个或多个匹配都不自动选，改成提示文案，交给管理员手动选择。
+async function suggestSupervisorForDept(deptId) {
+    const hintEl = document.getElementById('fSuperIdHint');
+    if (!deptId) { hintEl.textContent = '选定部门后会自动带出该部门的主管，也可以手动改选。'; return; }
+    try {
+        const resp = await fetch(`?handler=SuggestSupervisor&deptId=${deptId}`);
+        const data = await resp.json();
+        if (data.supervisorId) {
+            document.getElementById('fSuperId').value = data.supervisorId;
+            hintEl.textContent = '已按部门自动带出主管，也可以手动改选。';
+        } else if (data.count === 0) {
+            document.getElementById('fSuperId').value = '';
+            hintEl.textContent = '该部门暂无主管，请手动选择直属上级。';
+        } else {
+            document.getElementById('fSuperId').value = '';
+            hintEl.textContent = '该部门配置了多位主管，无法自动判断，请手动选择直属上级。';
+        }
+    } catch (e) { /* 自动带出失败就静默忽略，不影响手动选择 */ }
+}
 
 // ── 左侧部门树：默认折叠，点箭头展开/收起（点名字仍是筛选，不受影响）────────
 function deptToggle(ev, id, icon) {
@@ -678,9 +701,12 @@ function openAdd() {
     document.getElementById('fSuperId').value = '';
     document.getElementById('fPhone').required = true;             // 新建必须填手机号
     document.getElementById('fPhoneReq').style.display = '';
+    document.getElementById('fSuperId').required = true;           // 新建必须选直属上级
+    document.getElementById('fSuperIdReq').style.display = '';
     document.getElementById('fDingTalkStatus').textContent = '';   // 新建员工还没有钉钉绑定状态，不显示
     autoFillEmployeeNo = true;
     fillEmployeeNoForDept(document.getElementById('fDeptId').value);   // 默认部门已选中时，直接按它生成一次
+    suggestSupervisorForDept(document.getElementById('fDeptId').value);
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
 
@@ -732,8 +758,11 @@ function openConfirm(data) {
     document.getElementById('fSuperId').value    = '';
     document.getElementById('fPhone').required   = true;
     document.getElementById('fPhoneReq').style.display = '';
+    document.getElementById('fSuperId').required = true;
+    document.getElementById('fSuperIdReq').style.display = '';
     autoFillEmployeeNo = true;
     fillEmployeeNoForDept(document.getElementById('fDeptId').value);   // 默认部门已选中时，直接按它生成一次
+    suggestSupervisorForDept(document.getElementById('fDeptId').value);
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
 
@@ -764,6 +793,9 @@ function openEdit(data) {
     document.getElementById('fPhone').value      = data.phone;
     document.getElementById('fPhone').required   = false;          // 编辑老员工不强制补填手机号
     document.getElementById('fPhoneReq').style.display = 'none';
+    document.getElementById('fSuperId').required = false;          // 编辑老员工不强制补填直属上级
+    document.getElementById('fSuperIdReq').style.display = 'none';
+    document.getElementById('fSuperIdHint').textContent = '选定部门后会自动带出该部门的主管，也可以手动改选。';
     document.getElementById('fIdNumber').value   = data.idNumber || '';
     document.getElementById('fContractCompany').value = data.contractCompany || '';
     document.getElementById('fHireDate').value   = data.hireDate;
