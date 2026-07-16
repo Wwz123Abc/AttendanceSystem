@@ -147,7 +147,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
 // ── 以上是“注册阶段”，下面 Build 之后进入“运行阶段”────────────────────────────────
 var app = builder.Build();
 
-// 开发环境：启动时自动建表/更新表结构（迁移）+ 播种默认管理员
+// 开发环境：启动时自动建表/更新表结构（迁移）；生产环境的建表走部署时手动执行的 migrate.sql
 if (app.Environment.IsDevelopment())
 {
     using var scope = app.Services.CreateScope();
@@ -156,11 +156,24 @@ if (app.Environment.IsDevelopment())
     {
         await dbCtx.Database.MigrateAsync();   // 自动迁移
         Log.Information("数据库迁移完成");
-        await SeedAdminAsync(dbCtx);
     }
     catch (Exception ex)
     {
         Log.Warning(ex, "数据库迁移失败，请检查连接字符串（appsettings.json）和 MariaDB 服务");
+    }
+}
+
+// 播种默认管理员：不论什么环境，只要表已建好且库里还没有用户，就创建 admin / Admin@123
+{
+    using var scope = app.Services.CreateScope();
+    var dbCtx = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+    try
+    {
+        await SeedAdminAsync(dbCtx);
+    }
+    catch (Exception ex)
+    {
+        Log.Warning(ex, "播种默认管理员账号失败，请检查数据库表是否已建好");
     }
 }
 

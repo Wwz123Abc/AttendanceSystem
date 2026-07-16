@@ -17,3 +17,6 @@ appsettings.*.json
 # Claude Code 本机权限设置，因人而异，不用同步
 .claude/settings.local.json
 
+# graphify 技能生成的本地缓存，不是项目代码
+graphify-out/
+
