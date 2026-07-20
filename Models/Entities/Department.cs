@@ -17,6 +17,12 @@ public class Department
     [MaxLength(50)]
     public string? DeptCode { get; set; }
 
+    /// <summary>
+    /// 对应的钉钉部门编号（本系统 → 钉钉 同步用）。为空表示这个部门在钉钉那边还没有对应部门
+    /// （要么从没同步过，要么同步失败过）；本系统新建/改名/删除部门时会尝试联动钉钉，成功后写回这里。
+    /// </summary>
+    public long? DingTalkDeptId { get; set; }
+
     /// <summary>上级部门的编号（支持无限级，顶级部门此项为空）</summary>
     public int? ParentId { get; set; }
 

@@ -359,10 +359,11 @@ public class DingTalkSyncService(
                 db.Departments.Add(dept);
                 deptCodeMap[code] = dept;
             }
-            dept.DeptName    = string.IsNullOrWhiteSpace(dd.Name) ? code : dd.Name!;
-            dept.CompanyName = companyName;     // 所属公司
-            dept.IsActive    = true;
-            dept.UpdatedAt   = now;
+            dept.DeptName       = string.IsNullOrWhiteSpace(dd.Name) ? code : dd.Name!;
+            dept.CompanyName    = companyName;     // 所属公司
+            dept.IsActive       = true;
+            dept.DingTalkDeptId = dd.DeptId;        // 记下钉钉部门编号，以后本系统这边改部门才能联动过去
+            dept.UpdatedAt      = now;
         }
         await db.SaveChangesAsync(ct);          // 先存部门以拿到本地 Id
 

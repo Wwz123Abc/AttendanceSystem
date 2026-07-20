@@ -90,12 +90,16 @@ public class DingTalkContactClient(
     /// 返回值：null=全部同步成功；非空=有一部分（目前只会是手机号）没能同步，这句话是给管理员看的说明，
     /// 但不代表调用失败——其余字段已经同步过去了。
     /// </summary>
-    public async Task<string?> UpdateEmployeeAsync(string dingTalkUserId, string? name, string? mobile, string? jobNumber, string? title, CancellationToken ct = default)
+    public async Task<string?> UpdateEmployeeAsync(string dingTalkUserId, string? name, string? mobile, string? jobNumber, string? title, List<long>? dingTalkDeptIds = null, CancellationToken ct = default)
     {
         var token   = await tokenProvider.GetAccessTokenAsync(ct);
         var baseUrl = _opt.OldGatewayBase.TrimEnd('/');
         var url     = $"{baseUrl}/topapi/v2/user/update?access_token={token}";
-        var req     = new DingTalkUpdateUserRequest { UserId = dingTalkUserId, Name = name, Mobile = mobile, JobNumber = jobNumber, Title = title };
+        var req     = new DingTalkUpdateUserRequest
+        {
+            UserId = dingTalkUserId, Name = name, Mobile = mobile, JobNumber = jobNumber, Title = title,
+            DeptIdList = dingTalkDeptIds is { Count: > 0 } ? string.Join(",", dingTalkDeptIds) : null
+        };
 
         try
         {
@@ -128,6 +132,37 @@ public class DingTalkContactClient(
             }, ct);
         return resp.Result?.UserId
             ?? throw new InvalidOperationException("钉钉新建员工接口返回成功，但没有带回 userid");
+    }
+
+    /// <summary>调钉钉"新建部门"接口（topapi/v2/department/create），成功后返回钉钉分配的部门编号。</summary>
+    public async Task<long> CreateDepartmentAsync(string name, long parentDingTalkDeptId, CancellationToken ct = default)
+    {
+        var token   = await tokenProvider.GetAccessTokenAsync(ct);
+        var baseUrl = _opt.OldGatewayBase.TrimEnd('/');
+        var resp = await PostAsync<DingTalkCreateDeptResponse>(
+            $"{baseUrl}/topapi/v2/department/create?access_token={token}",
+            new DingTalkCreateDeptRequest { Name = name, ParentId = parentDingTalkDeptId }, ct);
+        return resp.Result?.DeptId ?? throw new InvalidOperationException("钉钉新建部门接口返回成功，但没有带回部门编号");
+    }
+
+    /// <summary>调钉钉"更新部门"接口（topapi/v2/department/update），把本系统改过的部门名/上级部门同步过去。</summary>
+    public async Task UpdateDepartmentAsync(long dingTalkDeptId, string? name, long? parentDingTalkDeptId, CancellationToken ct = default)
+    {
+        var token   = await tokenProvider.GetAccessTokenAsync(ct);
+        var baseUrl = _opt.OldGatewayBase.TrimEnd('/');
+        await PostAsync<DingTalkUpdateDeptResponse>(
+            $"{baseUrl}/topapi/v2/department/update?access_token={token}",
+            new DingTalkUpdateDeptRequest { DeptId = dingTalkDeptId, Name = name, ParentId = parentDingTalkDeptId }, ct);
+    }
+
+    /// <summary>调钉钉"删除部门"接口（topapi/v2/department/delete）。部门下如果还有钉钉成员，钉钉会拒绝删除。</summary>
+    public async Task DeleteDepartmentAsync(long dingTalkDeptId, CancellationToken ct = default)
+    {
+        var token   = await tokenProvider.GetAccessTokenAsync(ct);
+        var baseUrl = _opt.OldGatewayBase.TrimEnd('/');
+        await PostAsync<DingTalkDeleteDeptResponse>(
+            $"{baseUrl}/topapi/v2/department/delete?access_token={token}",
+            new { dept_id = dingTalkDeptId }, ct);
     }
 
     /// <summary>POST JSON 并反序列化；统一校验钉钉 errcode。</summary>

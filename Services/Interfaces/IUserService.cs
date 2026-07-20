@@ -29,8 +29,12 @@ public interface IUserService
     /// 钉钉这边同步失败不会拦住本地更新，只会在返回的 DingTalkWarning 里带一句提示。
     /// </summary>
     Task<(bool Success, string? DingTalkWarning)> UpdateUserAsync(User user);
-    /// <summary>停用员工（IsActive=false，禁止登录，但保留记录可查询）。</summary>
-    Task<bool>    DeactivateUserAsync(int userId);
+    /// <summary>
+    /// 停用员工（离职）：IsActive=false，禁止登录，但保留记录可查询。
+    /// 如果该员工绑定了钉钉（DingTalkUserId），会同时调用钉钉接口把他从企业通讯录里删掉（本地记录仍保留）；
+    /// 钉钉这边删除失败不会拦住本地停用，只会在返回的 DingTalkWarning 里带一句提示。
+    /// </summary>
+    Task<(bool Success, string? DingTalkWarning)> DeactivateUserAsync(int userId);
     /// <summary>重新启用员工（IsActive=true）。黑名单员工需先移出黑名单。</summary>
     Task<bool>    ActivateUserAsync(int userId);
     /// <summary>拉黑员工（标记永不录用并禁止登录）。</summary>

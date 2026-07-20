@@ -217,7 +217,11 @@ public class UserManageModel(
     // ── 单个：停用 / 启用 / 拉黑 / 移出黑名单 / 删除 / 重置密码 ────────────────
     public async Task<IActionResult> OnPostDeactivateAsync(int id)
     {
-        try { await userService.DeactivateUserAsync(id); SuccessMessage = "已停用该账号（无法登录）"; }
+        try
+        {
+            var (_, warning) = await userService.DeactivateUserAsync(id);
+            SuccessMessage = warning is null ? "已停用该账号（无法登录）" : $"已停用该账号（无法登录）（{warning}）";
+        }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync(); return Page();
     }

@@ -238,11 +238,14 @@ public class DingTalkDeleteUserResponse : IDingTalkResponse
 // 更新企业员工（topapi/v2/user/update）的请求体：userid 必填，其余字段不传就表示"这一项不改"
 public class DingTalkUpdateUserRequest
 {
-    [JsonPropertyName("userid")]     public string  UserId    { get; set; } = string.Empty;
-    [JsonPropertyName("name")]       public string?  Name      { get; set; }
-    [JsonPropertyName("mobile")]     public string?  Mobile    { get; set; }
-    [JsonPropertyName("job_number")] public string?  JobNumber { get; set; }
-    [JsonPropertyName("title")]      public string?  Title     { get; set; }
+    [JsonPropertyName("userid")]       public string  UserId     { get; set; } = string.Empty;
+    [JsonPropertyName("name")]         public string?  Name       { get; set; }
+    [JsonPropertyName("mobile")]       public string?  Mobile     { get; set; }
+    [JsonPropertyName("job_number")]   public string?  JobNumber  { get; set; }
+    [JsonPropertyName("title")]        public string?  Title      { get; set; }
+
+    /// <summary>要调到的钉钉部门编号列表，多个用逗号分隔；不传表示部门不变（和 CreateUserRequest 同一种格式）</summary>
+    [JsonPropertyName("dept_id_list")] public string?  DeptIdList { get; set; }
 }
 
 // 更新企业员工的响应：只有 errcode/errmsg，没有额外数据
@@ -340,7 +343,51 @@ public class DingTalkContactSnapshot
     public List<DingTalkDeptUser> Users      { get; set; } = []; // 所有员工
 }
 
-/// <summary>“从钉钉导入员工”完成后返回的结果。</summary>
+// ── 部门同步（本系统 → 钉钉，新建/改名/删除部门时联动）──────────────────────────
+
+// 新建部门（topapi/v2/department/create）的请求体：name/parent_id 必填
+public class DingTalkCreateDeptRequest
+{
+    [JsonPropertyName("name")]      public string Name     { get; set; } = string.Empty;
+    [JsonPropertyName("parent_id")] public long   ParentId { get; set; }   // 顶级部门的上级填 1（钉钉根部门）
+}
+
+// 新建部门的响应：成功会在 result.dept_id 里带回钉钉分配的部门编号
+public class DingTalkCreateDeptResponse : IDingTalkResponse
+{
+    [JsonPropertyName("errcode")] public int ErrCode { get; set; }
+    [JsonPropertyName("errmsg")]  public string? ErrMsg { get; set; }
+    [JsonPropertyName("result")]  public DingTalkCreateDeptResult? Result { get; set; }
+}
+
+public class DingTalkCreateDeptResult
+{
+    [JsonPropertyName("dept_id")] public long DeptId { get; set; }
+}
+
+// 更新部门（topapi/v2/department/update）的请求体：dept_id 必填，其余不传表示这一项不改
+public class DingTalkUpdateDeptRequest
+{
+    [JsonPropertyName("dept_id")]   public long    DeptId   { get; set; }
+    [JsonPropertyName("name")]      public string? Name     { get; set; }
+    [JsonPropertyName("parent_id")] public long?   ParentId { get; set; }
+}
+
+// 更新部门的响应：只有 errcode/errmsg，没有额外数据
+public class DingTalkUpdateDeptResponse : IDingTalkResponse
+{
+    [JsonPropertyName("errcode")] public int ErrCode { get; set; }
+    [JsonPropertyName("errmsg")]  public string? ErrMsg { get; set; }
+}
+
+// 删除部门（topapi/v2/department/delete）的响应：只有 errcode/errmsg，没有额外数据
+public class DingTalkDeleteDeptResponse : IDingTalkResponse
+{
+    [JsonPropertyName("errcode")] public int ErrCode { get; set; }
+    [JsonPropertyName("errmsg")]  public string? ErrMsg { get; set; }
+}
+
+/// <summary>”从钉钉导入员工”完成后返回的结果。</summary>
 public class DingTalkImportResultDto
 {
     public bool   Success           { get; set; } = true;

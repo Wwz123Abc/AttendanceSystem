@@ -96,8 +96,9 @@ public class AdminController(
     [HttpDelete("users/{id:int}")]
     public async Task<IActionResult> DeactivateUser(int id)
     {
-        var ok = await userService.DeactivateUserAsync(id);
-        return Ok(new { Success = ok, Message = ok ? "已停用" : "用户不存在" });
+        var (ok, warning) = await userService.DeactivateUserAsync(id);
+        var message = !ok ? "用户不存在" : warning is null ? "已停用" : $"已停用（{warning}）";
+        return Ok(new { Success = ok, Message = message });
     }
 
     /// <summary>重置某员工密码，返回新密码明文。</summary>
