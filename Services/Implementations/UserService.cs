@@ -314,6 +314,17 @@ public class UserService(
         var user = await db.Users.FindAsync(userId);
         if (user is null) return (false, null);
 
+        // 先检查这个人是不是还挂在某个考勤组的"审批人"名单里——数据库不允许删除还被这样引用着的人，
+        // 之前没做这个检查时，删除会先把钉钉那边的账号删掉、本地才因为这个外键约束保存失败，
+        // 变成"钉钉已删、本地没删"的不一致状态；现在提前查一遍，直接给出清楚的提示，不去动钉钉
+        var approverOfGroups = await db.AttendanceGroupApprovers
+            .Where(a => a.UserId == userId)
+            .Join(db.AttendanceGroups, a => a.AttendanceGroupId, g => g.Id, (a, g) => g.GroupName)
+            .ToListAsync();
+        if (approverOfGroups.Count > 0)
+            throw new InvalidOperationException(
+                $"该员工是「{string.Join("、", approverOfGroups)}」考勤组的审批人，无法直接删除，请先到「考勤组管理」把他从审批人名单里移除后再删除");
+
         string? warning = null;
         if (string.IsNullOrEmpty(user.DingTalkUserId))
         {
