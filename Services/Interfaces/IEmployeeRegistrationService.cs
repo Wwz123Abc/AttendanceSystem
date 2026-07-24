@@ -7,7 +7,7 @@ public interface IEmployeeRegistrationService
 {
     /// <summary>岗位固定选项列表（登记页下拉框、服务端校验共用同一份，避免两处维护不一致）。</summary>
     static readonly string[] AllowedPositions =
-        ["电气熟手", "机械熟手", "电气中工", "机械中工", "普工", "调试熟手", "调试中工"];
+        ["电气熟手", "机械熟手", "电气中工", "机械中工", "普工", "调试熟手", "调试中工", "CNC操作工", "磨工"];
 
     /// <summary>员工扫码提交登记（姓名/手机号/身份证号等）。会校验格式，并挡掉重复提交。</summary>
     Task SubmitAsync(SubmitRegistrationDto dto);
