@@ -294,25 +294,25 @@ public static class ExcelExportHelper
         var orangeStyle       = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index);
         var orangeBandedStyle = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index, banded: true);
 
-        // 第 0 行：大标题（前 12 列合并）
+        // 第 0 行：大标题（前 13 列合并）
         var titleRow = sheet.CreateRow(0);
         SetCell(titleRow, 0, $"员工打卡时间表 统计日期：{start:yyyy-MM-dd} 至 {end:yyyy-MM-dd}", titleStyle);
-        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 11));
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 12));
         titleRow.HeightInPoints = 26;
 
         // 第 1 行：报表生成时间
         var genRow = sheet.CreateRow(1);
         SetCell(genRow, 0, $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}", subTitleStyle);
-        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, 11));
+        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, 12));
 
         // 第 2 行：表头
-        string[] headers = ["工号", "姓名", "部门", "日期", "星期", "上班打卡", "下班打卡", "考勤状态", "实际工时(h)", "加班(h)", "迟到(分)", "备注/审批"];
+        string[] headers = ["工号", "姓名", "部门", "日期", "星期", "上班打卡", "午间打卡", "下班打卡", "考勤状态", "实际工时(h)", "加班(h)", "迟到(分)", "备注/审批"];
         var headerRow = sheet.CreateRow(2);
         headerRow.HeightInPoints = 20;
         for (var i = 0; i < headers.Length; i++)
         {
             SetCell(headerRow, i, headers[i], headerStyle);
-            sheet.SetColumnWidth(i, i switch { 2 => 16 * 256, 11 => 22 * 256, _ => 11 * 256 });
+            sheet.SetColumnWidth(i, i switch { 2 => 16 * 256, 12 => 22 * 256, _ => 11 * 256 });
         }
         ApplyLookAndFeel(sheet, freezeCols: 3, freezeRows: 3, repeatHeaderRows: 3);   // 冻结"工号/姓名/部门"这几列+表头
 
@@ -338,12 +338,13 @@ public static class ExcelExportHelper
             SetCell(row, 3,  rec.WorkDateText,     baseStyle);
             SetCell(row, 4,  rec.DayOfWeekText,    baseStyle);
             SetCell(row, 5,  rec.ClockInText,      baseStyle);
-            SetCell(row, 6,  rec.ClockOutText,     baseStyle);
-            SetCell(row, 7,  rec.StatusText,       statusStyle);
-            SetCell(row, 8,  HalfFloor(rec.ActualWorkHours), baseStyle);
-            SetCell(row, 9,  HalfFloor(rec.OvertimeHours),   baseStyle);
-            SetCell(row, 10, rec.LateMinutes, rec.LateMinutes > 0 ? (banded ? orangeBandedStyle : orangeStyle) : baseStyle);
-            SetCell(row, 11, rec.ApprovalNote ?? "", baseStyle);
+            SetCell(row, 6,  rec.MidCheckTimeText, baseStyle);
+            SetCell(row, 7,  rec.ClockOutText,     baseStyle);
+            SetCell(row, 8,  rec.StatusText,       statusStyle);
+            SetCell(row, 9,  HalfFloor(rec.ActualWorkHours), baseStyle);
+            SetCell(row, 10, HalfFloor(rec.OvertimeHours),   baseStyle);
+            SetCell(row, 11, rec.LateMinutes, rec.LateMinutes > 0 ? (banded ? orangeBandedStyle : orangeStyle) : baseStyle);
+            SetCell(row, 12, rec.ApprovalNote ?? "", baseStyle);
         }
 
         return ToBytes(wb);

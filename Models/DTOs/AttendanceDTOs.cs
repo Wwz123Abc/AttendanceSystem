@@ -88,6 +88,11 @@ public class AttendanceRecordDto
         .Select(h => $"{h.WindowStart:HH\\:mm}-{h.WindowEnd:HH\\:mm}: {(h.HitTime.HasValue ? h.HitTime.Value.ToString("HH\\:mm") : "--")}")
         .ToList();
 
+    /// <summary>午间打卡时间，简洁版（只显示打卡时刻，多段用"、"隔开），给报表/列表这种寸土寸金的地方用；没配窗口或都没打上显示 "--"。</summary>
+    public string MidCheckTimeText => MidCheckHits.Count == 0
+        ? "--"
+        : string.Join("、", MidCheckHits.Select(h => h.HitTime.HasValue ? h.HitTime.Value.ToString("HH:mm") : "--"));
+
     public AttendanceStatus AttendanceStatus  { get; set; }                  // 考勤状态
     public string           StatusText        { get; set; } = string.Empty;  // 状态中文名
     public string           StatusCssClass    { get; set; } = string.Empty;  // 状态对应的颜色样式
