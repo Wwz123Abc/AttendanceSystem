@@ -67,12 +67,14 @@ public class AttendanceRecord
     public DateTime? ClockOutTime { get; set; }
 
     /// <summary>
-    /// 午间必打卡时间：班次配置了午间打卡窗口（ShiftSchedule.MidCheckStartTime~EndTime）时，
-    /// 当天落在这个窗口内的第一次打卡（不分上/下班类型）。为空表示该窗口内没有任何打卡——
-    /// 若班次确实配置了窗口，工时计算会按"上午没上班"只算下午工时（见 ComputeWorkHours 调用处）。
-    /// 班次没配置窗口的，这个字段永远是空，不影响任何计算。
+    /// 午间必打卡结果：和班次配置的每一段窗口（ShiftSchedule.MidCheckWindows）一一对应，
+    /// 记下每一段命中的打卡时间点。存成 "开始-结束=命中时间;开始-结束=命中时间" 这样的字符串，
+    /// 命中时间留空表示这一段当天没有任何打卡——工时计算会从"没打上的那几段里结束最晚的一段"算起
+    /// （见 AttendanceService.ClampEffectiveClockIn）。班次没配置窗口的，这个字段永远是空。
+    /// 用 <see cref="MidCheckResultsExtensions.ParseMidCheckResults"/> 解析。
     /// </summary>
-    public DateTime? MidCheckTime { get; set; }
+    [MaxLength(500)]
+    public string? MidCheckResults { get; set; }
 
     /// <summary>排班应上班时间</summary>
     public DateTime? ScheduledStartTime { get; set; }
@@ -126,6 +128,39 @@ public class AttendanceRecord
     // ── 导航属性 ──────────────────────────────────────────────────────────
     [ForeignKey("UserId")]
     public User User { get; set; } = null!;                 // 对应的员工
+}
+
+/// <summary>午间打卡"一段窗口"的判定结果：这段要求的时间范围，以及当天有没有打上（打上了是几点）。</summary>
+public readonly record struct MidCheckWindowResult(TimeOnly WindowStart, TimeOnly WindowEnd, TimeOnly? HitTime)
+{
+    public bool IsSatisfied => HitTime is not null;
+}
+
+/// <summary>AttendanceRecord.MidCheckResults 这个存库字符串的解析/格式化。</summary>
+public static class MidCheckResultsExtensions
+{
+    /// <summary>把存库字符串解析成每一段的判定结果列表，解析不了的段直接跳过。</summary>
+    public static List<MidCheckWindowResult> ParseMidCheckResults(this string? encoded) =>
+        (encoded ?? "")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(ParseOne)
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .ToList();
+
+    private static MidCheckWindowResult? ParseOne(string seg)
+    {
+        var eq = seg.Split('=');
+        if (eq.Length != 2) return null;
+        var range = eq[0].Split('-');
+        if (range.Length != 2 || !TimeOnly.TryParse(range[0], out var s) || !TimeOnly.TryParse(range[1], out var e)) return null;
+        return new MidCheckWindowResult(s, e, TimeOnly.TryParse(eq[1], out var h) ? h : null);
+    }
+
+    /// <summary>把判定结果列表格式化回存库用的字符串。</summary>
+    public static string? FormatMidCheckResults(this List<MidCheckWindowResult> results) =>
+        results.Count == 0 ? null : string.Join(";", results.Select(r =>
+            $"{r.WindowStart:HH\\:mm}-{r.WindowEnd:HH\\:mm}={(r.HitTime.HasValue ? r.HitTime.Value.ToString("HH\\:mm") : "")}"));
 }
 
 /// <summary>

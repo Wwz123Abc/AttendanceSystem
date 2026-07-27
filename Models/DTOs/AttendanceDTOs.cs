@@ -1,3 +1,4 @@
+using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 
 namespace AttendanceSystem.Models.DTOs;
@@ -76,12 +77,16 @@ public class AttendanceRecordDto
     public DateTime? ClockInTime  { get; set; }
     public DateTime? ClockOutTime { get; set; }
 
-    /// <summary>午间必打卡时间：班次没配置午间窗口，或配了但当天没打，都是空。</summary>
-    public DateTime? MidCheckTime { get; set; }
+    /// <summary>午间必打卡结果：每一段窗口各一条；班次没配置午间窗口的，这个列表是空的。</summary>
+    public List<MidCheckWindowResult> MidCheckHits { get; set; } = [];
 
     public string ClockInText  => ClockInTime?.ToString("HH:mm")  ?? "--";   // 上班时间文字，没打卡显示 --
     public string ClockOutText => ClockOutTime?.ToString("HH:mm") ?? "--";   // 下班时间文字
-    public string MidCheckText => MidCheckTime?.ToString("HH:mm") ?? "--";   // 午间打卡时间文字
+
+    /// <summary>每一段午间打卡的展示文字，如 "10:00-10:10: 10:05"；没打上显示 "--"。</summary>
+    public List<string> MidCheckTexts => MidCheckHits
+        .Select(h => $"{h.WindowStart:HH\\:mm}-{h.WindowEnd:HH\\:mm}: {(h.HitTime.HasValue ? h.HitTime.Value.ToString("HH\\:mm") : "--")}")
+        .ToList();
 
     public AttendanceStatus AttendanceStatus  { get; set; }                  // 考勤状态
     public string           StatusText        { get; set; } = string.Empty;  // 状态中文名

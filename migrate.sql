@@ -1767,5 +1767,143 @@ DELIMITER ;
 CALL MigrationsScript();
 DROP PROCEDURE MigrationsScript;
 
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+    ALTER TABLE `ShiftSchedule` ADD `MidCheckWindows` varchar(500) CHARACTER SET utf8mb4 NULL;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+    ALTER TABLE `AttendanceRecord` ADD `MidCheckResults` varchar(500) CHARACTER SET utf8mb4 NULL;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+
+                    UPDATE ShiftSchedule
+                    SET MidCheckWindows = CONCAT(DATE_FORMAT(MidCheckStartTime, '%H:%i'), '-', DATE_FORMAT(MidCheckEndTime, '%H:%i'))
+                    WHERE MidCheckStartTime IS NOT NULL AND MidCheckEndTime IS NOT NULL;
+                
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+
+                    UPDATE AttendanceRecord
+                    SET MidCheckResults = CONCAT(DATE_FORMAT(MidCheckTime, '%H:%i'), '-', DATE_FORMAT(MidCheckTime, '%H:%i'), '=', DATE_FORMAT(MidCheckTime, '%H:%i'))
+                    WHERE MidCheckTime IS NOT NULL;
+                
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+    ALTER TABLE `ShiftSchedule` DROP COLUMN `MidCheckEndTime`;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+    ALTER TABLE `ShiftSchedule` DROP COLUMN `MidCheckStartTime`;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+    ALTER TABLE `AttendanceRecord` DROP COLUMN `MidCheckTime`;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+    UPDATE `ShiftSchedule` SET `MidCheckWindows` = NULL
+    WHERE `Id` = 1;
+    SELECT ROW_COUNT();
+
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20260727080508_AddMultiMidCheckWindows', '9.0.9');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
 COMMIT;
 

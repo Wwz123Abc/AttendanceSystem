@@ -600,9 +600,15 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             {
                 if (r.ActualWorkHours <= 0 && r.ClockInTime is { } ci && r.ClockOutTime is { } co && co > ci)
                 {
-                    // 老数据补算工时口径要和写入时一致：早到晚走都不多算钱，加班只认审批（这里不猜、不动 OvertimeHours）
+                    // 老数据补算工时口径要和写入时一致：早到晚走都不多算钱，加班只认审批（这里不猜、不动 OvertimeHours）。
+                    // 缺打卡的窗口直接从记录本身已经存好的 MidCheckResults 里读，不用班次现在的配置反查
+                    // （班次配置可能后来改过，用记录当时冻结下来的这份才准确）。
                     shiftByDate.TryGetValue(r.WorkDate, out var shift);
-                    var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, r.MidCheckTime);
+                    var missedEnds = shift is not null
+                        ? r.MidCheckResults.ParseMidCheckResults().Where(m => !m.IsSatisfied)
+                            .Select(m => ResolveShiftTime(r.WorkDate, m.WindowEnd, shift)).ToList()
+                        : [];
+                    var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds);
                     var effCo = ClampEffectiveClockOut(r.WorkDate, co, shift);
                     r.ActualWorkHours = ComputeWorkHours(effCi, effCo, lunch, dinner);
                 }
@@ -929,29 +935,50 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>
-    /// 算"有效上班时间"（供工时计算用）：查当天有没有任意一次打卡（不分类型）落在班次配置的
-    /// 午间必打卡窗口内（没配窗口的跳过这步），顺带把命中的打卡时间写回 record.MidCheckTime，
+    /// 算"有效上班时间"（供工时计算用）：按班次配置的每一段午间必打卡窗口，查当天有没有打卡落在里面
+    /// （没配窗口的班次跳过这步），顺带把每一段的判定结果写回 record.MidCheckResults，
     /// 再交给 <see cref="ClampEffectiveClockIn"/> 统一算出最终的有效上班时间。
     /// </summary>
     private async Task<DateTime> ResolveEffectiveClockInAsync(
         AttendanceRecord record, DateOnly workDate, DateTime clockIn, ShiftSchedule? shift)
     {
-        if (shift?.MidCheckStartTime is null || shift.MidCheckEndTime is null)
+        var windows = shift?.ParseMidCheckWindows() ?? [];
+        if (shift is null || windows.Count == 0)
         {
-            record.MidCheckTime = null;
-        }
-        else
-        {
-            var windowStart = ResolveShiftTime(workDate, shift.MidCheckStartTime.Value, shift);
-            var windowEnd   = ResolveShiftTime(workDate, shift.MidCheckEndTime.Value, shift);
-            var hit = await db.AttendancePunches
-                .Where(p => p.UserId == record.UserId && p.PunchTime >= windowStart && p.PunchTime <= windowEnd)
-                .OrderBy(p => p.PunchTime)
-                .FirstOrDefaultAsync();
-            record.MidCheckTime = hit?.PunchTime;
+            record.MidCheckResults = null;
+            return ClampEffectiveClockIn(workDate, clockIn, shift, []);
         }
 
-        return ClampEffectiveClockIn(workDate, clockIn, shift, record.MidCheckTime);
+        // 这一天所有打卡（不分类型）一次性查出来，再挨个窗口去里面找命中的那次
+        var dayPunches = await db.AttendancePunches
+            .Where(p => p.UserId == record.UserId
+                     && p.PunchTime >= workDate.ToDateTime(TimeOnly.MinValue).AddDays(-1)
+                     && p.PunchTime <= workDate.ToDateTime(TimeOnly.MinValue).AddDays(2))
+            .Select(p => p.PunchTime)
+            .ToListAsync();
+
+        var results = ResolveMidCheckResults(workDate, shift, windows, dayPunches);
+        record.MidCheckResults = results.FormatMidCheckResults();
+
+        var missedEnds = results.Where(r => !r.IsSatisfied)
+            .Select(r => ResolveShiftTime(workDate, r.WindowEnd, shift)).ToList();
+        return ClampEffectiveClockIn(workDate, clockIn, shift, missedEnds);
+    }
+
+    /// <summary>按班次配置的每一段午间窗口，从给定的打卡时刻列表里找出每一段命中的那次打卡（没命中就是 null）。</summary>
+    public static List<MidCheckWindowResult> ResolveMidCheckResults(
+        DateOnly workDate, ShiftSchedule shift, List<(TimeOnly Start, TimeOnly End)> windows, List<DateTime> punchTimes)
+    {
+        var results = new List<MidCheckWindowResult>();
+        foreach (var w in windows)
+        {
+            var windowStart = ResolveShiftTime(workDate, w.Start, shift);
+            var windowEnd   = ResolveShiftTime(workDate, w.End, shift);
+            var hit = punchTimes.Where(t => t >= windowStart && t <= windowEnd)
+                .OrderBy(t => t).Cast<DateTime?>().FirstOrDefault();
+            results.Add(new MidCheckWindowResult(w.Start, w.End, hit.HasValue ? TimeOnly.FromDateTime(hit.Value) : null));
+        }
+        return results;
     }
 
     /// <summary>
@@ -968,13 +995,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>
-    /// 算"有效上班时间"（供工时计算用），两条规则叠加，谁把时间往后推得更多就用谁：
+    /// 算"有效上班时间"（供工时计算用），规则叠加，谁把时间往后推得更多就用谁：
     /// 1) 不能靠提前打卡多算钱：有效上班时间不早于排班的应上班时间；
-    /// 2) 班次配了午间必打卡窗口、当天又没有任何打卡落在窗口内的，视为"上午没上班"，
-    ///    从窗口结束时间起算（只算下午，工资相关，不影响迟到/早退判定）。
+    /// 2) 班次配了午间必打卡窗口的，每一段独立判定：当天没有任何打卡落在某一段窗口内，
+    ///    视为"这一段之前没上班"，从这段窗口的结束时间起算；配了多段、缺了不止一段的，
+    ///    取"影响最大"（结束时间最晚）的那一段，不会因为缺了好几段就反复往后推、越推越多。
     /// ★ 全系统唯一口径：本地打卡、钉钉同步、补卡回写都调这一个，保证结果一致。
     /// </summary>
-    public static DateTime ClampEffectiveClockIn(DateOnly workDate, DateTime clockIn, ShiftSchedule? shift, DateTime? midCheckTime)
+    public static DateTime ClampEffectiveClockIn(DateOnly workDate, DateTime clockIn, ShiftSchedule? shift, IReadOnlyList<DateTime> missedWindowEnds)
     {
         var effective = clockIn;
 
@@ -984,11 +1012,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (scheduledStart > effective) effective = scheduledStart;
         }
 
-        if (midCheckTime is null && shift?.MidCheckEndTime is not null)
-        {
-            var windowEnd = ResolveShiftTime(workDate, shift.MidCheckEndTime.Value, shift);
+        foreach (var windowEnd in missedWindowEnds)
             if (windowEnd > effective) effective = windowEnd;
-        }
 
         return effective;
     }
@@ -1117,7 +1142,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         WorkDate         = r.WorkDate,
         ClockInTime      = r.ClockInTime,
         ClockOutTime     = r.ClockOutTime,
-        MidCheckTime     = r.MidCheckTime,
+        MidCheckHits     = r.MidCheckResults.ParseMidCheckResults(),
         AttendanceStatus = r.AttendanceStatus,
         StatusText       = StatusText(r.AttendanceStatus),
         StatusCssClass   = StatusCss(r.AttendanceStatus),

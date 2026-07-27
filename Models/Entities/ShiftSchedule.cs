@@ -44,14 +44,15 @@ public class ShiftSchedule
     public int OvertimeThresholdMinutes { get; set; } = 30;
 
     /// <summary>
-    /// 午间必打卡窗口（如 8-18 点的班配 12:00~13:00）：两个都配置了才生效，留空表示这个班次不要求。
+    /// 午间必打卡窗口列表（如上午茶歇 10:00-10:10、午休 12:00-13:00，可以配多段）：留空表示这个班次不要求。
     /// 不同班次时间段不一样，由管理员在班次管理页按这个班次自己的时间段设置（下午班/晚班配各自中段的时间）。
-    /// 窗口内只要有任意一次打卡（不分上/下班类型）就算满足；缺失则当天工时只算下午（见 AttendanceRecord.MidCheckTime）。
+    /// 每一段独立判定：段内只要有任意一次打卡（不分上/下班类型）就算满足这一段；哪一段缺了，
+    /// 工时就从"缺打卡的那几段里结束时间最晚的一段"算起（见 AttendanceService.ClampEffectiveClockIn）。
+    /// 存成"开始-结束"用逗号分隔的字符串（如 "10:00-10:10,12:00-13:00"），用
+    /// <see cref="ShiftScheduleExtensions.ParseMidCheckWindows"/> 解析。
     /// </summary>
-    public TimeOnly? MidCheckStartTime { get; set; }
-
-    /// <summary>午间必打卡窗口结束时间，配合 MidCheckStartTime 使用。</summary>
-    public TimeOnly? MidCheckEndTime { get; set; }
+    [MaxLength(500)]
+    public string? MidCheckWindows { get; set; }
 
     /// <summary>是否跨天班次（如夜班，下班时间落到第二天）</summary>
     public bool IsCrossDay { get; set; } = false;
@@ -96,6 +97,19 @@ public static class ShiftScheduleExtensions
 
     /// <summary>某个星期几是不是这个班次配置的"每周休息日"。</summary>
     public static bool IsRestDay(this ShiftSchedule shift, DayOfWeek day) => shift.ParseRestDays().Contains(day);
+
+    /// <summary>把 MidCheckWindows 这个逗号分隔字符串解析成"开始-结束"时间段列表，解析不了的段直接跳过。</summary>
+    public static List<(TimeOnly Start, TimeOnly End)> ParseMidCheckWindows(this ShiftSchedule shift) =>
+        (shift.MidCheckWindows ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(seg => seg.Split('-'))
+            .Where(p => p.Length == 2 && TimeOnly.TryParse(p[0], out _) && TimeOnly.TryParse(p[1], out _))
+            .Select(p => (TimeOnly.Parse(p[0]), TimeOnly.Parse(p[1])))
+            .ToList();
+
+    /// <summary>把"开始-结束"时间段列表格式化回 MidCheckWindows 存库用的字符串。</summary>
+    public static string? FormatMidCheckWindows(this List<(TimeOnly Start, TimeOnly End)> windows) =>
+        windows.Count == 0 ? null : string.Join(",", windows.Select(w => $"{w.Start:HH\\:mm}-{w.End:HH\\:mm}"));
 }
 
 /// <summary>

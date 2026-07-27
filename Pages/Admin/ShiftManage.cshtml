@@ -88,9 +88,10 @@
                                 <td class="small text-muted">@s.AttendanceGroup?.GroupName</td>
                                 <td class="small">
                                     @s.WorkStartTime.ToString("HH:mm")~@s.WorkEndTime.ToString("HH:mm")
-                                    @if (s.MidCheckStartTime is not null && s.MidCheckEndTime is not null)
+                                    @{ var midWindows = s.ParseMidCheckWindows(); }
+                                    @if (midWindows.Count > 0)
                                     {
-                                        <br /><small class="text-muted">午间必打卡 @s.MidCheckStartTime.Value.ToString("HH:mm")-@s.MidCheckEndTime.Value.ToString("HH:mm")</small>
+                                        <br /><small class="text-muted">午间必打卡 @string.Join("、", midWindows.Select(w => $"{w.Start:HH\\:mm}-{w.End:HH\\:mm}"))</small>
                                     }
                                 </td>
                                 <td class="small text-muted">
@@ -106,7 +107,7 @@
                                                      @s.EarliestClockInMinutes,@s.OvertimeThresholdMinutes,
                                                      @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,'@s.Color',
                                                      '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(restDays.Select(d => (int)d)))',
-                                                     '@(s.MidCheckStartTime?.ToString("HH:mm"))','@(s.MidCheckEndTime?.ToString("HH:mm"))')">
+                                                     '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(midWindows.Select(w => new { start = w.Start.ToString("HH:mm"), end = w.End.ToString("HH:mm") })))')">
                                         <i class="bi bi-pencil"></i>
                                     </button>
                                     <form method="post" asp-page-handler="DeleteShift" class="d-inline"
@@ -313,17 +314,14 @@
                                 <label class="form-check-label" for="fCross">跨天班次（夜班）</label>
                             </div>
                         </div>
-                        <div class="col-6">
+                        <div class="col-12">
                             <label class="form-label fw-semibold">
-                                午间必打卡开始 <small class="text-muted fw-normal">（选填）</small>
+                                午间必打卡窗口 <small class="text-muted fw-normal">（选填，可配多段，比如上午茶歇+午休；按本班次实际时间段设置，如下午班/晚班就填其对应中段）</small>
                             </label>
-                            <input asp-for="MidCheckStart" id="fMS" type="time" class="form-control" />
-                        </div>
-                        <div class="col-6">
-                            <label class="form-label fw-semibold">
-                                午间必打卡结束 <small class="text-muted fw-normal">（两个都留空＝不要求；按本班次实际时间段设置，如下午班/晚班就填其对应中段）</small>
-                            </label>
-                            <input asp-for="MidCheckEnd" id="fME" type="time" class="form-control" />
+                            <div id="midCheckRows"></div>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addMidCheckRow()">
+                                <i class="bi bi-plus-lg me-1"></i>加一段
+                            </button>
                         </div>
                         <div class="col-12">
                             <label class="form-label fw-semibold">
@@ -374,14 +372,13 @@ function openAddShift() {
     document.getElementById('fSH').value = 8;
     document.getElementById('fCross').checked = false;
     document.getElementById('fSColor').value = '#1890ff';
-    document.getElementById('fMS').value = '';
-    document.getElementById('fME').value = '';
+    setMidCheckWindows([]);
     setRestDays([0, 6]);   // 新建默认周六周日休息，和后台的默认值保持一致
     shiftModal.show();
 }
 
 // 点某个班次的"编辑"：把这个班次现有的各项值填进弹窗表单，方便直接在原有基础上改
-function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, restDaysJson, midStart, midEnd) {
+function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, restDaysJson, midWindowsJson) {
     document.getElementById('shiftModalTitle').textContent = '编辑班次';
     document.getElementById('shiftId').value = id;   // 非 0，OnPostSaveShiftAsync 据此判断是"修改"
     document.getElementById('shiftGroupId').value = gid;
@@ -394,10 +391,51 @@ function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, 
     document.getElementById('fSH').value = sh;
     document.getElementById('fCross').checked = cross;
     document.getElementById('fSColor').value = color;
-    document.getElementById('fMS').value = midStart || '';
-    document.getElementById('fME').value = midEnd || '';
+    setMidCheckWindows(JSON.parse(midWindowsJson || '[]'));
     setRestDays(JSON.parse(restDaysJson || '[]'));
     shiftModal.show();
+}
+
+// ── 午间必打卡窗口：动态增删的表单行（做法跟考勤组的"打卡地点"多行表单一样）──────────────
+// Razor Pages 绑定 List<T> 要求索引从 0 开始连续编号，所以每次增删后都要重新给所有行编号。
+function addMidCheckRow(data) {
+    data = data || { start: '', end: '' };
+    const div = document.createElement('div');
+    div.className = 'mid-check-row d-flex align-items-end gap-2 mb-2';
+    div.innerHTML = `
+        <div class="flex-fill">
+            <label class="form-label small mb-1 text-muted">开始</label>
+            <input type="time" class="form-control form-control-sm" data-field="Start" />
+        </div>
+        <div class="flex-fill">
+            <label class="form-label small mb-1 text-muted">结束</label>
+            <input type="time" class="form-control form-control-sm" data-field="End" />
+        </div>
+        <button type="button" class="btn btn-outline-danger btn-sm" title="删除这一段" onclick="removeMidCheckRow(this)"><i class="bi bi-trash"></i></button>
+    `;
+    div.querySelector('[data-field="Start"]').value = data.start ?? '';
+    div.querySelector('[data-field="End"]').value = data.end ?? '';
+    document.getElementById('midCheckRows').appendChild(div);
+    renumberMidCheckRows();
+}
+
+function removeMidCheckRow(btn) {
+    btn.closest('.mid-check-row').remove();
+    renumberMidCheckRows();
+}
+
+function renumberMidCheckRows() {
+    document.querySelectorAll('#midCheckRows .mid-check-row').forEach((row, idx) => {
+        row.querySelectorAll('[data-field]').forEach(input => {
+            input.name = `MidCheckWindowInputs[${idx}].${input.dataset.field}`;
+        });
+    });
+}
+
+// 清空后按传入的窗口列表重新渲染（编辑时回显 / 新建时清空）
+function setMidCheckWindows(list) {
+    document.getElementById('midCheckRows').innerHTML = '';
+    list.forEach(w => addMidCheckRow({ start: w.start, end: w.end }));
 }
 
 // 按传入的星期几编号列表，勾选/取消勾选"每周休息日"

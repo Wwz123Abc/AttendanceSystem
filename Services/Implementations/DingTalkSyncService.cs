@@ -191,21 +191,18 @@ public class DingTalkSyncService(
 
             shiftByUserDate.TryGetValue((uid, date), out var shift);
 
-            // 午间必打卡窗口：班次配了窗口的，当天有没有任意一次打卡（不分上/下班类型）落在窗口内。
-            // 钉钉的 OnDuty/OffDuty 分类不代表"这是午间那次"，所以不看类型，只看时间是否落在窗口内。
-            record.MidCheckTime = shift?.MidCheckStartTime is not null && shift.MidCheckEndTime is not null
-                ? agg.AllTimes
-                    .Where(t => t >= AttendanceService.ResolveShiftTime(date, shift.MidCheckStartTime.Value, shift)
-                             && t <= AttendanceService.ResolveShiftTime(date, shift.MidCheckEndTime.Value, shift))
-                    .OrderBy(t => t)
-                    .Cast<DateTime?>()
-                    .FirstOrDefault()
-                : null;
+            // 午间必打卡：班次配了几段窗口就挨个判定，每一段各自看当天有没有任意一次打卡
+            // （不分上/下班类型——钉钉的 OnDuty/OffDuty 分类不代表"这是午间那次"，只看时间是否落在窗口内）落在里面。
+            var midCheckWindows = shift?.ParseMidCheckWindows() ?? [];
+            var midCheckResults = shift is not null && midCheckWindows.Count > 0
+                ? AttendanceService.ResolveMidCheckResults(date, shift, midCheckWindows, agg.AllTimes)
+                : [];
+            record.MidCheckResults = midCheckResults.FormatMidCheckResults();
 
             // ★ 工时（工资按工时结算，必须在同步时算准写进日记录，不能留 0 等汇总兜底）：
             //   上下班卡齐了就按「打卡时长 − 午休/晚餐」算实际工时，公式与本地打卡完全相同；
             //   早到晚走都不多算钱：有效上班时间不早于应上班时间，有效下班时间不晚于应下班时间
-            //   （午间必打卡窗口配了但当天没打→视为"上午没上班"只算下午，见 ClampEffectiveClockIn）；
+            //   （午间必打卡窗口配了但当天没打→视为"这一段之前没上班"，见 ClampEffectiveClockIn）；
             //   加班不再从打卡时间估算，只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
             if (record.ClockInTime is { } rci && record.ClockOutTime is { } rco && rco > rci)
             {
@@ -213,7 +210,9 @@ public class DingTalkSyncService(
                                       && groupBreaks.TryGetValue(gid.Value, out var brk)
                     ? brk : (60, 30);
 
-                var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(date, rci, shift, record.MidCheckTime);
+                var missedEnds = midCheckResults.Where(r => !r.IsSatisfied)
+                    .Select(r => AttendanceService.ResolveShiftTime(date, r.WindowEnd, shift!)).ToList();
+                var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(date, rci, shift, missedEnds);
                 var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(date, rco, shift);
                 record.ActualWorkHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut, lunch, dinner);
             }
