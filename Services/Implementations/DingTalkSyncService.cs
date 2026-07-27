@@ -34,7 +34,11 @@ public class DingTalkSyncService(
             .Where(u => u.DingTalkUserId != null && u.DingTalkUserId != "")
             .Select(u => new { u.Id, u.DingTalkUserId, u.AttendanceGroupId })
             .ToListAsync(ct);
-        var userMap       = mappedUsers.ToDictionary(u => u.DingTalkUserId!, u => u.Id);
+        // 万一本地有多个账号误绑了同一个钉钉 userid（数据质量问题），按 Id 最小（最早建的那个）为准，
+        // 而不是直接崩掉——否则一条脏数据会导致所有人的打卡都同步不了
+        var userMap = mappedUsers
+            .GroupBy(u => u.DingTalkUserId!)
+            .ToDictionary(g => g.Key, g => g.OrderBy(u => u.Id).First().Id);
         var groupIdByUser = mappedUsers.ToDictionary(u => u.Id, u => u.AttendanceGroupId);
 
         // 各考勤组的午休/晚餐扣时（工资按工时结算，同步时必须把工时算准）
