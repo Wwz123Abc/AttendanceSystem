@@ -163,7 +163,7 @@ public class UserManageModel(
     {
         try
         {
-            ValidateContact(requirePhone: true, requireSupervisor: true);
+            ValidateContact(requirePhone: true, requireSupervisor: true, requireDept: true);
             var newUser = BuildUser();
             // 如果是在"确认录入"某条扫码登记，员工自己提交时可能已经上传过身份证照片；
             // 管理员这次没有重新上传的话，就沿用登记里那张，避免让员工再扫一次码补传
@@ -195,7 +195,7 @@ public class UserManageModel(
     {
         try
         {
-            ValidateContact(requirePhone: false, requireSupervisor: false);
+            ValidateContact(requirePhone: false, requireSupervisor: false, requireDept: false);
             var oldPhotoUrl = (await userService.GetUserByIdAsync(EditUserId))?.IdCardPhotoUrl;
             var user = BuildUser();
             user.Id = EditUserId;
@@ -323,7 +323,7 @@ public class UserManageModel(
     /// <paramref name="requireSupervisor"/>=true 时"直属上级"还不能为空——新建员工要求必选直属上级，
     /// 保证审批流程（尤其是二级审批）总能找到人；编辑老员工时同样不强制补填，避免历史遗留数据卡住其它字段的修改。
     /// </summary>
-    private void ValidateContact(bool requirePhone, bool requireSupervisor)
+    private void ValidateContact(bool requirePhone, bool requireSupervisor, bool requireDept)
     {
         if (string.IsNullOrWhiteSpace(EmployeeNo))
             throw new InvalidOperationException("请填写工号");
@@ -339,6 +339,8 @@ public class UserManageModel(
             throw new InvalidOperationException("入职日期格式不正确");
         if (requireSupervisor && !SuperId.HasValue)
             throw new InvalidOperationException("请选择直属上级");
+        if (requireDept && !DeptId.HasValue)
+            throw new InvalidOperationException("请选择部门");
 
         if (requirePhone && string.IsNullOrWhiteSpace(Phone))
             throw new InvalidOperationException("请填写手机号（用于以后自助找回密码）");

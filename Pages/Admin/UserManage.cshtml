@@ -447,7 +447,7 @@
                             <div class="form-text">本系统只有"管理员"是正式工，其余角色均为临时工。</div>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">部门</label>
+                            <label class="form-label">部门 <span class="text-danger" id="fDeptIdReq">*</span></label>
                             <select asp-for="DeptId" class="form-select" id="fDeptId">
                                 <option value="">请选择</option>
                                 @foreach (var d in Model.DeptTree.Where(x => x.IsActive))
@@ -703,6 +703,8 @@ function openAdd() {
     document.getElementById('fPhoneReq').style.display = '';
     document.getElementById('fSuperId').required = true;           // 新建必须选直属上级
     document.getElementById('fSuperIdReq').style.display = '';
+    document.getElementById('fDeptId').required = true;            // 新建必须选部门（否则钉钉邀请没法同步）
+    document.getElementById('fDeptIdReq').style.display = '';
     document.getElementById('fDingTalkStatus').textContent = '';   // 新建员工还没有钉钉绑定状态，不显示
     autoFillEmployeeNo = true;
     fillEmployeeNoForDept(document.getElementById('fDeptId').value);   // 默认部门已选中时，直接按它生成一次
@@ -760,6 +762,8 @@ function openConfirm(data) {
     document.getElementById('fPhoneReq').style.display = '';
     document.getElementById('fSuperId').required = true;
     document.getElementById('fSuperIdReq').style.display = '';
+    document.getElementById('fDeptId').required  = true;
+    document.getElementById('fDeptIdReq').style.display = '';
     autoFillEmployeeNo = true;
     fillEmployeeNoForDept(document.getElementById('fDeptId').value);   // 默认部门已选中时，直接按它生成一次
     suggestSupervisorForDept(document.getElementById('fDeptId').value);
@@ -795,6 +799,8 @@ function openEdit(data) {
     document.getElementById('fPhoneReq').style.display = 'none';
     document.getElementById('fSuperId').required = false;          // 编辑老员工不强制补填直属上级
     document.getElementById('fSuperIdReq').style.display = 'none';
+    document.getElementById('fDeptId').required  = false;          // 编辑老员工不强制补填部门（比如部门被删后"未分配"的员工）
+    document.getElementById('fDeptIdReq').style.display = 'none';
     document.getElementById('fSuperIdHint').textContent = '选定部门后会自动带出该部门的主管，也可以手动改选。';
     document.getElementById('fIdNumber').value   = data.idNumber || '';
     document.getElementById('fContractCompany').value = data.contractCompany || '';
