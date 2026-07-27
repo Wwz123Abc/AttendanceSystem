@@ -22,6 +22,11 @@ public interface IApprovalService
     Task<ApprovalRequestDto?> GetApprovalDetailAsync(int id, int requesterUserId, bool isManager);
     /// <summary>查询待某审批人处理的申请列表。</summary>
     Task<List<ApprovalRequestDto>> GetPendingForApproverAsync(int approverUserId);
+    /// <summary>
+    /// 查询某审批人"已经处理过"的申请列表（他在这张单里有一个已通过/已驳回的节点）。
+    /// 不管这张单后续是不是还要走其他人的节点，只要这个人自己审过就会出现在这里，按他自己处理的时间倒序。
+    /// </summary>
+    Task<List<ApprovalRequestDto>> GetHandledByApproverAsync(int approverUserId);
     /// <summary>查询某用户提交的申请列表（可按状态过滤）。</summary>
     Task<List<ApprovalRequestDto>> GetMyApprovalsAsync(int userId, ApprovalStatus? status = null);
     /// <summary>生成审批单号（前缀 + 日期 + 当日流水号）。</summary>

@@ -220,7 +220,31 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             .Select(ToDto).ToList();
     }
 
-    /// <summary>查“我提交的”申请列表（可按状态过滤）。</summary>
+    /// <summary>查”我已经审批过”的记录：只要我在这张单里有一个已通过/已驳回的节点就算数，
+    /// 不管这张单最终整体是不是还在走后续流程；按我自己处理的时间倒序排列。</summary>
+    public async Task<List<ApprovalRequestDto>> GetHandledByApproverAsync(int approverUserId)
+    {
+        var items = await db.ApprovalRequests
+            .Include(a => a.Applicant).ThenInclude(u => u.Department)
+            .Include(a => a.ApprovalSteps).ThenInclude(s => s.Approver)
+            .Where(a => a.ApprovalSteps.Any(s => s.ApproverUserId == approverUserId
+                                               && s.ApprovalStatus != ApprovalStatus.Pending))
+            .ToListAsync();
+
+        return items
+            .Select(a => new
+            {
+                Request     = a,
+                MyHandledAt = a.ApprovalSteps
+                    .Where(s => s.ApproverUserId == approverUserId && s.ApprovalStatus != ApprovalStatus.Pending)
+                    .Max(s => s.HandledAt)
+            })
+            .OrderByDescending(x => x.MyHandledAt)
+            .Select(x => ToDto(x.Request))
+            .ToList();
+    }
+
+    /// <summary>查”我提交的”申请列表（可按状态过滤）。</summary>
     public async Task<List<ApprovalRequestDto>> GetMyApprovalsAsync(
         int userId, ApprovalStatus? status = null)
     {
@@ -446,8 +470,9 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             // 各级审批节点，按顺序展开
             Steps = a.ApprovalSteps.OrderBy(s => s.StepOrder).Select(s => new ApprovalStepDto
             {
-                StepOrder    = s.StepOrder,
-                ApproverName = s.Approver.RealName,
+                StepOrder      = s.StepOrder,
+                ApproverUserId = s.ApproverUserId,
+                ApproverName   = s.Approver.RealName,
                 Status       = s.ApprovalStatus,
                 StatusText   = StatusText(s.ApprovalStatus),
                 Comment      = s.Comment,

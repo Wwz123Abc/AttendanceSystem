@@ -10,7 +10,11 @@ namespace AttendanceSystem.Pages.Approval;
 public class PendingApprovalModel(IApprovalService approvalService) : AppPageModel
 {
     public List<ApprovalRequestDto> PendingItems  { get; set; } = [];   // 待我审批的列表
+    public List<ApprovalRequestDto> HandledItems  { get; set; } = [];   // 我已经审批过的记录
     public ApprovalRequestDto?      CurrentDetail { get; set; }         // 当前查看的某条详情
+
+    /// <summary>给页面用：CurrentUserId 是 protected，视图访问不到，这里包一层露出来（用来在"我已审批记录"里认出哪一级是自己）。</summary>
+    public int MyUserId => CurrentUserId;
     public string? Message    { get; set; }
     public bool    IsSuccess  { get; set; }
 
@@ -18,10 +22,10 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
     [BindProperty] public string Comment   { get; set; } = string.Empty; // 审批意见
     [BindProperty] public List<int> BatchIds { get; set; } = [];         // 勾选要批量处理的申请单编号列表
 
-    /// <summary>打开页面：加载待办列表；若带了 detailId，再加载那条详情。</summary>
+    /// <summary>打开页面：加载待办列表 + 我已审批过的记录；若带了 detailId，再加载那条详情。</summary>
     public async Task OnGetAsync(int? detailId)
     {
-        PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+        await ReloadListsAsync();
         if (detailId.HasValue)
         {
             bool isManager = User.IsInRole(nameof(AttendanceSystem.Models.Enums.UserRole.Admin))
@@ -44,7 +48,7 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
         });
         Message   = ok ? "已通过该申请" : "操作失败，请重试";
         IsSuccess = ok;
-        PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);   // 刷新列表
+        await ReloadListsAsync();   // 刷新列表
         return Page();
     }
 
@@ -62,7 +66,7 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
         });
         Message   = ok ? "已驳回该申请" : "操作失败，请重试";
         IsSuccess = ok;
-        PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+        await ReloadListsAsync();
         return Page();
     }
 
@@ -103,8 +107,15 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
 
         Message   = $"批量{(approved ? "通过" : "驳回")}完成：成功 {okCount} / {ids.Count} 条";
         IsSuccess = okCount > 0;
-        PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+        await ReloadListsAsync();
         return Page();
+    }
+
+    /// <summary>重新加载"待我审批"和"我已审批过"这两份列表。</summary>
+    private async Task ReloadListsAsync()
+    {
+        PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+        HandledItems = await approvalService.GetHandledByApproverAsync(CurrentUserId);
     }
 
     /// <summary>
@@ -126,7 +137,7 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
     {
         Message   = message;
         IsSuccess = false;
-        PendingItems = await approvalService.GetPendingForApproverAsync(CurrentUserId);
+        await ReloadListsAsync();
         return Page();
     }
 }

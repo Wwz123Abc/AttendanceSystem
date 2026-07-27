@@ -113,6 +113,55 @@
     </div>
 </div>
 
+<div class="card mt-3">
+    <div class="card-header">我的已审批记录（共 @Model.HandledItems.Count 条）</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>单号</th>
+                        <th>申请人</th>
+                        <th>部门</th>
+                        <th>类型</th>
+                        <th>详情</th>
+                        <th>提交时间</th>
+                        <th>我的处理结果</th>
+                        <th>我的处理时间</th>
+                        <th>我的审批意见</th>
+                        <th>整单当前状态</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.HandledItems.Any())
+                    {
+                        <tr><td colspan="10" class="empty-state"><i class="bi bi-inbox"></i>暂无已审批记录</td></tr>
+                    }
+                    @foreach (var item in Model.HandledItems)
+                    {
+                        var myStep = item.Steps.FirstOrDefault(s => s.ApproverUserId == Model.MyUserId);
+                        <tr>
+                            <td class="small text-muted">@item.RequestNo</td>
+                            <td>
+                                @item.ApplicantName
+                                <span class="text-muted small d-block">@item.ApplicantEmployeeNo</span>
+                            </td>
+                            <td class="small">@item.DeptName</td>
+                            <td><span class="badge bg-secondary">@item.ApprovalTypeText</span></td>
+                            <td class="small">@DetailText(item)</td>
+                            <td class="small">@item.SubmittedAtText</td>
+                            <td class="small @(myStep?.Status == ApprovalStatus.Rejected ? "f-color-red" : "f-color-green")">@(myStep?.StatusText ?? "—")</td>
+                            <td class="small">@(myStep?.HandledAtText ?? "—")</td>
+                            <td class="small text-truncate" style="max-width:160px">@(myStep?.Comment ?? "—")</td>
+                            <td class="small @item.ApprovalStatusCss">@item.ApprovalStatusText</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 @functions {
     /// <summary>按申请类型拼一句简短的"详情"文字，直接显示在列表里，不用点进去才看得到具体时间/时长。</summary>
     string DetailText(ApprovalRequestDto i) => i.ApprovalType switch
