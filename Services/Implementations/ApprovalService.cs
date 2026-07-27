@@ -23,9 +23,17 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         var user = await db.Users.FindAsync(applicantUserId)
             ?? throw new KeyNotFoundException("用户不存在");
 
-        // 如果填了起止时间，就算出请假/加班/出差的时长
-        decimal? leaveDuration  = dto.LeaveStartTime.HasValue && dto.LeaveEndTime.HasValue
-            ? (decimal)(dto.LeaveEndTime.Value - dto.LeaveStartTime.Value).TotalHours : null;
+        // 请假时长：跟"实际工时"用同一套算法（净时长超过 6/9 小时才扣一次午休/晚餐，不是跨度多长都原样算），
+        // 这样"请一整天假"和"正常上一整天班"算出来的小时数口径一致，不会因为没扣午休比标准工时凭空多 1 小时。
+        decimal? leaveDuration = null;
+        if (dto.LeaveStartTime.HasValue && dto.LeaveEndTime.HasValue)
+        {
+            var group = user.AttendanceGroupId.HasValue
+                ? await db.AttendanceGroups.FindAsync(user.AttendanceGroupId.Value) : null;
+            leaveDuration = AttendanceService.ComputeWorkHours(
+                dto.LeaveStartTime.Value, dto.LeaveEndTime.Value,
+                group?.LunchBreakMinutes ?? 60, group?.DinnerBreakMinutes ?? 30);
+        }
         decimal? overtimeDuration = dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue
             ? (decimal)(dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours : null;
         decimal? businessTripDuration = dto.BusinessTripStartTime.HasValue && dto.BusinessTripEndTime.HasValue
