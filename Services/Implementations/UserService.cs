@@ -191,7 +191,9 @@ public class UserService(
         string? warning = null;
         if (string.IsNullOrEmpty(existing.DingTalkUserId))
         {
-            logger.LogInformation("更新员工 {UserId}：本地未绑定钉钉账号（DingTalkUserId 为空），跳过钉钉同步", user.Id);
+            // 之前建号时手机号/部门信息不全，创建时被跳过了钉钉同步；现在编辑补全了，
+            // 在这里补一次创建尝试（不能走下面的"更新"分支——那要求钉钉那边已经有账号了）
+            warning = await TryCreateOnDingTalkAsync(existing);
         }
         else
         {
