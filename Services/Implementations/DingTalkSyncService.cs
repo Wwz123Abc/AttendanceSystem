@@ -347,23 +347,26 @@ public class DingTalkSyncService(
         var now         = DateTime.Now;
         var companyName = string.IsNullOrWhiteSpace(snapshot.CompanyName) ? "钉钉企业" : snapshot.CompanyName!.Trim();
 
-        // 1) 同步部门：按 DeptCode="DT{钉钉部门id}" 唯一匹配，写入部门名与「所属公司」
-        var deptCodeMap = (await db.Departments.Where(d => d.DeptCode != null).ToListAsync(ct))
-            .ToDictionary(d => d.DeptCode!, d => d);
+        // 1) 同步部门：优先按 DingTalkDeptId 匹配（本系统这边新建部门、主动推送到钉钉后回填的编号），
+        //    找不到再按 DeptCode="DT{钉钉部门id}" 匹配（早年"从钉钉导入"建部门时用的老办法），
+        //    两种都没命中才新建——避免同一个钉钉部门在本地被建出两条重复记录（一条有人、一条常年 0 人）
+        var existingDepts = await db.Departments.Where(d => d.DeptCode != null || d.DingTalkDeptId != null).ToListAsync(ct);
+        var byDingId    = existingDepts.Where(d => d.DingTalkDeptId.HasValue).ToDictionary(d => d.DingTalkDeptId!.Value, d => d);
+        var deptCodeMap = existingDepts.Where(d => d.DeptCode != null).ToDictionary(d => d.DeptCode!, d => d);
         foreach (var dd in snapshot.Departments)
         {
             var code = $"DT{dd.DeptId}";
-            if (!deptCodeMap.TryGetValue(code, out var dept))
+            if (!byDingId.TryGetValue(dd.DeptId, out var dept) && !deptCodeMap.TryGetValue(code, out dept))
             {
                 dept = new Department { DeptCode = code, CreatedAt = now };
                 db.Departments.Add(dept);
-                deptCodeMap[code] = dept;
             }
             dept.DeptName       = string.IsNullOrWhiteSpace(dd.Name) ? code : dd.Name!;
             dept.CompanyName    = companyName;     // 所属公司
             dept.IsActive       = true;
             dept.DingTalkDeptId = dd.DeptId;        // 记下钉钉部门编号，以后本系统这边改部门才能联动过去
             dept.UpdatedAt      = now;
+            deptCodeMap[code]   = dept;             // 保证下面按 "DT{钉钉部门id}" 这个 key 一定能查到这条记录
         }
         await db.SaveChangesAsync(ct);          // 先存部门以拿到本地 Id
 
