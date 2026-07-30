@@ -232,6 +232,23 @@
                 <div class="kr-sub text-center mt-2" style="color:rgba(255,255,255,.6)">考勤管理系统</div>
             </div>
             <ul class="nav flex-column px-2 py-2 gap-1 flex-grow-1">
+                <li><span class="nav-section">公告</span></li>
+                <li>
+                    <a class="nav-link @(currentPath.StartsWith("/Notice/Board") ? "active" : "")"
+                       href="/Notice/Board">
+                        <i class="bi bi-megaphone"></i>公告栏
+                    </a>
+                </li>
+                @if (currentUser.CanApprove)
+                {
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Notice/Publish") ? "active" : "")"
+                           href="/Notice/Publish">
+                            <i class="bi bi-send"></i>发布公告
+                        </a>
+                    </li>
+                }
+
                 <li><span class="nav-section">考勤</span></li>
                 <li>
                     <a class="nav-link @(currentPath.StartsWith("/Attendance/MyRecord") ? "active" : "")"
@@ -419,11 +436,13 @@
     }
 
     // 点某一条通知：先告诉后台"这条我看过了"（标记已读），
-    // 如果是"审批相关"的通知就直接带去待审批页面，方便马上处理；不然就只是刷新一下通知列表
+    // 审批相关的通知直接带去待审批页面方便马上处理；公告通知带去公告栏；不然就只是刷新一下通知列表
     async function readNotif(id, type, relatedId) {
         await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
         if (type === 'ApprovalPending' || type === 'ApprovalResult')
             location.href = '/Approval/PendingApproval';
+        else if (type === 'Announcement')
+            location.href = '/Notice/Board';
         else
             loadNotifications();
     }

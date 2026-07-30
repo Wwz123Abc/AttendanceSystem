@@ -96,6 +96,7 @@ builder.Services.AddScoped<IAttendanceService,     AttendanceService>();
 builder.Services.AddScoped<IApprovalService,       ApprovalService>();
 builder.Services.AddScoped<IAttendanceGroupService, AttendanceGroupService>();
 builder.Services.AddScoped<IEmployeeRegistrationService, EmployeeRegistrationService>();
+builder.Services.AddScoped<IAnnouncementService,   AnnouncementService>();
 
 // ── 钉钉对接相关注册 ────────────────────────────────────────────────────────────
 builder.Services.Configure<DingTalkOptions>(

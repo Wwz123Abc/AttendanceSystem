@@ -1,0 +1,198 @@
+@page
+@model AttendanceSystem.Pages.Notice.PublishModel
+@{
+    ViewData["Title"] = "发布公告";
+}
+
+<div class="page-header">
+    <h4><i class="bi bi-megaphone me-2 text-primary"></i>发布公告</h4>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+
+<div class="card mb-3">
+    <div class="card-header">新建公告</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Publish">
+            <div class="row g-3">
+                <div class="col-12">
+                    <label class="form-label fw-semibold">标题</label>
+                    <input asp-for="Title" class="form-control" required maxlength="200" />
+                </div>
+                <div class="col-12">
+                    <label class="form-label fw-semibold">内容</label>
+                    <textarea asp-for="Body" class="form-control" rows="5" required maxlength="2000"></textarea>
+                </div>
+                @if (Model.IsManager)
+                {
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold">发布范围</label>
+                        <select asp-for="ScopeType" id="scopeTypeSelect" class="form-select">
+                            <option value="All">全公司</option>
+                            <option value="Department">指定部门</option>
+                            <option value="AttendanceGroup">指定考勤组</option>
+                        </select>
+                    </div>
+                    <div class="col-md-8" id="scopeDeptWrap" style="display:none">
+                        <label class="form-label fw-semibold">选择部门（含其所有子部门）</label>
+                        <select asp-for="ScopeId" id="scopeDeptSelect" class="form-select">
+                            <option value="">请选择</option>
+                            @foreach (var d in Model.DeptOptions)
+                            { <option value="@d.Id">@d.Name</option> }
+                        </select>
+                    </div>
+                    <div class="col-md-8" id="scopeGroupWrap" style="display:none">
+                        <label class="form-label fw-semibold">选择考勤组</label>
+                        <select id="scopeGroupSelect" class="form-select">
+                            <option value="">请选择</option>
+                            @foreach (var g in Model.GroupOptions)
+                            { <option value="@g.Id">@g.Name</option> }
+                        </select>
+                    </div>
+                }
+                else
+                {
+                    <div class="col-12">
+                        <div class="alert alert-info mb-0">
+                            <i class="bi bi-info-circle me-1"></i>
+                            发布范围固定为"我的直属下属"，将发给 <b>@Model.DirectReportCount</b> 名员工。
+                        </div>
+                    </div>
+                }
+            </div>
+            <div class="mt-3">
+                <button type="submit" class="btn btn-primary"><i class="bi bi-send me-1"></i>发布</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">我发布的公告（共 @Model.MyPublished.Count 条）</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>标题</th><th>范围</th><th>发布时间</th>
+                        <th>已读情况</th><th>状态</th><th style="width:160px">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.MyPublished.Any())
+                    {
+                        <tr><td colspan="6" class="empty-state"><i class="bi bi-inbox"></i>还没有发布过公告</td></tr>
+                    }
+                    @foreach (var a in Model.MyPublished)
+                    {
+                        <tr>
+                            <td>@a.Title</td>
+                            <td class="small text-muted">@a.ScopeText</td>
+                            <td class="small">@a.CreatedAtText</td>
+                            <td>
+                                <button type="button" class="btn btn-outline-info btn-sm read-detail-btn" data-id="@a.Id">
+                                    @a.ReadCount / @a.TotalCount 人已读
+                                </button>
+                            </td>
+                            <td>
+                                @if (a.IsActive)
+                                {
+                                    <span class="badge bg-success">生效中</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">已撤下</span>
+                                }
+                            </td>
+                            <td>
+                                @if (a.IsActive)
+                                {
+                                    <form method="post" asp-page-handler="Withdraw" class="d-inline"
+                                          onsubmit="return confirm('确认撤下这条公告？撤下后员工的公告栏里就看不到了。')">
+                                        <input type="hidden" name="id" value="@a.Id" />
+                                        <button type="submit" class="btn btn-outline-danger btn-sm">撤下</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 已读明细 Modal -->
+<div class="modal fade" id="readDetailModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">已读情况</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>姓名</th><th>工号</th><th>状态</th></tr></thead>
+                    <tbody id="readDetailBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+// 发布范围选择：切到"指定部门/指定考勤组"才显示对应的下拉框
+const scopeTypeSelect = document.getElementById('scopeTypeSelect');
+if (scopeTypeSelect) {
+    function updateScopeUI() {
+        const deptWrap  = document.getElementById('scopeDeptWrap');
+        const groupWrap = document.getElementById('scopeGroupWrap');
+        const deptSelect  = document.getElementById('scopeDeptSelect');
+        const groupSelect = document.getElementById('scopeGroupSelect');
+        const val = scopeTypeSelect.value;
+        deptWrap.style.display  = val === 'Department'      ? '' : 'none';
+        groupWrap.style.display = val === 'AttendanceGroup' ? '' : 'none';
+        // ScopeId 这个隐藏绑定字段跟着当前显示的那个下拉框走
+        deptSelect.name  = val === 'Department'      ? 'ScopeId' : '';
+        groupSelect.name = val === 'AttendanceGroup'  ? 'ScopeId' : '';
+    }
+    scopeTypeSelect.addEventListener('change', updateScopeUI);
+    updateScopeUI();
+}
+
+// 已读明细弹窗：点按钮时 AJAX 拉这条公告的已读名单
+const readDetailModal = new bootstrap.Modal(document.getElementById('readDetailModal'));
+document.querySelectorAll('.read-detail-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const tbody = document.getElementById('readDetailBody');
+        tbody.innerHTML = '<tr><td colspan="3" class="text-muted small">加载中...</td></tr>';
+        readDetailModal.show();
+        try {
+            const resp = await fetch(`?handler=ReadDetail&id=${id}`);
+            const list = await resp.json();
+            tbody.innerHTML = list.length === 0
+                ? '<tr><td colspan="3" class="text-muted small">没有受众</td></tr>'
+                : list.map(x => `
+                    <tr>
+                        <td>${x.realName}</td>
+                        <td class="small text-muted">${x.employeeNo}</td>
+                        <td class="small ${x.readAt ? 'text-success' : 'text-danger'}">${x.readAtText}</td>
+                    </tr>`).join('');
+        } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-danger small">加载失败</td></tr>';
+        }
+    });
+});
+</script>
+}

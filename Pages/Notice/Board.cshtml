@@ -1,0 +1,85 @@
+@page
+@model AttendanceSystem.Pages.Notice.BoardModel
+@{
+    ViewData["Title"] = "公告栏";
+    var unreadCount = Model.Items.Count(i => !i.IsRead);
+}
+
+<div class="page-header">
+    <h4><i class="bi bi-megaphone me-2 text-primary"></i>公告栏
+        @if (unreadCount > 0)
+        {
+            <span class="badge bg-danger ms-2">@unreadCount 条未读</span>
+        }
+    </h4>
+</div>
+
+<div class="row g-3">
+    @if (!Model.Items.Any())
+    {
+        <div class="col-12">
+            <div class="card"><div class="card-body empty-state"><i class="bi bi-inbox"></i>暂无公告</div></div>
+        </div>
+    }
+    @foreach (var item in Model.Items)
+    {
+        <div class="col-12">
+            <div class="card announcement-card @(item.IsRead ? "" : "border-primary")" style="cursor:pointer"
+                 data-bs-toggle="modal" data-bs-target="#noticeDetailModal" data-id="@item.Id">
+                <div class="card-body py-3">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <h6 class="mb-1">
+                            @if (!item.IsRead)
+                            {
+                                <span class="badge bg-danger me-2">未读</span>
+                            }
+                            @item.Title
+                        </h6>
+                        <small class="text-muted text-nowrap ms-3">@item.CreatedAtText</small>
+                    </div>
+                    <div class="text-muted small text-truncate">@item.Content</div>
+                    <div class="text-muted small mt-1">发布人：@item.PublisherName</div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- 公告详情 Modal -->
+<div class="modal fade" id="noticeDetailModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="noticeDetailTitle">公告详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="text-muted small mb-2" id="noticeDetailMeta"></div>
+                <div id="noticeDetailContent" style="white-space:pre-wrap"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+const NOTICE_DETAILS = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
+    Model.Items.ToDictionary(i => i.Id, i => new { title = i.Title, content = i.Content, meta = $"发布人：{i.PublisherName}　{i.CreatedAtText}" })));
+
+const noticeDetailModal = document.getElementById('noticeDetailModal');
+noticeDetailModal.addEventListener('show.bs.modal', function (e) {
+    const id = e.relatedTarget.dataset.id;
+    const d = NOTICE_DETAILS[id];
+    if (!d) return;
+    document.getElementById('noticeDetailTitle').textContent = d.title;
+    document.getElementById('noticeDetailMeta').textContent = d.meta;
+    document.getElementById('noticeDetailContent').textContent = d.content;
+
+    // 打开详情顺手标记已读：去掉这张卡片的"未读"样式和角标，不用等刷新页面才消失
+    const card = e.relatedTarget;
+    card.classList.remove('border-primary');
+    card.querySelector('.badge.bg-danger')?.remove();
+    fetch(`?handler=MarkRead&id=${id}`).catch(() => {});
+});
+</script>
+}

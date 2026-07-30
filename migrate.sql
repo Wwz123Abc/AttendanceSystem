@@ -1905,5 +1905,110 @@ DELIMITER ;
 CALL MigrationsScript();
 DROP PROCEDURE MigrationsScript;
 
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260729091518_AddAnnouncement') THEN
+
+    CREATE TABLE `Announcement` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `Title` varchar(200) CHARACTER SET utf8mb4 NOT NULL,
+        `Content` varchar(2000) CHARACTER SET utf8mb4 NOT NULL,
+        `PublisherUserId` int NOT NULL,
+        `ScopeType` int NOT NULL,
+        `ScopeId` int NULL,
+        `IsActive` tinyint(1) NOT NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        `UpdatedAt` datetime(6) NOT NULL,
+        CONSTRAINT `PK_Announcement` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_Announcement_User_PublisherUserId` FOREIGN KEY (`PublisherUserId`) REFERENCES `User` (`Id`) ON DELETE RESTRICT
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260729091518_AddAnnouncement') THEN
+
+    CREATE TABLE `AnnouncementRead` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `AnnouncementId` int NOT NULL,
+        `UserId` int NOT NULL,
+        `ReadAt` datetime(6) NULL,
+        CONSTRAINT `PK_AnnouncementRead` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_AnnouncementRead_Announcement_AnnouncementId` FOREIGN KEY (`AnnouncementId`) REFERENCES `Announcement` (`Id`) ON DELETE CASCADE,
+        CONSTRAINT `FK_AnnouncementRead_User_UserId` FOREIGN KEY (`UserId`) REFERENCES `User` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260729091518_AddAnnouncement') THEN
+
+    CREATE INDEX `IX_Announcement_PublisherUserId` ON `Announcement` (`PublisherUserId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260729091518_AddAnnouncement') THEN
+
+    CREATE UNIQUE INDEX `IX_AnnouncementRead_AnnouncementId_UserId` ON `AnnouncementRead` (`AnnouncementId`, `UserId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260729091518_AddAnnouncement') THEN
+
+    CREATE INDEX `IX_AnnouncementRead_UserId` ON `AnnouncementRead` (`UserId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260729091518_AddAnnouncement') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20260729091518_AddAnnouncement', '9.0.9');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
 COMMIT;
 

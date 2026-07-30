@@ -33,6 +33,8 @@ public class AttendanceDbContext : DbContext
     public DbSet<Holiday>                   Holidays                   => Set<Holiday>();
     public DbSet<Notification>              Notifications              => Set<Notification>();
     public DbSet<EmployeeRegistration>      EmployeeRegistrations      => Set<EmployeeRegistration>();
+    public DbSet<Announcement>              Announcements              => Set<Announcement>();
+    public DbSet<AnnouncementRead>          AnnouncementReads          => Set<AnnouncementRead>();
 
     // 这个方法在“建立数据库模型”时被调用，用来配置表名、关系、索引、唯一约束等。
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -212,6 +214,31 @@ public class AttendanceDbContext : DbContext
             e.HasOne(n => n.User)
              .WithMany(u => u.Notifications)
              .HasForeignKey(n => n.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── Announcement：发布人用 Restrict（不允许直接删除仍发布过公告的用户，保留发布历史）──
+        modelBuilder.Entity<Announcement>(e =>
+        {
+            e.HasOne(a => a.Publisher)
+             .WithMany()
+             .HasForeignKey(a => a.PublisherUserId)
+             .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── AnnouncementRead：同一条公告同一个人只会有一条已读记录；公告删了/员工删了，已读记录都跟着一起删 ──
+        modelBuilder.Entity<AnnouncementRead>(e =>
+        {
+            e.HasIndex(r => new { r.AnnouncementId, r.UserId }).IsUnique();
+
+            e.HasOne(r => r.Announcement)
+             .WithMany(a => a.Reads)
+             .HasForeignKey(r => r.AnnouncementId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne(r => r.User)
+             .WithMany()
+             .HasForeignKey(r => r.UserId)
              .OnDelete(DeleteBehavior.Cascade);
         });
 
