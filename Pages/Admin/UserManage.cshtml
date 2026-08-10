@@ -3,6 +3,7 @@
 @model AttendanceSystem.Pages.Admin.UserManageModel
 @{
     ViewData["Title"] = "员工管理";
+    ViewData["AutoRefresh"] = 30;   // 每 30 秒自动刷新，避免一个管理员确认了登记，别的管理员页面上还一直显示旧的待确认提示
 
     // 构造保留其它筛选条件的链接
     string Q(int? deptId, bool unassigned, string? status, string? keyword, int p = 1, string? role = null)
@@ -586,6 +587,18 @@
 
 @section Scripts {
 <script>
+// 记住当前选中的标签页（员工列表 / 待确认登记），配合上面 30 秒自动刷新一起用——
+// 不然每次自动刷新都会跳回"员工列表"，正在"待确认登记"里核对的管理员会很烦
+document.querySelectorAll('.nav-tabs button[data-bs-toggle="tab"]').forEach(btn => {
+    btn.addEventListener('shown.bs.tab', () => sessionStorage.setItem('userManageTab', btn.dataset.bsTarget));
+});
+(function restoreTab() {
+    const saved = sessionStorage.getItem('userManageTab');
+    if (!saved) return;
+    const trigger = document.querySelector(`.nav-tabs button[data-bs-target="${saved}"]`);
+    if (trigger) new bootstrap.Tab(trigger).show();
+})();
+
 // 当前左侧选中的部门（新增员工时作为默认部门）
 const SELECTED_DEPT = @(Model.SelectedDeptId?.ToString() ?? "null");
 
