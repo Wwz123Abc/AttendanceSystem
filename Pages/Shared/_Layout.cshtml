@@ -77,6 +77,31 @@
         }
         .avatar-chip-dark { background: rgba(255,255,255,.14); color: #fff; }
 
+        /* ── 移动端适配：这套布局本来只按桌面宽度设计的，侧边栏是固定 224px 挤在内容区旁边；
+           手机宽度下（App 里打开也是这个问题）侧边栏和正文硬挤在一起会完全变形。
+           这里做成窄屏下侧边栏默认收起、用左上角汉堡按钮滑出，跟内容区不再抢宽度。── */
+        .sidebar-toggle-btn { display: none; }
+        .sidebar-backdrop { display: none; }
+        @@media (max-width: 991.98px) {
+            .sidebar {
+                position: fixed; top: 0; left: -240px; z-index: 1045;
+                transition: left .22s ease; box-shadow: 8px 0 24px rgba(0,0,0,.18);
+            }
+            .sidebar.open { left: 0; }
+            .sidebar-toggle-btn {
+                display: inline-flex; align-items: center; justify-content: center;
+                width: 34px; height: 34px; border: none; background: transparent;
+                color: var(--text-2); font-size: 1.25rem; border-radius: var(--radius-sm); cursor: pointer;
+            }
+            .sidebar-toggle-btn:hover, .sidebar-toggle-btn:active { background: var(--bg-page); }
+            .sidebar-backdrop.show {
+                display: block; position: fixed; inset: 0; background: rgba(16,24,40,.45); z-index: 1040;
+            }
+            .main-content { padding: 1rem 1rem 1.5rem; }
+            .topbar { padding: .6rem .9rem; }
+            .notif-dropdown { width: min(340px, 92vw); right: -.5rem; }
+        }
+
         /* ── 顶栏 ─────────────────────────────────────────────────────── */
         .topbar {
             background: var(--bg-card); border-bottom: 1px solid var(--border-2); padding: .6rem 1.5rem;
@@ -358,10 +383,14 @@
                 </div>
             </div>
         </nav>
+        <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
         <div class="d-flex flex-column flex-grow-1" style="min-width:0">
             <!-- topbar with brand + notification bell -->
             <div class="topbar">
                 <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="sidebar-toggle-btn" onclick="toggleSidebar()" aria-label="菜单">
+                        <i class="bi bi-list"></i>
+                    </button>
                     <img src="~/img/logo.png" alt="科瑞技术" class="topbar-logo" />
                     <span class="text-muted small d-none d-md-inline">考勤管理系统</span>
                 </div>
@@ -393,6 +422,16 @@
     </div>
 
     <script>
+    // ── 窄屏侧边栏开关：手机宽度下侧边栏默认收起来，点汉堡按钮滑出，点遮罩层/选菜单再收回去 ──
+    function toggleSidebar() {
+        document.querySelector('.sidebar').classList.toggle('open');
+        document.getElementById('sidebarBackdrop').classList.toggle('show');
+    }
+    function closeSidebar() {
+        document.querySelector('.sidebar').classList.remove('open');
+        document.getElementById('sidebarBackdrop').classList.remove('show');
+    }
+
     // ── 右上角"小铃铛"通知功能 ───────────────────────────────────────────────
     // notifOpen 记录通知下拉框现在是"打开"还是"关闭"，点一下铃铛就反过来切换一次
     let notifOpen = false;
