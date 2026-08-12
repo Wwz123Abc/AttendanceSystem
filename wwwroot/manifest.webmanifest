@@ -1,6 +1,6 @@
 {
-  "name": "科瑞技术考勤管理系统",
-  "short_name": "科瑞考勤",
+  "name": "考勤管理系统",
+  "short_name": "考勤系统",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

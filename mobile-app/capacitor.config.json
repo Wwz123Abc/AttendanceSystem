@@ -1,6 +1,6 @@
 {
   "appId": "cn.com.colibri.attendance",
-  "appName": "科瑞考勤",
+  "appName": "考勤系统",
   "webDir": "www",
   "server": {
     "url": "http://adt.colibri.com.cn:15080",
