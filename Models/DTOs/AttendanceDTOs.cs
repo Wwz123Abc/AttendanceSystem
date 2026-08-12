@@ -155,7 +155,8 @@ public class TemplateReportRowDto
     /// <summary>标准工时（取这段时间里用得最多的那个班次的标准工时，没排过班就是空）</summary>
     public decimal? StandardDailyHours { get; set; }
 
-    public int NightShiftDays { get; set; }   // 夜班天数
+    public int     NightShiftDays  { get; set; }   // 夜班天数
+    public decimal NightShiftHours { get; set; }   // 夜班总工时（小时，口径同 TotalWorkHours：按半小时取整累加）
 
     /// <summary>每天的工时（整数，舍去小数）；当天没有工时（休息/请假/旷工等）为 null，导出时显示空白。
     /// 下标和 TemplateReportResultDto.Dates 一一对应。</summary>

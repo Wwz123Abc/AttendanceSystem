@@ -21,7 +21,7 @@
     string NI(int v)     => v == 0 ? "" : v.ToString();
     string ND(decimal v) => v == 0 ? "" : v.ToString("0.##");
 
-    var totalCols = 6 + Model.Dates.Count + 18;   // 固定列 + 每日格子 + 尾部统计列(17) + 操作列(1)，空数据行合并单元格用
+    var totalCols = 6 + Model.Dates.Count + 19;   // 固定列 + 每日格子 + 尾部统计列(18，含夜班总工时) + 操作列(1)，空数据行合并单元格用
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -106,8 +106,18 @@
         @Model.Start.ToString("yyyy-MM-dd") 至 @Model.End.ToString("yyyy-MM-dd") 考勤汇总（共 @Model.TotalMatched 人）
     </div>
     <div class="card-body p-0">
+        <style>
+            /* 表头固定：往下滚动表格内容时，表头两行（含左侧冻结的姓名/工号两列）都不跟着滚走。
+               两行表头高度统一定死成 36px，这样第二行（日期格子）才能用 top:36px 精确贴在第一行下面，
+               不然表头行高会随内容自动撑高，第二行的 top 偏移量就没法固定死。 */
+            .mr-table thead th { height: 36px; }
+            .mr-table thead tr:first-child th { position: sticky; top: 0; z-index: 2; background: #f8f9fa; }
+            .mr-table thead tr:last-child  th { position: sticky; top: 36px; z-index: 2; background: #f8f9fa; }
+            /* 姓名/工号两格本来就用行内 style 单独设了 z-index:3（既要冻结列又要冻结行），
+               本来就比这里的 z-index:2 高，天然会盖过其它表头格，不用再额外处理 */
+        </style>
         <div class="table-responsive" style="max-height:70vh;">
-            <table class="table table-hover table-bordered table-sm mb-0 align-middle" style="white-space:nowrap;">
+            <table class="table table-hover table-bordered table-sm mb-0 align-middle mr-table" style="white-space:nowrap;">
                 <thead class="table-light">
                     <tr>
                         <th rowspan="2" class="bg-light" style="position:sticky;left:0;z-index:3;min-width:80px">姓名</th>
@@ -130,6 +140,7 @@
                         <th rowspan="2">出差时长</th>
                         <th rowspan="2">外出时长</th>
                         <th rowspan="2">夜班次数</th>
+                        <th rowspan="2">夜班总工时</th>
                         <th rowspan="2">加班总时长</th>
                         <th rowspan="2">工作日加班</th>
                         <th rowspan="2">休息日加班</th>
@@ -178,6 +189,7 @@
                             <td class="text-center">@ND(row.BusinessTripHours)</td>
                             <td class="text-center">@ND(row.OutHours)</td>
                             <td class="text-center">@NI(row.NightShiftDays)</td>
+                            <td class="text-center">@ND(row.NightShiftHours)</td>
                             <td class="text-center">@ND(row.TotalOvertimeHours)</td>
                             <td class="text-center">@ND(row.WeekdayOvertimeHours)</td>
                             <td class="text-center">@ND(row.RestDayOvertimeHours)</td>

@@ -181,7 +181,7 @@ public static class ExcelExportHelper
 
         var dayCount  = result.Dates.Count;
         var fixedCols = 6;                       // 姓名/考勤组/部门/工号/职位/合同公司
-        var tailCols  = 17;                       // 出勤天数..节假日加班（含夜班次数）
+        var tailCols  = 18;                       // 出勤天数..节假日加班（含夜班次数/夜班总工时）
         var totalCols = fixedCols + dayCount + tailCols;
 
         // 第 0 行：大标题（统计日期区间）
@@ -205,7 +205,7 @@ public static class ExcelExportHelper
         string[] tailHeaders =
         [
             "出勤天数", "休息天数", "总工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
-            "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长", "夜班次数",
+            "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长", "夜班次数", "夜班总工时",
             "加班总时长", "工作日加班", "休息日加班", "节假日加班"
         ];
         for (var i = 0; i < tailHeaders.Length; i++) SetCell(headerRow, fixedCols + dayCount + i, tailHeaders[i], headerStyle);
@@ -265,6 +265,7 @@ public static class ExcelExportHelper
             c++;
             c++;   // 外出时长：系统没有这个概念，恒不写值（留空）
             SetCellIfNonZero(xRow, c++, row.NightShiftDays, baseStyle);
+            SetCellIfNonZero(xRow, c++, (double)row.NightShiftHours, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.TotalOvertimeHours, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.WeekdayOvertimeHours, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.RestDayOvertimeHours, baseStyle);

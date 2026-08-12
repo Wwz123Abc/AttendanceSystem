@@ -410,7 +410,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 .FirstOrDefault();
             if (assignByDate.Count == 0) row.StandardDailyHours = null;
 
-            decimal totalWork = 0, businessTripHours = 0;
+            decimal totalWork = 0, businessTripHours = 0, nightShiftHours = 0;
             decimal totalOtHours = 0, weekdayOtHours = 0, restOtHours = 0, holidayOtHours = 0;
             int actualDays = 0, restDays = 0, absentDays = 0, missingIn = 0, missingOut = 0;
             int lateMin = 0, earlyMin = 0, lateCnt = 0, earlyCnt = 0;
@@ -451,6 +451,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     {
                         dayHours = (int)Math.Floor(rec.ActualWorkHours);   // 每日格子按要求取整（舍去小数）
                         totalWork += FloorToHalf(rec.ActualWorkHours);     // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
+                        if (isNightShift) nightShiftHours += FloorToHalf(rec.ActualWorkHours);   // 夜班总工时：当天算夜班才计入，取整口径和总工时一致
                         actualDays++;
                     }
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);
@@ -500,6 +501,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             row.MissingClockOutCount    = missingOut;
             row.AbsentDays              = absentDays;
             row.BusinessTripHours       = businessTripHours;
+            row.NightShiftHours         = nightShiftHours;
             row.TotalOvertimeHours      = totalOtHours;
             row.WeekdayOvertimeHours    = weekdayOtHours;
             row.RestDayOvertimeHours    = restOtHours;
