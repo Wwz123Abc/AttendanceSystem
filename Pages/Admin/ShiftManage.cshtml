@@ -106,8 +106,8 @@
                                                      @s.LateToleranceMinutes,@s.EarlyLeaveToleranceMinutes,
                                                      @s.EarliestClockInMinutes,@s.OvertimeThresholdMinutes,
                                                      @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,'@s.Color',
-                                                     '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(restDays.Select(d => (int)d)))',
-                                                     '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(midWindows.Select(w => new { start = w.Start.ToString("HH:mm"), end = w.End.ToString("HH:mm") })))')">
+                                                     '@System.Text.Json.JsonSerializer.Serialize(restDays.Select(d => (int)d))',
+                                                     '@System.Text.Json.JsonSerializer.Serialize(midWindows.Select(w => new { start = w.Start.ToString("HH:mm"), end = w.End.ToString("HH:mm") }))')">
                                         <i class="bi bi-pencil"></i>
                                     </button>
                                     <form method="post" asp-page-handler="DeleteShift" class="d-inline"
