@@ -289,7 +289,7 @@
 @if (Model.AMapEnabled)
 {
     <script>window._AMapSecurityConfig = { securityJsCode: '@Model.AMapSecurityCode' };</script>
-    <script src="https://webapi.amap.com/maps?v=2.0&key=@Model.AMapJsKey&plugin=AMap.AutoComplete,AMap.Geocoder"></script>
+    <script src="https://webapi.amap.com/maps?v=2.0&key=@Model.AMapJsKey&plugin=AMap.PlaceSearch,AMap.Geocoder"></script>
 }
 <script>
 const AMAP_ENABLED = @Model.AMapEnabled.ToString().ToLower();
@@ -489,38 +489,7 @@ function gcj02ToWgs84(lng, lat) {
     return [lng * 2 - (lng + dLng), lat * 2 - (lat + dLat)];
 }
 
-// WGS-84（GPS 原始坐标）→ GCJ-02：和上面反过来的换算，纯本地数学公式，
-// 用来把全球搜索（Nominatim 返回的就是 WGS-84）结果放到高德地图上正确的位置显示。
-function wgs84ToGcj02(lng, lat) {
-    const PI = Math.PI, A = 6378245.0, EE = 0.00669342162296594323;
-    function outOfChina(lng, lat) { return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271; }
-    function transformLat(x, y) {
-        let ret = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
-        ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
-        ret += (20 * Math.sin(y * PI) + 40 * Math.sin(y / 3 * PI)) * 2 / 3;
-        ret += (160 * Math.sin(y / 12 * PI) + 320 * Math.sin(y * PI / 30)) * 2 / 3;
-        return ret;
-    }
-    function transformLng(x, y) {
-        let ret = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
-        ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
-        ret += (20 * Math.sin(x * PI) + 40 * Math.sin(x / 3 * PI)) * 2 / 3;
-        ret += (150 * Math.sin(x / 12 * PI) + 300 * Math.sin(x / 30 * PI)) * 2 / 3;
-        return ret;
-    }
-    if (outOfChina(lng, lat)) return [lng, lat];
-    let dLat = transformLat(lng - 105, lat - 35);
-    let dLng = transformLng(lng - 105, lat - 35);
-    const radLat = lat / 180 * PI;
-    let magic = Math.sin(radLat);
-    magic = 1 - EE * magic * magic;
-    const sqrtMagic = Math.sqrt(magic);
-    dLat = (dLat * 180) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
-    dLng = (dLng * 180) / (A / sqrtMagic * Math.cos(radLat) * PI);
-    return [lng + dLng, lat + dLat];
-}
-
-let amapMap, amapMarker, amapGeocoder, amapAutoComplete, amapTargetRow, amapPickerState, amapSearchTimer;
+let amapMap, amapMarker, amapGeocoder, amapPlaceSearch, amapTargetRow, amapPickerState, amapSearchTimer;
 
 // 首次打开选点弹窗时才初始化地图（弹窗没显示之前容器没有尺寸，地图会渲染不正常）
 function initAMapPicker() {
@@ -529,12 +498,14 @@ function initAMapPicker() {
     amapMarker = new AMap.Marker({ position: amapMap.getCenter(), draggable: true, cursor: 'move' });
     amapMarker.setMap(amapMap);
 
-    // AMap.Geocoder / AMap.AutoComplete 是"插件"：虽然上面加载地图脚本的地址里已经带了 plugin= 参数，
+    // AMap.Geocoder / AMap.PlaceSearch 是"插件"：虽然上面加载地图脚本的地址里已经带了 plugin= 参数，
     // 但那只是让浏览器提前把插件代码下载好，不代表这两个类此刻就能直接 new 出来——必须用 AMap.plugin(...)
     // 包一层回调，确认插件真正加载完成后再使用；之前没包这一层，导致偶尔"点了搜索没反应"。
-    AMap.plugin(['AMap.Geocoder', 'AMap.AutoComplete'], () => {
-        amapGeocoder     = new AMap.Geocoder();
-        amapAutoComplete = new AMap.AutoComplete({});   // 不绑定 input，只用来在下面手动调用 .search()
+    // （原来用的 AMap.AutoComplete"输入提示"插件实测会内部报错、一直查不出结果，换成 PlaceSearch 这个
+    // 地点搜索插件，用法类似但更稳定。）
+    AMap.plugin(['AMap.Geocoder', 'AMap.PlaceSearch'], () => {
+        amapGeocoder    = new AMap.Geocoder();
+        amapPlaceSearch = new AMap.PlaceSearch({ pageSize: 8 });   // 不绑定 input，只用来在下面手动调用 .search()
     });
 
     amapMarker.on('dragend', () => {
@@ -566,9 +537,9 @@ function setAMapPickerState(wgsLngLat, name) {
         (name ? `已选：${name}　` : '') + `坐标：${wgsLngLat[1].toFixed(6)}, ${wgsLngLat[0].toFixed(6)}`;
 }
 
-// ── 地址搜索：中国境内用高德的地点提示（更准更快），境外/全球用 OpenStreetMap 的 Nominatim
-// 免费查询接口（不需要密钥，覆盖全球），两边结果合并显示在同一个下拉列表里，按输入停顿 400ms
-// 后再查（不是每敲一个字就查一次），避免搜索请求过于频繁。
+// ── 地址搜索：只搜中国境内（用高德的地点搜索），不再找境外/全球——公司打卡地点本来就都在国内，
+// 境外搜索走的是国外网站，国内网络常年访问不了，留着只会拖慢/卡住整个搜索，不如直接去掉。
+// 按输入停顿 400ms 后再查（不是每敲一个字就查一次），避免搜索请求过于频繁。
 function onAMapAddressInput(e) {
     clearTimeout(amapSearchTimer);
     const keyword = e.target.value.trim();
@@ -577,26 +548,26 @@ function onAMapAddressInput(e) {
 }
 
 async function runAMapAddressSearch(keyword) {
-    const [amapTips, globalTips] = await Promise.all([searchAMapTips(keyword), searchGlobalNominatim(keyword)]);
-    const items = [
-        ...amapTips.map(t => ({ label: [t.name, t.district].filter(Boolean).join('　'), gcj: [t.location.lng, t.location.lat], wgs: null, source: '国内' })),
-        ...globalTips.map(r => ({ label: r.display_name, gcj: null, wgs: [parseFloat(r.lon), parseFloat(r.lat)], source: '全球' }))
-    ];
+    const pois = await searchAMapPlaces(keyword);
+    const items = pois.map(p => ({
+        label: [p.name, p.district || p.address].filter(Boolean).join('　'),
+        gcj: [p.location.lng, p.location.lat]
+    }));
     renderAMapSearchResults(items);
 }
 
-// 高德的 search() 偶尔会内部出错、回调一直不触发（曾经实测出现过"Unimplemented type"这类高德
-// SDK 内部报错），如果不设兜底超时，一旦卡住，下面 Promise.all 会跟着永远等下去，国内结果也出不来。
-function searchAMapTips(keyword) {
+// 高德的 search() 偶尔会内部出错、回调一直不触发，加个兜底超时，不然会一直卡着不出结果。
+function searchAMapPlaces(keyword) {
     return new Promise(resolve => {
-        if (!amapAutoComplete) { resolve([]); return; }
+        if (!amapPlaceSearch) { resolve([]); return; }
         let done = false;
         const finish = list => { if (!done) { done = true; resolve(list); } };
         const safetyTimer = setTimeout(() => finish([]), 3000);
         try {
-            amapAutoComplete.search(keyword, (status, result) => {
+            amapPlaceSearch.search(keyword, (status, result) => {
                 clearTimeout(safetyTimer);
-                finish(status === 'complete' && result.tips ? result.tips.filter(t => t.location) : []);
+                const pois = status === 'complete' && result.poiList && result.poiList.pois ? result.poiList.pois : [];
+                finish(pois.filter(p => p.location));
             });
         } catch {
             clearTimeout(safetyTimer);
@@ -605,24 +576,11 @@ function searchAMapTips(keyword) {
     });
 }
 
-// Nominatim 是 OpenStreetMap 提供的免费公共地理编码服务，全球覆盖、不需要申请密钥，
-// 但有使用频率限制，所以上面用 400ms 防抖 + 至少输入 2 个字才查，避免请求过于频繁。
-// 国内服务器访问境外网站经常连接缓慢甚至连不上，必须给个超时时间，不然这一路卡住不返回，
-// 会拖着上面 Promise.all 一起卡住，导致国内（高德）结果明明查得到也一起显示不出来。
-async function searchGlobalNominatim(keyword) {
-    try {
-        const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=6&q=${encodeURIComponent(keyword)}`,
-            { signal: AbortSignal.timeout(3000) });
-        return resp.ok ? await resp.json() : [];
-    } catch { return []; }   // 查不到 / 超时 / 网络问题就当没有全球结果，不影响国内结果照常显示
-}
-
 function renderAMapSearchResults(items) {
     const box = document.getElementById('amapSearchResults');
     if (items.length === 0) { hideAMapSearchResults(); return; }
     box.innerHTML = items.map((it, i) =>
-        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">` +
-        `<span class="badge bg-secondary-subtle text-secondary-emphasis me-1">${it.source}</span>${it.label}</button>`
+        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">${it.label}</button>`
     ).join('');
     box.style.display = 'block';
     box.querySelectorAll('[data-idx]').forEach(btn => {
@@ -630,14 +588,9 @@ function renderAMapSearchResults(items) {
             const it = items[parseInt(btn.dataset.idx, 10)];
             document.getElementById('amapAddressInput').value = it.label;
             hideAMapSearchResults();
-            if (it.gcj) {   // 国内结果：高德给的是 GCJ-02，地图直接用，存库前再转成 WGS-84
-                amapMap.setCenter(it.gcj); amapMap.setZoom(17); amapMarker.setPosition(it.gcj);
-                setAMapPickerState(gcj02ToWgs84(it.gcj[0], it.gcj[1]), it.label);
-            } else {   // 全球结果：Nominatim 给的本来就是 WGS-84，直接存；地图显示要先转成 GCJ-02
-                const gcj = wgs84ToGcj02(it.wgs[0], it.wgs[1]);
-                amapMap.setCenter(gcj); amapMap.setZoom(17); amapMarker.setPosition(gcj);
-                setAMapPickerState(it.wgs, it.label);
-            }
+            // 高德给的是 GCJ-02，地图直接用，存库前再转成 WGS-84
+            amapMap.setCenter(it.gcj); amapMap.setZoom(17); amapMarker.setPosition(it.gcj);
+            setAMapPickerState(gcj02ToWgs84(it.gcj[0], it.gcj[1]), it.label);
         });
     });
 }
