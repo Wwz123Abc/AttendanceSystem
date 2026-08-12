@@ -93,8 +93,8 @@
         .sidebar-backdrop { display: none; }
         @@media (max-width: 991.98px) {
             .sidebar {
-                position: fixed; top: 0; left: -240px; z-index: 1045;
-                transition: left .22s ease; box-shadow: 8px 0 24px rgba(0,0,0,.18);
+                position: fixed; top: 0; bottom: 0; left: -240px; z-index: 1045;
+                overflow-y: auto; transition: left .22s ease; box-shadow: 8px 0 24px rgba(0,0,0,.18);
             }
             .sidebar.open { left: 0; }
             .sidebar-toggle-btn {
