@@ -4,13 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] - 考勤管理系统</title>
-    <link rel="icon" type="image/png" href="~/img/logo-icon.png" />
 
-    <!-- 手机浏览器"添加到主屏幕"支持：加上这些之后主屏幕图标、启动画面颜色、
+    <!-- 手机浏览器"添加到主屏幕"支持：加上这些之后主屏幕启动画面颜色、
          全屏显示（隐藏浏览器地址栏）才会生效，不加的话添加到主屏幕只是个普通网页书签 -->
     <link rel="manifest" href="~/manifest.webmanifest" />
     <meta name="theme-color" content="#1456CC" />
-    <link rel="apple-touch-icon" href="~/img/icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="考勤系统" />
@@ -262,8 +260,7 @@
     <div class="d-flex">
         <nav class="sidebar d-flex flex-column">
             <div class="sidebar-brand d-flex align-items-center gap-2">
-                <img src="~/img/logo-icon.png" alt="" class="sidebar-logo" style="width:34px;height:34px;border-radius:8px;" />
-                <span class="text-white fw-semibold" style="font-size:.95rem">考勤管理系统</span>
+                <span class="text-white fw-semibold" style="font-size:1.05rem">考勤管理系统</span>
             </div>
             <ul class="nav flex-column px-2 py-2 gap-1 flex-grow-1">
                 <li><span class="nav-section">公告</span></li>
@@ -400,8 +397,7 @@
                     <button type="button" class="sidebar-toggle-btn" onclick="toggleSidebar()" aria-label="菜单">
                         <i class="bi bi-list"></i>
                     </button>
-                    <img src="~/img/logo-icon.png" alt="" class="topbar-logo" style="width:26px;height:26px;border-radius:6px;" />
-                    <span class="text-muted small d-none d-md-inline">考勤管理系统</span>
+                    <span class="fw-semibold" style="color:var(--text-1)">考勤管理系统</span>
                 </div>
                 <div class="d-flex align-items-center gap-3">
                     <div class="notif-bell" id="notifBell" onclick="toggleNotifDropdown()">

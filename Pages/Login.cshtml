@@ -9,12 +9,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>考勤管理系统</title>
-    <link rel="icon" type="image/png" href="~/img/logo-icon.png" />
 
     <!-- 手机浏览器"添加到主屏幕"支持（登录页是独立模板，没有走 _Layout.cshtml，这里要单独加一份）-->
     <link rel="manifest" href="~/manifest.webmanifest" />
     <meta name="theme-color" content="#1456CC" />
-    <link rel="apple-touch-icon" href="~/img/icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="考勤系统" />
@@ -34,8 +32,7 @@
             background: rgba(15, 22, 40, .55); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
             box-shadow: 0 24px 64px rgba(0,0,0,.45); padding: 2.25rem 2rem;
         }
-        .login-logo { width: 56px; max-width: 56px; height: auto; border-radius: 12px; }
-        .login-card .login-title { color: #fff; font-weight: 600; margin-top: .9rem; }
+        .login-card .login-title { color: #fff; font-weight: 600; font-size: 1.4rem; }
         .login-card .login-sub { color: rgba(255,255,255,.55); font-size: .8rem; margin-top: .4rem; }
         .login-card label { color: rgba(255,255,255,.85); }
         .login-card .form-check-label { color: rgba(255,255,255,.55); }
@@ -59,7 +56,6 @@
 
 <div class="login-card">
     <div class="text-center mb-3">
-        <img src="~/img/logo-icon.png" alt="" class="login-logo" />
         <div class="login-title">考勤管理系统</div>
         <p class="login-sub mb-0">请使用工号登录</p>
     </div>
