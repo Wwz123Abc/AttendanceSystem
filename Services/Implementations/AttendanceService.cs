@@ -791,22 +791,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             // 补齐上下班两次卡后：重算当天实际工时（工资按工时结算，补完卡必须把工时补准），
             // 并解除“旷工/未打卡”状态（否则人有全天工时却仍被记旷工，工资和出勤对不上）。
-            // 加班不再从打卡时间估算，只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
-            if (record.ClockInTime is { } ci && record.ClockOutTime is { } co && co > ci)
-            {
-                var applicant   = await db.Users.FindAsync(approval.ApplicantUserId);
-                var shiftAssign = await GetShiftAssignmentAsync(approval.ApplicantUserId, record.WorkDate);
-
-                // 工时口径和本地打卡一致：早到晚走都不多算钱，班次配了午间必打卡窗口、当天又没有打卡落在窗口内，只算下午
-                var effectiveClockIn  = await ResolveEffectiveClockInAsync(record, record.WorkDate, ci, shiftAssign?.ShiftSchedule);
-                var effectiveClockOut = ClampEffectiveClockOut(record.WorkDate, co, shiftAssign?.ShiftSchedule);
-                record.ActualWorkHours = CalcWorkHours(effectiveClockIn, effectiveClockOut, applicant?.AttendanceGroupId);
-
-                if (record.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.NotPunched)
-                    record.AttendanceStatus = record.LateMinutes > 0       ? AttendanceStatus.Late
-                                            : record.EarlyLeaveMinutes > 0 ? AttendanceStatus.EarlyLeave
-                                            :                                AttendanceStatus.Normal;
-            }
+            await RecalcWorkHoursAfterManualPunchAsync(record, approval.ApplicantUserId);
         }
         // ── 加班 ──：加班时长完全以审批单为准，不从打卡时间估算；累加到当天的加班时长上
         // （同一天可能有多张已批准的加班单，所以是加，不是覆盖）
@@ -890,7 +875,53 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// 管理员手动补卡：最高权限，不受员工"补卡申请"审批流程的任何限制——可以给任意员工、任意日期、
+    /// 任意情况下直接补录/修改打卡时间，立即生效，不用走审批。工时重算口径和审批通过后的补卡完全一致
+    /// （见 <see cref="RecalcWorkHoursAfterManualPunchAsync"/>），保证走这条路径和走审批路径算出来的工时对得上。
+    /// </summary>
+    public async Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark)
+    {
+        var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
+        if (record is null)
+        {
+            record = new AttendanceRecord { UserId = userId, WorkDate = workDate };
+            db.AttendanceRecords.Add(record);
+        }
+
+        if (clockIn.HasValue)  record.ClockInTime  = clockIn.Value;
+        if (clockOut.HasValue) record.ClockOutTime = clockOut.Value;
+        record.ApprovalNote = string.IsNullOrWhiteSpace(remark) ? "管理员手动补卡" : $"管理员手动补卡：{remark.Trim()}";
+        record.UpdatedAt    = DateTime.Now;
+
+        await RecalcWorkHoursAfterManualPunchAsync(record, userId);
+        await db.SaveChangesAsync();
+    }
+
     // ── 私有计算方法（下面这些只在本服务内部使用）─────────────────────────────────
+
+    /// <summary>
+    /// 补卡后（不管是审批通过回写，还是管理员手动补卡）重算当天实际工时，并解除"旷工/未打卡"状态
+    /// （否则人有全天工时却仍被记旷工，工资和出勤对不上）。上下班两次卡都有且下班晚于上班才会重算；
+    /// 加班不再从打卡时间估算，只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
+    /// </summary>
+    private async Task RecalcWorkHoursAfterManualPunchAsync(AttendanceRecord record, int userId)
+    {
+        if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) return;
+
+        var applicant   = await db.Users.FindAsync(userId);
+        var shiftAssign = await GetShiftAssignmentAsync(userId, record.WorkDate);
+
+        // 工时口径和本地打卡一致：早到晚走都不多算钱，班次配了午间必打卡窗口、当天又没有打卡落在窗口内，只算下午
+        var effectiveClockIn  = await ResolveEffectiveClockInAsync(record, record.WorkDate, ci, shiftAssign?.ShiftSchedule);
+        var effectiveClockOut = ClampEffectiveClockOut(record.WorkDate, co, shiftAssign?.ShiftSchedule);
+        record.ActualWorkHours = CalcWorkHours(effectiveClockIn, effectiveClockOut, applicant?.AttendanceGroupId);
+
+        if (record.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.NotPunched)
+            record.AttendanceStatus = record.LateMinutes > 0       ? AttendanceStatus.Late
+                                    : record.EarlyLeaveMinutes > 0 ? AttendanceStatus.EarlyLeave
+                                    :                                AttendanceStatus.Normal;
+    }
 
     /// <summary>
     /// 算上班状态：实际打卡比「应上班时间 + 迟到容忍」还晚就算迟到。没排班则一律正常。

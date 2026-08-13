@@ -1,0 +1,139 @@
+@page
+@model AttendanceSystem.Pages.Admin.PunchAdjustModel
+@{ ViewData["Title"] = "手动补卡"; }
+
+<div class="page-header">
+    <h4><i class="bi bi-clock-history me-2 text-primary"></i>手动补卡</h4>
+</div>
+<div class="text-muted small mb-3">管理员权限：可直接为任意员工、任意日期补录/修改打卡时间，保存后立即生效，不需要审批。</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-exclamation-circle me-2"></i>@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="row g-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">补录 / 修改打卡</div>
+            <div class="card-body">
+                <form method="post" asp-page-handler="Adjust">
+                    <div class="mb-3 position-relative">
+                        <label class="form-label">员工 <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="fUserSearch" placeholder="输入姓名或工号搜索" autocomplete="off" required />
+                        <input type="hidden" asp-for="UserId" id="fUserId" />
+                        <div id="fUserResults" class="list-group position-absolute w-100" style="z-index:1050;display:none;max-height:220px;overflow-y:auto"></div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">考勤日期 <span class="text-danger">*</span></label>
+                        <input asp-for="WorkDate" type="date" class="form-control" id="fWorkDate" required />
+                        <div class="form-text">对应"考勤记录"所属的那一天（夜班取上班当天的日期，不是下班那天）。</div>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm mb-3" onclick="loadCurrentRecord()">
+                        <i class="bi bi-search me-1"></i>查询当前打卡记录
+                    </button>
+                    <div id="currentRecordBox" class="alert alert-light border small py-2" style="display:none"></div>
+
+                    <div class="mb-3">
+                        <label class="form-label">上班打卡时间</label>
+                        <input asp-for="ClockInTime" type="datetime-local" class="form-control" id="fClockIn" />
+                        <div class="form-text">留空表示不修改上班打卡时间。</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">下班打卡时间</label>
+                        <input asp-for="ClockOutTime" type="datetime-local" class="form-control" id="fClockOut" />
+                        <div class="form-text">留空表示不修改下班打卡时间；夜班等跨天班次请把日期部分选到次日。</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注 <small class="text-muted">（可选）</small></label>
+                        <input asp-for="Remark" class="form-control" maxlength="200" placeholder="如：打卡设备故障，管理员核实后补录" />
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save me-1"></i>保存
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="alert alert-info small mb-0">
+            <i class="bi bi-info-circle me-1"></i>
+            保存后会按该员工当天排班的班次规则（含午间必打卡窗口）自动重算实际工时和迟到/早退状态，
+            口径和员工自己提交"补卡申请"经审批通过后的效果完全一致——区别只是不需要审批，管理员操作即时生效。
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+async function searchUsers(keyword) {
+    if (!keyword) { renderUserResults([]); return; }
+    try {
+        const resp = await fetch(`?handler=SearchUsers&keyword=${encodeURIComponent(keyword)}`);
+        renderUserResults(await resp.json());
+    } catch (e) { renderUserResults([]); }
+}
+
+let lastUserResults = [];
+function renderUserResults(list) {
+    lastUserResults = list;
+    const box = document.getElementById('fUserResults');
+    if (list.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.innerHTML = list.map((u, i) =>
+        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">${u.label}</button>`
+    ).join('');
+    box.style.display = 'block';
+    box.querySelectorAll('[data-idx]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const u = lastUserResults[parseInt(btn.dataset.idx, 10)];
+            document.getElementById('fUserId').value = u.id;
+            document.getElementById('fUserSearch').value = u.label;
+            box.style.display = 'none';
+            document.getElementById('currentRecordBox').style.display = 'none';
+        });
+    });
+}
+
+let userSearchTimer = null;
+document.getElementById('fUserSearch').addEventListener('input', function () {
+    document.getElementById('fUserId').value = '';   // 手动改动搜索框时先清空已选中的，等真正点选候选项后才重新赋值
+    clearTimeout(userSearchTimer);
+    const kw = this.value.trim();
+    userSearchTimer = setTimeout(() => searchUsers(kw), 200);
+});
+document.addEventListener('click', function (e) {
+    const box = document.getElementById('fUserResults');
+    if (!document.getElementById('fUserSearch').contains(e.target) && !box.contains(e.target)) box.style.display = 'none';
+});
+
+async function loadCurrentRecord() {
+    const userId = document.getElementById('fUserId').value;
+    const workDate = document.getElementById('fWorkDate').value;
+    const box = document.getElementById('currentRecordBox');
+    if (!userId) { alert('请先从下拉列表中选择一位员工'); return; }
+    if (!workDate) { alert('请先选择考勤日期'); return; }
+    try {
+        const resp = await fetch(`?handler=Record&userId=${userId}&workDate=${workDate}`);
+        const data = await resp.json();
+        if (!data.exists) {
+            box.innerHTML = '<i class="bi bi-info-circle me-1"></i>该员工这一天暂无考勤记录。';
+        } else {
+            box.innerHTML = `<i class="bi bi-info-circle me-1"></i>当前记录：上班 ${data.clockIn ? data.clockIn.replace('T', ' ') : '--'}，`
+                + `下班 ${data.clockOut ? data.clockOut.replace('T', ' ') : '--'}，状态 ${data.status}，工时 ${data.workHours} 小时`
+                + (data.note ? `，备注：${data.note}` : '');
+        }
+        box.style.display = '';
+    } catch (e) { alert('查询失败，请重试'); }
+}
+</script>
+}

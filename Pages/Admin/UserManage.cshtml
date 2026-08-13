@@ -463,14 +463,12 @@
                                 { <option value="@g.Id">@g.GroupName</option> }
                             </select>
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-6 position-relative">
                             <label class="form-label">直属上级 <span class="text-danger" id="fSuperIdReq">*</span></label>
-                            <select asp-for="SuperId" class="form-select" id="fSuperId">
-                                <option value="">请选择</option>
-                                @foreach (var sup in Model.Supervisors)
-                                { <option value="@sup.Id">@sup.RealName（@sup.EmployeeNo）</option> }
-                            </select>
-                            <div class="form-text" id="fSuperIdHint">选定部门后会自动带出该部门的主管，也可以手动改选。</div>
+                            <input type="text" class="form-control" id="fSuperIdSearch" placeholder="输入姓名或工号搜索" autocomplete="off" />
+                            <input type="hidden" asp-for="SuperId" id="fSuperId" />
+                            <div id="fSuperIdResults" class="list-group position-absolute w-100" style="z-index:1050;display:none;max-height:220px;overflow-y:auto"></div>
+                            <div class="form-text" id="fSuperIdHint">选定部门后会自动带出该部门的主管，也可以手动搜索选择。</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">岗位</label>
@@ -602,6 +600,49 @@ document.querySelectorAll('.nav-tabs button[data-bs-toggle="tab"]').forEach(btn 
 // 当前左侧选中的部门（新增员工时作为默认部门）
 const SELECTED_DEPT = @(Model.SelectedDeptId?.ToString() ?? "null");
 
+// ── 直属上级：搜索选择（候选人不多，直接把全量列表带下来，前端过滤，不用每敲一个字都请求后端）──
+const SUPERVISORS = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
+    Model.Supervisors.Select(s => new { id = s.Id, label = $"{s.RealName}（{s.EmployeeNo}）" })));
+
+function setSuperId(id, fallbackLabel) {
+    id = id || '';
+    document.getElementById('fSuperId').value = id;
+    const found = id ? SUPERVISORS.find(s => String(s.id) === String(id)) : null;
+    document.getElementById('fSuperIdSearch').value = !id ? '' : (found ? found.label : (fallbackLabel || `（原上级已不在候选列表中，ID:${id}）`));
+}
+
+function renderSuperResults(list) {
+    const box = document.getElementById('fSuperIdResults');
+    if (list.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.innerHTML = list.map(s =>
+        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-id="${s.id}">${s.label}</button>`
+    ).join('');
+    box.style.display = 'block';
+    box.querySelectorAll('[data-id]').forEach(btn => {
+        btn.addEventListener('click', () => { setSuperId(btn.dataset.id); box.style.display = 'none'; });
+    });
+}
+
+document.getElementById('fSuperIdSearch').addEventListener('input', function () {
+    document.getElementById('fSuperId').value = '';   // 手动改动搜索框时先清空已选中的，等真正点选候选项后才重新赋值
+    const kw = this.value.trim();
+    if (!kw) { renderSuperResults([]); return; }
+    renderSuperResults(SUPERVISORS.filter(s => s.label.includes(kw)).slice(0, 20));
+});
+document.addEventListener('click', function (e) {
+    const box = document.getElementById('fSuperIdResults');
+    if (!document.getElementById('fSuperIdSearch').contains(e.target) && !box.contains(e.target)) box.style.display = 'none';
+});
+// 提交前校验：必填时必须是从候选列表里点选出来的（不能只打字不选），否则 SuperId 会是空的
+document.getElementById('userForm').addEventListener('submit', function (e) {
+    const searchEl = document.getElementById('fSuperIdSearch');
+    if (searchEl.required && !document.getElementById('fSuperId').value) {
+        e.preventDefault();
+        alert('请从下拉列表中点选一位直属上级（不能只输入文字不选择）');
+        searchEl.focus();
+    }
+});
+
 function toggleAll(cb) { document.querySelectorAll('.row-check').forEach(c => c.checked = cb.checked); }
 
 // ── 工号自动生成：新增/确认录入时，选定部门后自动去后台按"公司"前缀+流水号生成工号 ──
@@ -630,14 +671,14 @@ async function suggestSupervisorForDept(deptId) {
         const resp = await fetch(`?handler=SuggestSupervisor&deptId=${deptId}`);
         const data = await resp.json();
         if (data.supervisorId) {
-            document.getElementById('fSuperId').value = data.supervisorId;
-            hintEl.textContent = '已按部门自动带出主管，也可以手动改选。';
+            setSuperId(data.supervisorId);
+            hintEl.textContent = '已按部门自动带出主管，也可以手动搜索改选。';
         } else if (data.count === 0) {
-            document.getElementById('fSuperId').value = '';
-            hintEl.textContent = '该部门暂无主管，请手动选择直属上级。';
+            setSuperId('');
+            hintEl.textContent = '该部门暂无主管，请手动搜索选择直属上级。';
         } else {
-            document.getElementById('fSuperId').value = '';
-            hintEl.textContent = '该部门配置了多位主管，无法自动判断，请手动选择直属上级。';
+            setSuperId('');
+            hintEl.textContent = '该部门配置了多位主管，无法自动判断，请手动搜索选择直属上级。';
         }
     } catch (e) { /* 自动带出失败就静默忽略，不影响手动选择 */ }
 }
@@ -711,10 +752,10 @@ function openAdd() {
     document.getElementById('fRole').value = 'Employee';
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
-    document.getElementById('fSuperId').value = '';
+    setSuperId('');
     document.getElementById('fPhone').required = true;             // 新建必须填手机号
     document.getElementById('fPhoneReq').style.display = '';
-    document.getElementById('fSuperId').required = true;           // 新建必须选直属上级
+    document.getElementById('fSuperIdSearch').required = true;     // 新建必须选直属上级
     document.getElementById('fSuperIdReq').style.display = '';
     document.getElementById('fDeptId').required = true;            // 新建必须选部门（否则钉钉邀请没法同步）
     document.getElementById('fDeptIdReq').style.display = '';
@@ -770,10 +811,10 @@ function openConfirm(data) {
     document.getElementById('fRole').value       = 'Employee';
     document.getElementById('fDeptId').value     = SELECTED_DEPT !== null ? SELECTED_DEPT : '';
     document.getElementById('fGroupId').value    = '';
-    document.getElementById('fSuperId').value    = '';
+    setSuperId('');
     document.getElementById('fPhone').required   = true;
     document.getElementById('fPhoneReq').style.display = '';
-    document.getElementById('fSuperId').required = true;
+    document.getElementById('fSuperIdSearch').required = true;
     document.getElementById('fSuperIdReq').style.display = '';
     document.getElementById('fDeptId').required  = true;
     document.getElementById('fDeptIdReq').style.display = '';
@@ -805,12 +846,12 @@ function openEdit(data) {
     document.getElementById('fRole').value       = data.role;
     document.getElementById('fDeptId').value     = data.deptId || '';
     document.getElementById('fGroupId').value    = data.groupId || '';
-    document.getElementById('fSuperId').value    = data.superId || '';
+    setSuperId(data.superId || '');
     document.getElementById('fPosition').value   = data.position;
     document.getElementById('fPhone').value      = data.phone;
     document.getElementById('fPhone').required   = false;          // 编辑老员工不强制补填手机号
     document.getElementById('fPhoneReq').style.display = 'none';
-    document.getElementById('fSuperId').required = false;          // 编辑老员工不强制补填直属上级
+    document.getElementById('fSuperIdSearch').required = false;    // 编辑老员工不强制补填直属上级
     document.getElementById('fSuperIdReq').style.display = 'none';
     document.getElementById('fDeptId').required  = false;          // 编辑老员工不强制补填部门（比如部门被删后"未分配"的员工）
     document.getElementById('fDeptIdReq').style.display = 'none';

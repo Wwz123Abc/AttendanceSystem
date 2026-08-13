@@ -85,6 +85,7 @@
                         <th>星期</th>
                         <th>上班</th>
                         <th>下班</th>
+                        <th>午间打卡</th>
                         <th>状态</th>
                         <th>工时(h)</th>
                         <th>迟到</th>
@@ -95,7 +96,7 @@
                 <tbody>
                     @if (!Model.Records.Any())
                     {
-                        <tr><td colspan="9" class="empty-state"><i class="bi bi-inbox"></i>暂无记录</td></tr>
+                        <tr><td colspan="10" class="empty-state"><i class="bi bi-inbox"></i>暂无记录</td></tr>
                     }
                     @foreach (var r in Model.Records)
                     {
@@ -109,6 +110,21 @@
                             </td>
                             <td class="@(r.ClockInText == "--" ? "text-muted" : "")">@r.ClockInText</td>
                             <td class="@(r.ClockOutText == "--" ? "text-muted" : "")">@r.ClockOutText</td>
+                            <td class="small">
+                                @if (r.MidCheckHits.Count == 0)
+                                {
+                                    <span class="text-muted">--</span>
+                                }
+                                else
+                                {
+                                    @foreach (var h in r.MidCheckHits)
+                                    {
+                                        <div class="@(h.IsSatisfied ? "" : "text-danger")">
+                                            @h.WindowStart.ToString("HH:mm")-@h.WindowEnd.ToString("HH:mm")：@(h.HitTime.HasValue ? h.HitTime.Value.ToString("HH:mm") : "未打卡")
+                                        </div>
+                                    }
+                                }
+                            </td>
                             <td>
                                 <span class="badge bg-@StatusColor(r.AttendanceStatus)">@r.StatusText</span>
                                 @if (r.LocationAbnormal)
