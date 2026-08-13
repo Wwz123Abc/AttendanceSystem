@@ -39,9 +39,9 @@ public interface IAttendanceService
     Task                           UpdateAttendanceAfterApprovalAsync(int approvalRequestId);
     /// <summary>
     /// 管理员手动补卡：直接修改/新建任意员工任意一天的打卡时间，立即生效，不走审批流程。
-    /// clockIn/clockOut 传 null 表示不改那一侧的打卡时间。
+    /// clockIn/clockOut 传 null 表示不改那一侧的打卡时间。operatorName 会记进备注里，方便留操作痕迹。
     /// </summary>
-    Task                           AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark);
+    Task                           AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName);
     /// <summary>
     /// 生成"模板月度汇总表"（对照公司要求的外部模板文件列结构）。
     /// 统计周期可以是任意起止日期（比如"上月26号至本月25号"这种薪资结算周期，不一定是自然月）。

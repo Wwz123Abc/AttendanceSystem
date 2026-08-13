@@ -74,6 +74,45 @@
     </div>
 </div>
 
+<div class="card mt-4">
+    <div class="card-header">补卡记录 <span class="text-muted small">（最近 @Model.RecentLog.Count 条管理员手动补卡的操作记录）</span></div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th>员工</th>
+                        <th>考勤日期</th>
+                        <th>上班</th>
+                        <th>下班</th>
+                        <th>工时(h)</th>
+                        <th>备注</th>
+                        <th>操作时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.RecentLog.Any())
+                    {
+                        <tr><td colspan="7" class="empty-state"><i class="bi bi-inbox"></i>暂无手动补卡记录</td></tr>
+                    }
+                    @foreach (var log in Model.RecentLog)
+                    {
+                        <tr>
+                            <td>@log.RealName<span class="text-muted small">（@log.EmployeeNo）</span></td>
+                            <td>@log.WorkDate.ToString("yyyy-MM-dd")</td>
+                            <td>@log.ClockInText</td>
+                            <td>@log.ClockOutText</td>
+                            <td>@log.WorkHours.ToString("F1")</td>
+                            <td class="small text-muted">@log.Note</td>
+                            <td class="small text-muted">@log.UpdatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 @section Scripts {
 <script>
 async function searchUsers(keyword) {

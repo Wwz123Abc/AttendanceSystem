@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -25,7 +26,11 @@ public class PunchAdjustModel(IAttendanceService attendanceService, AttendanceDb
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage   { get; set; }
 
-    public void OnGet() { }
+    /// <summary>操作日志：最近一批"管理员手动补卡"改过的记录，供本页面下方列表展示，方便追溯是谁、什么时候、改了什么。</summary>
+    public record LogEntry(string RealName, string EmployeeNo, DateOnly WorkDate, string ClockInText, string ClockOutText, decimal WorkHours, string? Note, DateTime UpdatedAt);
+    public List<LogEntry> RecentLog { get; set; } = [];
+
+    public async Task OnGetAsync() => await LoadRecentLogAsync();
 
     public async Task<IActionResult> OnPostAdjustAsync()
     {
@@ -39,11 +44,29 @@ public class PunchAdjustModel(IAttendanceService attendanceService, AttendanceDb
             if (clockIn is null && clockOut is null)
                 throw new InvalidOperationException("上班/下班打卡时间至少要填一个");
 
-            await attendanceService.AdminAdjustPunchAsync(UserId, WorkDate, clockIn, clockOut, Remark);
+            var operatorName = User.FindFirstValue("RealName");
+            await attendanceService.AdminAdjustPunchAsync(UserId, WorkDate, clockIn, clockOut, Remark, operatorName);
             SuccessMessage = $"已为 {user.RealName}（{user.EmployeeNo}）补录 {WorkDate:yyyy-MM-dd} 的打卡记录";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
+        await LoadRecentLogAsync();
         return Page();
+    }
+
+    /// <summary>取最近 50 条"管理员手动补卡"改过的考勤记录（按更新时间倒序），供页面下方的操作记录列表用。</summary>
+    private async Task LoadRecentLogAsync()
+    {
+        RecentLog = await db.AttendanceRecords
+            .Include(r => r.User)
+            .Where(r => r.ApprovalNote != null && r.ApprovalNote.StartsWith("管理员手动补卡"))
+            .OrderByDescending(r => r.UpdatedAt)
+            .Take(50)
+            .Select(r => new LogEntry(
+                r.User.RealName, r.User.EmployeeNo, r.WorkDate,
+                r.ClockInTime  != null ? r.ClockInTime.Value.ToString("MM-dd HH:mm")  : "--",
+                r.ClockOutTime != null ? r.ClockOutTime.Value.ToString("MM-dd HH:mm") : "--",
+                r.ActualWorkHours, r.ApprovalNote, r.UpdatedAt))
+            .ToListAsync();
     }
 
     /// <summary>员工搜索（AJAX）：按姓名/工号模糊匹配，最多返回 20 条，供前端搜索框用。</summary>

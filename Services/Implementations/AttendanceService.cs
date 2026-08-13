@@ -880,7 +880,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 任意情况下直接补录/修改打卡时间，立即生效，不用走审批。工时重算口径和审批通过后的补卡完全一致
     /// （见 <see cref="RecalcWorkHoursAfterManualPunchAsync"/>），保证走这条路径和走审批路径算出来的工时对得上。
     /// </summary>
-    public async Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark)
+    public async Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName)
     {
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
         if (record is null)
@@ -891,7 +891,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         if (clockIn.HasValue)  record.ClockInTime  = clockIn.Value;
         if (clockOut.HasValue) record.ClockOutTime = clockOut.Value;
-        record.ApprovalNote = string.IsNullOrWhiteSpace(remark) ? "管理员手动补卡" : $"管理员手动补卡：{remark.Trim()}";
+        // 备注里带上操作人姓名，留下痕迹，方便"手动补卡"页面下方的操作记录列表追溯是谁改的
+        var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员手动补卡" : $"管理员手动补卡（操作人：{operatorName}）";
+        record.ApprovalNote = string.IsNullOrWhiteSpace(remark) ? opText : $"{opText}：{remark.Trim()}";
         record.UpdatedAt    = DateTime.Now;
 
         await RecalcWorkHoursAfterManualPunchAsync(record, userId);
