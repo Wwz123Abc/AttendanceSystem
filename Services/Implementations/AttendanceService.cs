@@ -929,7 +929,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 算上班状态：实际打卡比「应上班时间 + 迟到容忍」还晚就算迟到。没排班则一律正常。
     /// out lateMinutes 把迟到分钟数“带出去”给调用者。
     /// </summary>
-    private static AttendanceStatus CalcClockInStatus(
+    internal static AttendanceStatus CalcClockInStatus(
         DateTime clockIn, ShiftSchedule? shift, out int lateMinutes)
     {
         lateMinutes = 0;
@@ -947,7 +947,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 不能用 clockOut 打卡那一刻的日期——跨天班次下班时打卡已经是第二天了，
     /// 拿打卡当天的日期再顺延一天会多算出一整天，导致应下班时刻算错。
     /// </summary>
-    private static AttendanceStatus CalcClockOutStatus(
+    internal static AttendanceStatus CalcClockOutStatus(
         DateOnly workDate, DateTime clockOut, ShiftSchedule? shift, out int earlyMinutes)
     {
         earlyMinutes = 0;

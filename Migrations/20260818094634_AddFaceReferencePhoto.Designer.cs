@@ -4,6 +4,7 @@ using AttendanceSystem.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AttendanceSystem.Migrations
 {
     [DbContext(typeof(AttendanceDbContext))]
-    partial class AttendanceDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260818094634_AddFaceReferencePhoto")]
+    partial class AddFaceReferencePhoto
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1224,45 +1227,6 @@ namespace AttendanceSystem.Migrations
                         .HasDatabaseName("IX_User_SupervisorUserId");
 
                     b.ToTable("User");
-                });
-
-            modelBuilder.Entity("AttendanceSystem.Models.Entities.ZKDeviceCommand", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasColumnName("Id");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("CommandText")
-                        .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("varchar(2000)")
-                        .HasColumnName("CommandText");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)")
-                        .HasColumnName("CreatedAt");
-
-                    b.Property<string>("SN")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("varchar(50)")
-                        .HasColumnName("SN");
-
-                    b.Property<bool>("Sent")
-                        .HasColumnType("tinyint(1)")
-                        .HasColumnName("Sent");
-
-                    b.Property<DateTime?>("SentAt")
-                        .HasColumnType("datetime(6)")
-                        .HasColumnName("SentAt");
-
-                    b.HasKey("Id")
-                        .HasName("PK_ZKDeviceCommand");
-
-                    b.ToTable("ZKDeviceCommand");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Announcement", b =>

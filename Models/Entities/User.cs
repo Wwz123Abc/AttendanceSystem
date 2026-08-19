@@ -79,6 +79,13 @@ public class User
     [MaxLength(500)]
     public string? IdCardPhotoUrl { get; set; }
 
+    /// <summary>
+    /// 人脸打卡的参考照片地址：员工在"人脸采集"页自助录入，打卡时用这张和现场拍的照片做 1:1 比对。
+    /// 没录入过则为空——这种情况人脸打卡会提示先去录入。
+    /// </summary>
+    [MaxLength(500)]
+    public string? FaceReferencePhotoUrl { get; set; }
+
     [MaxLength(100)]
     public string? Email { get; set; }                      // 邮箱
 

@@ -12,6 +12,9 @@ using AttendanceSystem.Services.Interfaces;
 // 这是整个程序的“启动入口”：从上到下配置好各种功能，最后启动网站。
 // 大致顺序：配置日志 → 注册各种服务 → 组装管线 → 运行。
 
+// .NET Core 默认不认识 GBK 这种老编码，考勤机的 PUSH 协议用的就是 GBK，这里注册一下才能正常解析
+System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
 // 先配一个临时日志器（启动早期就能打日志）
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -114,6 +117,16 @@ builder.Services.AddHttpClient<IDingTalkLeaveClient,      DingTalkLeaveClient>(
 builder.Services.AddHttpClient<IDingTalkNotifyClient,     DingTalkNotifyClient>(
     c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<IDingTalkSyncService,          DingTalkSyncService>();
+
+// ── 阿里云人脸识别（打卡用：活体检测 + 1:1 人脸比对）────────────────────────────────
+builder.Services.Configure<AliyunFaceOptions>(
+    builder.Configuration.GetSection(AliyunFaceOptions.SectionName));
+builder.Services.AddScoped<IAliyunFaceClient, AliyunFaceClient>();
+
+// ── 熵基（ZKTeco）考勤机 PUSH 协议对接 ─────────────────────────────────────────────
+builder.Services.Configure<ZKDeviceOptions>(
+    builder.Configuration.GetSection(ZKDeviceOptions.SectionName));
+builder.Services.AddScoped<IZKDeviceSyncService, ZKDeviceSyncService>();
 builder.Services.AddScoped<IPasswordResetService,         PasswordResetService>();   // 忘记密码找回（钉钉工作通知验证码）
 
 // ── 网页(Razor Pages) + 接口(Web API)──────────────────────────────────────────

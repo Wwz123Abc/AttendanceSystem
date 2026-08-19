@@ -1,0 +1,40 @@
+@page
+@model AttendanceSystem.Pages.Admin.FaceTestModel
+@{ ViewData["Title"] = "人脸识别测试"; }
+
+<div class="page-header">
+    <h4><i class="bi bi-person-bounding-box me-2 text-primary"></i>人脸识别测试（临时诊断工具）</h4>
+</div>
+<div class="text-muted small mb-3">用来验证阿里云人脸识别接口配置对不对、调用通不通，不是正式打卡功能。</div>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger"><i class="bi bi-exclamation-circle me-2"></i>@Model.ErrorMessage</div>
+}
+@if (Model.IsLive.HasValue)
+{
+    <div class="alert @(Model.IsMatch == true ? "alert-success" : "alert-warning")">
+        <div>活体检测：<b>@(Model.IsLive == true ? "通过（是真人）" : "未通过（疑似照片/视频冒充）")</b></div>
+        <div>人脸比对：<b>@(Model.IsMatch == true ? "通过（同一个人）" : "未通过")</b>，相似度分数：<b>@Model.Confidence?.ToString("F1")</b></div>
+        @if (!string.IsNullOrEmpty(Model.FailReason))
+        {
+            <div class="text-muted small mt-1">@Model.FailReason</div>
+        }
+    </div>
+}
+
+<div class="card" style="max-width:500px">
+    <div class="card-body">
+        <form method="post" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label class="form-label">参考照片（比如你自己的一张正脸照）</label>
+                <input type="file" name="ReferencePhoto" class="form-control" accept="image/*" required />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">现场照片（另一张照片，测试用摄像头现拍或随便找一张）</label>
+                <input type="file" name="LivePhoto" class="form-control" accept="image/*" capture="user" required />
+            </div>
+            <button type="submit" class="btn btn-primary">开始比对</button>
+        </form>
+    </div>
+</div>
