@@ -17,4 +17,8 @@ public interface IZKDeviceSyncService
     /// <summary>把员工的工号+姓名排进下发队列，下次设备心跳时会把 DATA UPDATE USERINFO 命令带给它，
     /// 在设备上预先建好档（还是需要员工本人到设备前面刷脸完成人脸录入，这一步没法远程做）。</summary>
     Task EnqueuePushUserInfoAsync(User user, CancellationToken ct = default);
+
+    /// <summary>把"删除该工号"排进下发队列，下次设备心跳时会把 DATA DELETE USERINFO 命令带给它，
+    /// 员工离职/被删除后设备上也不再认这张脸/这个工号。</summary>
+    Task EnqueueDeleteUserInfoAsync(string employeeNo, CancellationToken ct = default);
 }

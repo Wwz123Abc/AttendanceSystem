@@ -75,6 +75,19 @@ public class UserService(
         }
     }
 
+    /// <summary>把"删除该工号"排进考勤机下发队列（设备下次心跳时会取走）。同上，失败只记日志不拦主流程。</summary>
+    private async Task TryDeleteFromZKDeviceAsync(string employeeNo, int userId)
+    {
+        try
+        {
+            await zkDeviceSyncService.EnqueueDeleteUserInfoAsync(employeeNo);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "员工 {UserId} 排队从考勤机删除失败", userId);
+        }
+    }
+
     /// <summary>员工自己改密码（要先验证原密码）。</summary>
     public async Task<bool> ChangePasswordAsync(int userId, string oldPassword, string newPassword)
     {
@@ -124,6 +137,8 @@ public class UserService(
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo, user.Id))
             throw new InvalidOperationException($"工号 {user.EmployeeNo} 已被其他员工占用");
 
+        var oldEmployeeNo = existing.EmployeeNo;   // 改工号的话，考勤机上旧工号那条记录要跟着清掉，不然会留一条没人对应的僵尸记录
+
         // 逐项把新值覆盖到数据库里的那条记录上
         existing.RealName           = user.RealName;
         existing.EmployeeNo         = user.EmployeeNo;
@@ -144,11 +159,14 @@ public class UserService(
         existing.UpdatedAt          = DateTime.Now;
         await db.SaveChangesAsync();
         await TryPushToZKDeviceAsync(existing);
+        if (oldEmployeeNo != existing.EmployeeNo)
+            await TryDeleteFromZKDeviceAsync(oldEmployeeNo, existing.Id);
 
         return true;
     }
 
-    /// <summary>停用员工（离职）：本地不删除，只是禁止登录，考勤/审批等记录仍保留、可查询。</summary>
+    /// <summary>停用员工（离职）：本地不删除，只是禁止登录，考勤/审批等记录仍保留、可查询；
+    /// 顺带把这个工号从考勤机上删掉，离职后不该还能在设备上刷脸打卡。</summary>
     public async Task<bool> DeactivateUserAsync(int userId)
     {
         var user = await db.Users.FindAsync(userId);
@@ -157,6 +175,7 @@ public class UserService(
         user.IsActive  = false;
         user.UpdatedAt = DateTime.Now;
         await db.SaveChangesAsync();
+        await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
         return true;
     }
 
@@ -174,7 +193,8 @@ public class UserService(
         return true;
     }
 
-    /// <summary>拉黑员工：标记黑名单（永不录用）并同时禁止登录。</summary>
+    /// <summary>拉黑员工：标记黑名单（永不录用）并同时禁止登录，顺带把这个工号从考勤机上删掉
+    /// （被拉黑的人不该还能在设备上刷脸打卡）。</summary>
     public async Task<bool> BlacklistUserAsync(int userId)
     {
         var user = await db.Users.FindAsync(userId);
@@ -184,6 +204,7 @@ public class UserService(
         user.IsActive      = false;   // 黑名单必然禁止登录
         user.UpdatedAt     = DateTime.Now;
         await db.SaveChangesAsync();
+        await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
         return true;
     }
 
@@ -199,7 +220,8 @@ public class UserService(
         return true;
     }
 
-    /// <summary>彻底删除员工（连同其考勤记录/打卡/审批/通知按外键级联一并删除）。慎用。</summary>
+    /// <summary>彻底删除员工（连同其考勤记录/打卡/审批/通知按外键级联一并删除），顺带把这个工号从
+    /// 考勤机上删掉。慎用。</summary>
     public async Task<bool> DeleteUserAsync(int userId)
     {
         var user = await db.Users.FindAsync(userId);
@@ -214,18 +236,22 @@ public class UserService(
             throw new InvalidOperationException(
                 $"该员工是「{string.Join("、", approverOfGroups)}」考勤组的审批人，无法直接删除，请先到「考勤组管理」把他从审批人名单里移除后再删除");
 
+        var employeeNo = user.EmployeeNo;
         db.Users.Remove(user);
         await db.SaveChangesAsync();
+        await TryDeleteFromZKDeviceAsync(employeeNo, userId);
         return true;
     }
 
-    /// <summary>批量启用/停用。启用时会跳过黑名单员工（黑名单需先移出）。返回实际处理条数。</summary>
+    /// <summary>批量启用/停用。启用时会跳过黑名单员工（黑名单需先移出）。返回实际处理条数。
+    /// 批量停用的员工，和单个停用一样会顺带从考勤机上删掉。</summary>
     public async Task<int> SetActiveBatchAsync(IEnumerable<int> userIds, bool active)
     {
         var ids   = userIds.Distinct().ToList();
         var users = await db.Users.Where(u => ids.Contains(u.Id)).ToListAsync();
 
         var changed = 0;
+        var deactivatedEmployeeNos = new List<(string EmployeeNo, int UserId)>();
         foreach (var u in users)
         {
             if (active && u.IsBlacklisted) continue;   // 黑名单不参与批量启用
@@ -233,9 +259,12 @@ public class UserService(
 
             u.IsActive  = active;
             u.UpdatedAt = DateTime.Now;
+            if (!active) deactivatedEmployeeNos.Add((u.EmployeeNo, u.Id));
             changed++;
         }
         if (changed > 0) await db.SaveChangesAsync();
+        foreach (var (employeeNo, userId) in deactivatedEmployeeNos)
+            await TryDeleteFromZKDeviceAsync(employeeNo, userId);
         return changed;
     }
 

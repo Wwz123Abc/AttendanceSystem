@@ -144,4 +144,19 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
         }
         await db.SaveChangesAsync(ct);
     }
+
+    /// <summary>给白名单里的每台设备都排一条"删除该工号"命令（DATA DELETE USERINFO），
+    /// 用在员工离职/被彻底删除、或者工号被改掉（旧工号在设备上就该清掉）这几个场景。</summary>
+    public async Task EnqueueDeleteUserInfoAsync(string employeeNo, CancellationToken ct = default)
+    {
+        var snList = await db.ZKDevices.Where(d => d.IsActive).Select(d => d.SN).ToListAsync(ct);
+        if (snList.Count == 0 || string.IsNullOrWhiteSpace(employeeNo)) return;
+
+        var commandText = $"DATA DELETE USERINFO PIN={employeeNo}";
+        foreach (var sn in snList)
+        {
+            db.ZKDeviceCommands.Add(new ZKDeviceCommand { SN = sn, CommandText = commandText });
+        }
+        await db.SaveChangesAsync(ct);
+    }
 }
