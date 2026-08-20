@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.Implementations;
@@ -11,7 +13,8 @@ namespace AttendanceSystem.Services.Implementations;
 /// upsert 考勤日记录），区别只是数据来源——这边设备已经明确告诉我们是上班还是下班（Status 字段），
 /// 不需要像钉钉那样自己猜；迟到/早退状态改成当场按班次算（钉钉是它自己判定好直接给结果）。
 /// </summary>
-public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger) : IZKDeviceSyncService
+public class ZKDeviceSyncService(
+    AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger, IOptions<ZKDeviceOptions> zkOptions) : IZKDeviceSyncService
 {
     public async Task ProcessAttLogAsync(string sn, List<ZKAttLogRow> rows, CancellationToken ct = default)
     {
@@ -123,6 +126,26 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             }
         }
 
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// 给白名单里的每台设备都排一条"下发员工信息"命令，下次设备心跳（/iclock/getrequest）时会被取走。
+    /// 命令格式参考熵基官方 PUSH 协议参考实现（Demo-Java 的 GenerateCmd）：DATA UPDATE USERINFO，
+    /// 字段用 Tab 分隔，PIN 直接用本系统的工号（EmployeeNo）——这样设备推上来的打卡记录才能按工号对上人。
+    /// </summary>
+    public async Task EnqueuePushUserInfoAsync(User user, CancellationToken ct = default)
+    {
+        var snList = zkOptions.Value.AllowedSerialNumbers;
+        if (snList.Count == 0 || string.IsNullOrWhiteSpace(user.EmployeeNo)) return;
+
+        var name = user.RealName.Replace('\t', ' ');   // 名字里不该有 Tab，保险起见替换掉，避免破坏字段分隔
+        var commandText = $"DATA UPDATE USERINFO PIN={user.EmployeeNo}\tName={name}\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ=0000000000000000\tVerify=0\tViceCard=";
+
+        foreach (var sn in snList)
+        {
+            db.ZKDeviceCommands.Add(new ZKDeviceCommand { SN = sn, CommandText = commandText });
+        }
         await db.SaveChangesAsync(ct);
     }
 }

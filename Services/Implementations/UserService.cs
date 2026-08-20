@@ -18,6 +18,7 @@ namespace AttendanceSystem.Services.Implementations;
 public class UserService(
     AttendanceDbContext db,
     IDingTalkContactClient dingTalkContactClient,
+    IZKDeviceSyncService zkDeviceSyncService,
     ILogger<UserService> logger) : IUserService
 {
     /// <summary>校验工号+密码。成功返回用户；工号/密码错返回 null；账号停用则抛异常。</summary>
@@ -63,7 +64,22 @@ public class UserService(
         await db.SaveChangesAsync();
 
         var warning = await TryCreateOnDingTalkAsync(user);
+        await TryPushToZKDeviceAsync(user);
         return (user, warning);
+    }
+
+    /// <summary>把员工工号+姓名排进考勤机下发队列（设备下次心跳时会取走）。这是本地队列表操作，
+    /// 失败了也不该拦住员工创建/编辑本身，出错只记日志。</summary>
+    private async Task TryPushToZKDeviceAsync(User user)
+    {
+        try
+        {
+            await zkDeviceSyncService.EnqueuePushUserInfoAsync(user);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "员工 {UserId} 排队下发考勤机信息失败", user.Id);
+        }
     }
 
     /// <summary>
@@ -187,6 +203,7 @@ public class UserService(
         // 若在这里赋值，每次编辑都会把数据库里已有的值冲成空。
         existing.UpdatedAt          = DateTime.Now;
         await db.SaveChangesAsync();
+        await TryPushToZKDeviceAsync(existing);
 
         string? warning = null;
         if (string.IsNullOrEmpty(existing.DingTalkUserId))

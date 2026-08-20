@@ -20,3 +20,6 @@ appsettings.*.json
 # graphify 技能生成的本地缓存，不是项目代码
 graphify-out/
 
+# 数据库备份文件（含真实员工数据），不能上传
+db_backups/
+
