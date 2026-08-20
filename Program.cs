@@ -242,6 +242,19 @@ app.UseExceptionHandler(errApp => errApp.Run(async context =>
 }));
 
 // ── 请求处理管线：每个请求按下面顺序依次经过这些“关卡”────────────────────────────
+
+// 考勤机上传数据的接口要在控制器方法里自己手动读原始请求体（ZKDeviceController.ReadBodyBytesAsync）。
+// 如果设备这次请求恰好带了 Content-Type: application/x-www-form-urlencoded 之类的表单类型，
+// ASP.NET Core 的模型绑定管线会在路由匹配之后、控制器方法真正执行之前，自己先把请求体当表单读一遍
+// （哪怕控制器的参数根本不需要表单数据），等控制器方法自己再读 Request.Body 时就已经读到空的了——
+// 这里在最前面就把请求体设成"可重复读"，这样不管中间谁读过一次，后面还能从头再读一遍，不会丢数据。
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/iclock"))
+        context.Request.EnableBuffering();
+    await next();
+});
+
 app.UseStaticFiles();                          // 静态文件(css/js/图片)
 app.UseRouting();                              // 路由（决定请求交给谁处理）
 app.UseSession();                              // 会话

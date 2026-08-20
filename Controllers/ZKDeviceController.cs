@@ -146,8 +146,16 @@ public class ZKDeviceController(
         return Content("OK", "text/plain", Gbk);
     }
 
+    /// <summary>
+    /// 读原始请求体字节。这里特意先 EnableBuffering 再从头读，不能直接读 Request.Body——
+    /// 如果设备这次请求带的 Content-Type 恰好是 application/x-www-form-urlencoded 之类的表单类型，
+    /// ASP.NET Core 框架自己会在进到这个方法之前就把请求体当表单读掉一次，直接读 Request.Body
+    /// 会读到空的，导致这次上传的数据被无声丢掉（只记"0 条"，不会报错，很难发现）。
+    /// </summary>
     private async Task<byte[]> ReadBodyBytesAsync()
     {
+        Request.EnableBuffering();
+        Request.Body.Position = 0;
         using var ms = new MemoryStream();
         await Request.Body.CopyToAsync(ms);
         return ms.ToArray();
