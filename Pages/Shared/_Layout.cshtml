@@ -262,8 +262,9 @@
     bool isAuth = User.Identity?.IsAuthenticated == true;
     string currentPath = Context.Request.Path.Value ?? "";
 
-    // 水印：仅这几个页面显示，内容是“姓名 + 劳务公司”，用密集平铺的 SVG 背景图实现，做到“多、明显”
-    string? watermarkUrl = null;
+    // 水印：仅这几个页面显示，内容是“姓名 + 劳务公司 + 实时时间”，用密集平铺的 SVG 背景图实现，做到“多、明显”
+    // 时间部分要实时跳动，所以基础文字（姓名+公司）由后端算好传给前端，具体拼时间戳、生成水印图案交给 JS 每秒刷新一次
+    string? watermarkBaseText = null;
     if (isAuth && currentUser != null)
     {
         var watermarkPages = new[] { "/Notice/Board", "/Attendance/MyRecord", "/Attendance/MyCalendar", "/Approval/ApplySubmit" };
@@ -271,21 +272,35 @@
         {
             var wmText = string.Join("   ", new[] { currentUser.RealName, currentUser.ContractCompany }
                 .Where(s => !string.IsNullOrWhiteSpace(s)));
-            if (!string.IsNullOrWhiteSpace(wmText))
-            {
-                var encoded = System.Net.WebUtility.HtmlEncode(wmText);
-                var svg = "<svg xmlns='http://www.w3.org/2000/svg' width='240' height='130'>"
-                        + "<text x='4' y='72' font-size='14' fill='rgba(50,50,50,0.24)' "
-                        + "font-family='Microsoft YaHei,sans-serif' transform='rotate(-18 120 65)'>" + encoded + "</text>"
-                        + "</svg>";
-                watermarkUrl = "data:image/svg+xml;utf8," + Uri.EscapeDataString(svg);
-            }
+            if (!string.IsNullOrWhiteSpace(wmText)) watermarkBaseText = wmText;
         }
     }
 }
-@if (watermarkUrl != null)
+@if (watermarkBaseText != null)
 {
-    <div class="page-watermark" style="background-image:url('@watermarkUrl');"></div>
+    <div class="page-watermark" id="pageWatermark" data-wm-base="@watermarkBaseText"></div>
+    <script>
+    (function () {
+        var el = document.getElementById('pageWatermark');
+        var baseText = el.getAttribute('data-wm-base');
+        function pad(n) { return n < 10 ? '0' + n : '' + n; }
+        function escXml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+        function render() {
+            var d = new Date();
+            var ts = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' '
+                   + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+            var text = escXml(baseText + '   ' + ts);
+            var svg = "<svg xmlns='http://www.w3.org/2000/svg' width='270' height='130'>"
+                    + "<text x='4' y='72' font-size='14' fill='rgba(50,50,50,0.24)' "
+                    + "font-family='Microsoft YaHei,sans-serif' transform='rotate(-18 135 65)'>" + text + "</text>"
+                    + "</svg>";
+            var encoded = encodeURIComponent(svg).replace(/'/g, '%27').replace(/\(/g, '%28').replace(/\)/g, '%29');
+            el.style.backgroundImage = 'url("data:image/svg+xml;utf8,' + encoded + '")';
+        }
+        render();
+        setInterval(render, 1000);
+    })();
+    </script>
 }
 @if (isAuth && currentUser != null)
 {
