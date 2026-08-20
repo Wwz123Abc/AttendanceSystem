@@ -92,10 +92,6 @@ public class User
     [MaxLength(500)]
     public string? AvatarUrl { get; set; }                  // 头像图片地址
 
-    /// <summary>钉钉用户 userid（从钉钉同步打卡时用来对应本地员工，没对接则为空）</summary>
-    [MaxLength(64)]
-    public string? DingTalkUserId { get; set; }
-
     public DateOnly? HireDate { get; set; }                 // 入职日期
 
     public bool IsActive { get; set; } = true;              // 是否在职（false=已停用，不能登录）

@@ -1,9 +1,7 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
-using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.BackgroundServices;
@@ -13,20 +11,17 @@ namespace AttendanceSystem.Services.BackgroundServices;
 /// <summary>
 /// 考勤后台定时任务（每分钟检查一次）：
 /// ● 每天 23:58：把当天没打卡的在职员工标记为旷工/未打卡；
-/// ● 每月 1 日 00:02：生成上一个月的考勤汇总；
-/// ● （可选）按配置间隔从钉钉拉取打卡（默认关，由 DingTalk.EnableScheduledSync 打开）。
+/// ● 每月 1 日 00:02：生成上一个月的考勤汇总。
 /// 用「上次执行日期」做记号，保证同一时间窗内只执行一次。
 /// </summary>
 public class AttendanceBackgroundService(
     IServiceScopeFactory scopeFactory,
-    IOptions<DingTalkOptions> dingTalkOptions,
     ILogger<AttendanceBackgroundService> logger)
     : BackgroundService
 {
-    // 记录三类任务“上次执行的时间”，避免在同一分钟窗口里重复跑
+    // 记录两类任务“上次执行的时间”，避免在同一分钟窗口里重复跑
     private DateTime _lastAbsentDate    = DateTime.MinValue;
     private DateTime _lastSummaryDate   = DateTime.MinValue;
-    private DateTime _lastDingTalkSync  = DateTime.MinValue;
 
     // 程序启动后这个方法一直在后台循环运行，直到程序关闭
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -50,15 +45,6 @@ public class AttendanceBackgroundService(
                     _lastSummaryDate = now;
                     var prev = now.AddMonths(-1);   // 上个月
                     await GenerateSummaryAsync(prev.Year, prev.Month);
-                }
-
-                // 钉钉定时同步（默认关闭；开启后每隔 N 分钟拉一次）
-                var dt = dingTalkOptions.Value;
-                if (dt.EnableScheduledSync &&
-                    (now - _lastDingTalkSync).TotalMinutes >= Math.Max(1, dt.ScheduledSyncIntervalMinutes))
-                {
-                    _lastDingTalkSync = now;
-                    await SyncDingTalkAsync(dt);
                 }
             }
             catch (Exception ex)
@@ -127,7 +113,7 @@ public class AttendanceBackgroundService(
 
             recordByUser.TryGetValue(user.Id, out var record);   // 取这个人今天的考勤记录（可能没有）
 
-            // 已是「请假/休假/出差」的记录（如钉钉请假同步写入、出差审批回写）不要覆盖成旷工
+            // 已是「请假/休假/出差」的记录（如请假审批、出差审批回写）不要覆盖成旷工
             if (record is not null && record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip)
                 continue;
 
@@ -191,16 +177,5 @@ public class AttendanceBackgroundService(
         var svc = scope.ServiceProvider.GetRequiredService<IAttendanceService>();
         await svc.GenerateMonthlySummaryAsync(year, month);
         logger.LogInformation("月度汇总生成完成：{Year}/{Month}", year, month);
-    }
-
-    /// <summary>按配置回溯天数，从钉钉拉取打卡结果并落库。</summary>
-    private async Task SyncDingTalkAsync(DingTalkOptions opt)
-    {
-        using var scope = scopeFactory.CreateScope();
-        var sync = scope.ServiceProvider.GetRequiredService<IDingTalkSyncService>();
-        var to   = DateTime.Now;
-        var from = DateTime.Today.AddDays(-Math.Max(0, opt.ScheduledSyncLookbackDays));
-        var result = await sync.SyncAsync(from, to);
-        logger.LogInformation("钉钉定时同步：{Message}", result.Message);
     }
 }

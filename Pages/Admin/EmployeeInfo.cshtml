@@ -193,13 +193,6 @@
                         <div class="card-header"><i class="bi bi-gear me-1 text-primary"></i>账号信息</div>
                         <div class="card-body">
                             <dl class="row mb-0">
-                                <dt class="col-5">钉钉绑定</dt>
-                                <dd class="col-7">
-                                    @if (!string.IsNullOrEmpty(e.DingTalkUserId))
-                                    { <span class="text-primary"><i class="bi bi-link-45deg"></i> 已绑定</span> }
-                                    else
-                                    { <span class="text-muted"><i class="bi bi-slash-circle"></i> 未绑定</span> }
-                                </dd>
                                 <dt class="col-5">创建时间</dt><dd class="col-7">@e.CreatedAt.ToString("yyyy-MM-dd HH:mm")</dd>
                                 <dt class="col-5">最近修改</dt><dd class="col-7">@e.UpdatedAt.ToString("yyyy-MM-dd HH:mm")</dd>
                                 <dt class="col-5">最近登录</dt><dd class="col-7">@(e.LastLoginAt?.ToString("yyyy-MM-dd HH:mm") ?? "从未登录")</dd>

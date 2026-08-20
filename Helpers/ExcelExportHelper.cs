@@ -366,7 +366,7 @@ public static class ExcelExportHelper
         [
             "工号", "姓名", "角色", "用工性质", "状态", "部门", "考勤组", "岗位",
             "手机号", "身份证号", "合同公司", "入职日期", "家庭住址",
-            "紧急联系人", "紧急联系人电话", "钉钉绑定"
+            "紧急联系人", "紧急联系人电话"
         ];
 
         var titleRow = sheet.CreateRow(0);
@@ -404,7 +404,6 @@ public static class ExcelExportHelper
             SetCell(row, 12, u.HomeAddress ?? "", baseStyle);
             SetCell(row, 13, u.EmergencyContactName ?? "", baseStyle);
             SetCell(row, 14, u.EmergencyContactPhone ?? "", baseStyle);
-            SetCell(row, 15, string.IsNullOrEmpty(u.DingTalkUserId) ? "未绑定" : "已绑定", baseStyle);
         }
 
         return ToBytes(wb);

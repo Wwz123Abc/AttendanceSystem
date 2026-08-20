@@ -398,7 +398,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 EmployeeNo      = user.EmployeeNo,
                 Position        = user.Position,
                 ContractCompany = user.ContractCompany,
-                DingTalkUserId  = user.DingTalkUserId,
                 NightShiftDays  = night.GetValueOrDefault(user.Id)
             };
 

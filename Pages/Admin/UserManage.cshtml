@@ -66,35 +66,6 @@
 <div class="tab-content">
 <div class="tab-pane fade show active" id="tabEmployeeList">
 
-<!-- 钉钉对接 -->
-<div class="card mb-3 border-primary-subtle">
-    <div class="card-body py-3">
-        <div class="d-flex flex-wrap align-items-end gap-3">
-            <span class="fw-semibold"><i class="bi bi-link-45deg me-1 text-primary"></i>钉钉对接</span>
-            <form method="post" asp-page-handler="ImportDingTalk" class="mb-0"
-                  onsubmit="return confirm('将从钉钉通讯录整批导入员工（自动建好 userid 映射）。确认继续？')">
-                @Html.Raw(ctxHidden)
-                <button type="submit" class="btn btn-success btn-sm"><i class="bi bi-cloud-download me-1"></i>从钉钉导入员工</button>
-            </form>
-            <form method="post" asp-page-handler="AutoMapDingTalk" class="mb-0"
-                  onsubmit="return confirm('将按工号从钉钉反查 userid，回填到未映射的员工。确认继续？')">
-                @Html.Raw(ctxHidden)
-                <button type="submit" class="btn btn-outline-primary btn-sm">自动映射 userid</button>
-            </form>
-            <span class="vr"></span>
-            <form method="post" asp-page-handler="SyncDingTalk" class="d-flex align-items-end gap-2 mb-0"
-                  onsubmit="return confirm('将从钉钉拉取所选日期范围的打卡结果并落库。确认继续？')">
-                @Html.Raw(ctxHidden)
-                <div><label class="form-label small mb-1">从</label>
-                    <input asp-for="SyncFrom" type="date" class="form-control form-control-sm" style="max-width:150px" /></div>
-                <div><label class="form-label small mb-1">到</label>
-                    <input asp-for="SyncTo" type="date" class="form-control form-control-sm" style="max-width:150px" /></div>
-                <button type="submit" class="btn btn-primary btn-sm">立即同步打卡</button>
-            </form>
-        </div>
-    </div>
-</div>
-
 <div class="d-flex gap-3 align-items-start">
 
     <!-- ── 左侧：部门筛选树 ────────────────────────────────────────────── -->
@@ -236,10 +207,6 @@
                                     <td class="small">@(u.ContractCompany ?? "—")</td>
                                     <td class="small">
                                         @u.Phone
-                                        @if (!string.IsNullOrEmpty(u.DingTalkUserId))
-                                        {
-                                            <i class="bi bi-link-45deg text-primary" title="已绑定钉钉账号：改资料/删除会同步到钉钉"></i>
-                                        }
                                     </td>
                                     <td>
                                         @switch (u.Status)
@@ -263,7 +230,6 @@
                                                         idNumber = u.IdNumber ?? "",
                                                         contractCompany = u.ContractCompany ?? "",
                                                         hireDate = u.HireDate?.ToString("yyyy-MM-dd") ?? "",
-                                                        dingTalkUserId = u.DingTalkUserId ?? "",
                                                         homeAddress = u.HomeAddress ?? "",
                                                         emergencyContactName = u.EmergencyContactName ?? "",
                                                         emergencyContactPhone = u.EmergencyContactPhone ?? "",
@@ -478,8 +444,7 @@
                             <label class="form-label">手机 <span class="text-danger" id="fPhoneReq">*</span></label>
                             <input asp-for="Phone" class="form-control" id="fPhone" type="tel" maxlength="11"
                                    pattern="^1[3-9]\d{9}$" title="请输入正确格式的手机号（11 位中国大陆手机号）" />
-                            <div class="form-text">新建员工需填写手机号，用于以后"忘记密码"自助找回。</div>
-                            <div class="form-text" id="fDingTalkStatus"></div>
+                            <div class="form-text">新建员工需填写手机号，方便日常联系。</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">入职日期</label>
@@ -757,9 +722,8 @@ function openAdd() {
     document.getElementById('fPhoneReq').style.display = '';
     document.getElementById('fSuperIdSearch').required = true;     // 新建必须选直属上级
     document.getElementById('fSuperIdReq').style.display = '';
-    document.getElementById('fDeptId').required = true;            // 新建必须选部门（否则钉钉邀请没法同步）
+    document.getElementById('fDeptId').required = true;            // 新建必须选部门
     document.getElementById('fDeptIdReq').style.display = '';
-    document.getElementById('fDingTalkStatus').textContent = '';   // 新建员工还没有钉钉绑定状态，不显示
     autoFillEmployeeNo = true;
     fillEmployeeNoForDept(document.getElementById('fDeptId').value);   // 默认部门已选中时，直接按它生成一次
     suggestSupervisorForDept(document.getElementById('fDeptId').value);
@@ -870,10 +834,6 @@ function openEdit(data) {
     } else {
         document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';
     }
-    // 直接告诉管理员这个人有没有绑定钉钉——绑定了，改资料/删除才会同步到钉钉，没绑定就只改本地
-    document.getElementById('fDingTalkStatus').innerHTML = data.dingTalkUserId
-        ? '<i class="bi bi-link-45deg text-primary"></i> 已绑定钉钉账号，保存/删除时会同步到钉钉通讯录'
-        : '<i class="bi bi-slash-circle text-muted"></i> 未绑定钉钉账号，保存/删除只影响本地数据，不会调用钉钉';
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
 </script>

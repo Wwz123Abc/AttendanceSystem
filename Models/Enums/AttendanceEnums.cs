@@ -22,7 +22,7 @@ public enum PunchType
 {
     ClockIn  = 1,  // 上班打卡
     ClockOut = 2,  // 下班打卡
-    MidCheck = 3   // 午间打卡（本地打卡页专用；钉钉同步的打卡按时间是否落在窗口内判定，不依赖这个类型，见 DingTalkSyncService）
+    MidCheck = 3   // 午间打卡（本地打卡页专用；设备同步的打卡按时间是否落在窗口内判定，不依赖这个类型）
 }
 
 /// <summary>班次类型：这个班次的上下班时间规则是哪一种。</summary>

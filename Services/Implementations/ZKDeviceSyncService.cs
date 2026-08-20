@@ -7,9 +7,8 @@ using AttendanceSystem.Services.Interfaces;
 namespace AttendanceSystem.Services.Implementations;
 
 /// <summary>
-/// 熵基考勤机打卡数据落库：思路和 DingTalkSyncService 完全一致（原始打卡流水去重写入 + 按人/日
-/// upsert 考勤日记录），区别只是数据来源——这边设备已经明确告诉我们是上班还是下班（Status 字段），
-/// 不需要像钉钉那样自己猜；迟到/早退状态改成当场按班次算（钉钉是它自己判定好直接给结果）。
+/// 熵基考勤机打卡数据落库：原始打卡流水去重写入 + 按人/日 upsert 考勤日记录，
+/// 设备已经明确告诉我们是上班还是下班（Status 字段），迟到/早退状态当场按班次计算。
 /// </summary>
 public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger) : IZKDeviceSyncService
 {
@@ -111,7 +110,7 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             record.Remark    = "熵基考勤机同步";
             record.UpdatedAt = DateTime.Now;
 
-            // 工时：上下班都齐了才算，公式和本地打卡/钉钉同步完全一致（早到晚走不多算钱）
+            // 工时：上下班都齐了才算，公式和全系统唯一口径完全一致（早到晚走不多算钱）
             if (record.ClockInTime is { } ci && record.ClockOutTime is { } co && co > ci)
             {
                 var (lunch, dinner) = groupIdByUser.TryGetValue(uid, out var gid) && gid.HasValue

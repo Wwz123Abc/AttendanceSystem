@@ -13,11 +13,10 @@ using QRCoder;
 
 namespace AttendanceSystem.Pages.Admin;
 
-/// <summary>员工管理页：左侧部门树筛选 + 右侧员工表（增删改、启停、拉黑、批量、重置密码、钉钉对接、扫码登记确认）。</summary>
+/// <summary>员工管理页：左侧部门树筛选 + 右侧员工表（增删改、启停、拉黑、批量、重置密码、扫码登记确认）。</summary>
 [Authorize(Policy = "ManagePolicy")]
 public class UserManageModel(
     IUserService userService,
-    IDingTalkSyncService dingTalkSyncService,
     IAttendanceGroupService groupService,
     IEmployeeRegistrationService registrationService,
     IOptions<AppSettingsOptions> appOptions,
@@ -90,10 +89,6 @@ public class UserManageModel(
     [BindProperty] public string? CtxRole       { get; set; }
     [BindProperty] public string? CtxKeyword    { get; set; }
     [BindProperty] public int     CtxPage       { get; set; } = 1;
-
-    // 钉钉打卡同步的日期范围
-    [BindProperty] public string? SyncFrom { get; set; }
-    [BindProperty] public string? SyncTo   { get; set; }
 
     // 注意：分页参数用 p（page 是 Razor Pages 保留路由键）
     public async Task OnGetAsync(string? keyword, int p = 1, int? deptId = null,
@@ -178,13 +173,13 @@ public class UserManageModel(
                 if (followedGroupId.HasValue) newUser.AttendanceGroupId = followedGroupId.Value;
             }
             var initialPwd = appOptions.Value.DefaultPassword;   // 初始密码统一取配置值（默认 123456）
-            var (_, warning) = await userService.CreateUserAsync(newUser, initialPwd);
+            await userService.CreateUserAsync(newUser, initialPwd);
 
             // 如果这次新建是在确认某条扫码登记，顺带把那条登记标记为「已确认」，关联上新建好的账号
             if (RegistrationId.HasValue)
                 await registrationService.MarkConfirmedAsync(RegistrationId.Value, newUser.Id);
 
-            SuccessMessage = $"员工 {RealName} 创建成功！初始密码：{initialPwd}" + (warning is null ? "" : $"（{warning}）");
+            SuccessMessage = $"员工 {RealName} 创建成功！初始密码：{initialPwd}";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync();
@@ -206,8 +201,8 @@ public class UserManageModel(
                 var followedGroupId = await groupService.GetGroupIdForDepartmentAsync(DeptId.Value);
                 if (followedGroupId.HasValue) user.AttendanceGroupId = followedGroupId.Value;
             }
-            var (_, warning) = await userService.UpdateUserAsync(user);
-            SuccessMessage = warning is null ? "员工信息更新成功！" : $"员工信息更新成功！（{warning}）";
+            var ok = await userService.UpdateUserAsync(user);
+            SuccessMessage = ok ? "员工信息更新成功！" : "更新失败：用户不存在";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync();
@@ -219,8 +214,8 @@ public class UserManageModel(
     {
         try
         {
-            var (_, warning) = await userService.DeactivateUserAsync(id);
-            SuccessMessage = warning is null ? "已停用该账号（无法登录）" : $"已停用该账号（无法登录）（{warning}）";
+            await userService.DeactivateUserAsync(id);
+            SuccessMessage = "已停用该账号（无法登录）";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync(); return Page();
@@ -251,8 +246,8 @@ public class UserManageModel(
     {
         try
         {
-            var (_, warning) = await userService.DeleteUserAsync(id);
-            SuccessMessage = warning is null ? "已彻底删除该员工" : $"已彻底删除该员工（{warning}）";
+            await userService.DeleteUserAsync(id);
+            SuccessMessage = "已彻底删除该员工";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
         await ReloadAsync(); return Page();
@@ -282,44 +277,12 @@ public class UserManageModel(
         await ReloadAsync(); return Page();
     }
 
-    // ── 钉钉对接（保留原有功能）──────────────────────────────────────────────
-    public async Task<IActionResult> OnPostAutoMapDingTalkAsync()
-    {
-        try { var r = await dingTalkSyncService.AutoMapByJobNumberAsync();
-              if (r.Success) SuccessMessage = r.Message; else ErrorMessage = r.Message; }
-        catch (Exception ex) { ErrorMessage = "钉钉自动映射失败：" + ex.Message; }
-        await ReloadAsync(); return Page();
-    }
-
-    public async Task<IActionResult> OnPostImportDingTalkAsync()
-    {
-        try { var r = await dingTalkSyncService.ImportEmployeesAsync();
-              if (r.Success) SuccessMessage = r.Message; else ErrorMessage = r.Message; }
-        catch (Exception ex) { ErrorMessage = "从钉钉导入员工失败：" + ex.Message; }
-        await ReloadAsync(); return Page();
-    }
-
-    public async Task<IActionResult> OnPostSyncDingTalkAsync()
-    {
-        try
-        {
-            var from = string.IsNullOrWhiteSpace(SyncFrom) ? DateTime.Today.AddDays(-1) : DateTime.Parse(SyncFrom).Date;
-            var to   = string.IsNullOrWhiteSpace(SyncTo)   ? DateTime.Today.AddDays(1).AddSeconds(-1) : DateTime.Parse(SyncTo).Date.AddDays(1).AddSeconds(-1);
-            if (to < from) { ErrorMessage = "结束日期不能早于开始日期"; await ReloadAsync(); return Page(); }
-            var r = await dingTalkSyncService.SyncAsync(from, to);
-            if (r.Success) SuccessMessage = r.Message; else ErrorMessage = r.Message;
-        }
-        catch (Exception ex) { ErrorMessage = "钉钉打卡同步失败：" + ex.Message; }
-        await ReloadAsync(); return Page();
-    }
-
     // ── 工具方法 ──────────────────────────────────────────────────────────────
     /// <summary>
     /// 校验整张表单：工号/姓名必填且不超长、角色/入职日期格式正确、手机号/紧急联系人电话/身份证号格式正确、
     /// 岗位/合同公司/住址/紧急联系人姓名不超长。任何一项不合格都会抛异常，页面会把异常消息当提示显示出来。
     /// <paramref name="requirePhone"/>=true 时手机号还不能为空——新建员工要求必填手机号，
-    /// 保证以后每个员工都能用"忘记密码"（工号+手机号+钉钉验证码）自助找回；
-    /// 编辑老员工时不强制补填，避免历史上没留手机号的员工卡在其它字段也改不了。
+    /// 方便日常联系和紧急情况下的通知；编辑老员工时不强制补填，避免历史上没留手机号的员工卡在其它字段也改不了。
     /// <paramref name="requireSupervisor"/>=true 时"直属上级"还不能为空——新建员工要求必选直属上级，
     /// 保证审批流程（尤其是二级审批）总能找到人；编辑老员工时同样不强制补填，避免历史遗留数据卡住其它字段的修改。
     /// </summary>
@@ -380,7 +343,6 @@ public class UserManageModel(
         HomeAddress            = string.IsNullOrWhiteSpace(HomeAddress)           ? null : HomeAddress.Trim(),
         EmergencyContactName   = string.IsNullOrWhiteSpace(EmergencyContactName)  ? null : EmergencyContactName.Trim(),
         EmergencyContactPhone  = string.IsNullOrWhiteSpace(EmergencyContactPhone) ? null : EmergencyContactPhone.Trim()
-        // DingTalkUserId 不在员工表单里维护，新建时留空，由「从钉钉导入/自动映射」填充
         // IdCardPhotoUrl 不在这里赋值，由 SaveIdCardPhotoAsync() 上传后单独设置
         // Role/HireDate 这里用 TryParse 兜底而不是再抛异常：ValidateContact() 已经校验过一遍，正常流程走不到 fallback 分支
     };

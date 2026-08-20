@@ -17,7 +17,6 @@ namespace AttendanceSystem.Services.Implementations;
 /// </summary>
 public class UserService(
     AttendanceDbContext db,
-    IDingTalkContactClient dingTalkContactClient,
     IZKDeviceSyncService zkDeviceSyncService,
     ILogger<UserService> logger) : IUserService
 {
@@ -45,13 +44,8 @@ public class UserService(
         return user;
     }
 
-    /// <summary>
-    /// 创建员工（工号不能重复），对初始密码做哈希后保存。
-    /// 保存完本地记录后，顺带尝试把这个人同步创建到钉钉通讯录（本系统 → 钉钉）：
-    /// 需要同时满足"填了手机号"和"所在部门能换算出钉钉部门编号"，两个条件缺一个就直接跳过（不算错误，
-    /// 大多数手工建的临时工本就没打算同步钉钉）；条件都满足但钉钉那边创建失败了，才会带一句提示回来。
-    /// </summary>
-    public async Task<(User User, string? DingTalkWarning)> CreateUserAsync(User user, string plainPassword)
+    /// <summary>创建员工（工号不能重复），对初始密码做哈希后保存，顺带把工号+姓名排进考勤机下发队列。</summary>
+    public async Task<User> CreateUserAsync(User user, string plainPassword)
     {
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo))
             throw new InvalidOperationException($"工号 {user.EmployeeNo} 已存在");
@@ -63,9 +57,8 @@ public class UserService(
         db.Users.Add(user);
         await db.SaveChangesAsync();
 
-        var warning = await TryCreateOnDingTalkAsync(user);
         await TryPushToZKDeviceAsync(user);
-        return (user, warning);
+        return user;
     }
 
     /// <summary>把员工工号+姓名排进考勤机下发队列（设备下次心跳时会取走）。这是本地队列表操作，
@@ -79,54 +72,6 @@ public class UserService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "员工 {UserId} 排队下发考勤机信息失败", user.Id);
-        }
-    }
-
-    /// <summary>
-    /// 尝试把刚建好的本地员工同步创建到钉钉通讯录。返回值：null=已同步成功或本来就不打算同步；
-    /// 非空=已经具备同步条件、但调用钉钉接口失败了，这句话是给管理员看的提示。
-    /// </summary>
-    private async Task<string?> TryCreateOnDingTalkAsync(User user)
-    {
-        if (string.IsNullOrWhiteSpace(user.Phone) || !user.DepartmentId.HasValue)
-        {
-            logger.LogInformation("创建员工 {UserId}：没填手机号或没分配部门，跳过钉钉同步创建", user.Id);
-            return null;   // 没手机号或没分配部门：钉钉创建这两项必填，凑不齐就直接跳过
-        }
-
-        var dept = await db.Departments.FindAsync(user.DepartmentId.Value);
-        // 部门要是已经和钉钉那边对应上了（DingTalkDeptId 有值），才知道这个人在钉钉里该挂到哪个部门下；
-        // 纯本地新建、还没来得及同步到钉钉的部门没有这个编号，换算不出来，只能跳过（等部门同步好了再手动补）
-        if (dept?.DingTalkDeptId is not { } dingDeptId)
-        {
-            logger.LogInformation("创建员工 {UserId}：所在部门 {DeptId} 还没有对应的钉钉部门编号，跳过钉钉同步创建",
-                user.Id, user.DepartmentId);
-            return null;
-        }
-
-        try
-        {
-            user.DingTalkUserId = await dingTalkContactClient.CreateEmployeeAsync(
-                user.RealName, user.Phone, user.EmployeeNo, user.Position, [dingDeptId]);
-            await db.SaveChangesAsync();
-            logger.LogInformation("创建员工 {UserId} 时同步创建钉钉账号成功，钉钉 userid={DingTalkUserId}", user.Id, user.DingTalkUserId);
-            return null;
-        }
-        catch (DingTalkApiException ex) when (ex.ErrCode == 40103)
-        {
-            // errcode=40103：不是失败，是钉钉的正常流程——这个手机号还不是企业钉钉里的成员，
-            // 钉钉给对方发了一条"加入企业"的邀请，要等对方本人同意之后才会正式成为企业成员。
-            // 这种情况下钉钉不会立刻给 userid，所以 DingTalkUserId 暂时留空；对方同意邀请后
-            // 需要管理员自己去钉钉通讯录确认、或用"自动映射 userid"功能补上关联。
-            logger.LogInformation("创建员工 {UserId}：钉钉已发出加入企业邀请，等待对方同意", user.Id);
-            return "钉钉已同步创建，已发出邀请，对方同意后即可加入组织。";
-        }
-        catch (Exception ex)
-        {
-            // 钉钉那边建不了（比如手机号在企业内已被别人占用、令牌过期），不能因此拦住本地创建，
-            // 只记日志 + 告诉管理员一句，让他知道钉钉通讯录可能需要手动核对/添加
-            logger.LogWarning(ex, "创建员工 {UserId} 时同步创建钉钉账号失败", user.Id);
-            return $"钉钉同步创建失败：{ex.Message}（本地账号已正常创建，如需要请到钉钉通讯录手动添加）";
         }
     }
 
@@ -170,15 +115,11 @@ public class UserService(
         return password;
     }
 
-    /// <summary>
-    /// 更新员工基本信息（不含密码）。会检查工号是否被别人占用。
-    /// 如果这个人绑定了钉钉，顺带把姓名/手机号/工号/职位同步更新到钉钉通讯录（本系统 → 钉钉），
-    /// 保持两边资料一致；钉钉同步失败不影响本地保存，只返回一句提示。
-    /// </summary>
-    public async Task<(bool Success, string? DingTalkWarning)> UpdateUserAsync(User user)
+    /// <summary>更新员工基本信息（不含密码）。会检查工号是否被别人占用，顺带把最新工号+姓名排进考勤机下发队列。</summary>
+    public async Task<bool> UpdateUserAsync(User user)
     {
         var existing = await db.Users.FindAsync(user.Id);
-        if (existing is null) return (false, null);
+        if (existing is null) return false;
 
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo, user.Id))
             throw new InvalidOperationException($"工号 {user.EmployeeNo} 已被其他员工占用");
@@ -199,89 +140,24 @@ public class UserService(
         existing.EmergencyContactName   = user.EmergencyContactName;
         existing.EmergencyContactPhone  = user.EmergencyContactPhone;
         existing.IdCardPhotoUrl         = user.IdCardPhotoUrl;
-        // 注意：不在这里覆盖 Email 和 DingTalkUserId。员工表单已不含这两个字段，
-        // 若在这里赋值，每次编辑都会把数据库里已有的值冲成空。
+        // 注意：不在这里覆盖 Email。员工表单不含这个字段，若在这里赋值，每次编辑都会把数据库里已有的值冲成空。
         existing.UpdatedAt          = DateTime.Now;
         await db.SaveChangesAsync();
         await TryPushToZKDeviceAsync(existing);
 
-        string? warning = null;
-        if (string.IsNullOrEmpty(existing.DingTalkUserId))
-        {
-            // 之前建号时手机号/部门信息不全，创建时被跳过了钉钉同步；现在编辑补全了，
-            // 在这里补一次创建尝试（不能走下面的"更新"分支——那要求钉钉那边已经有账号了）
-            warning = await TryCreateOnDingTalkAsync(existing);
-        }
-        else
-        {
-            // 换算这个人现在所在部门对应的钉钉部门编号：换不出来（新部门还没同步到钉钉）就传 null，
-            // 表示这次更新不动钉钉那边的部门归属，只同步姓名/手机号/工号/职位这几项
-            long? dingDeptId = null;
-            if (existing.DepartmentId.HasValue)
-            {
-                var dept = await db.Departments.FindAsync(existing.DepartmentId.Value);
-                dingDeptId = dept?.DingTalkDeptId;
-            }
-
-            try
-            {
-                // 返回非空说明只是部分字段没能同步（钉钉的已知限制，比如手机号不一致），不算失败，
-                // 直接把这句说明当成提示带回去，不进 catch（catch 是给"整体失败"用的）
-                warning = await dingTalkContactClient.UpdateEmployeeAsync(
-                    existing.DingTalkUserId, existing.RealName, existing.Phone, existing.EmployeeNo, existing.Position,
-                    dingDeptId.HasValue ? [dingDeptId.Value] : null);
-                logger.LogInformation("更新员工 {UserId} 同步钉钉资料完成，钉钉 userid={DingTalkUserId}，部分未同步说明：{Note}",
-                    user.Id, existing.DingTalkUserId, warning ?? "（无，全部同步成功）");
-            }
-            catch (Exception ex)
-            {
-                // 钉钉那边更新不了（比如令牌过期、网络问题、手机号在钉钉企业内已被别人占用），不能因此拦住本地保存，
-                // 只记日志 + 告诉管理员一句，让他知道钉钉通讯录可能需要手动核对
-                logger.LogWarning(ex, "更新员工 {UserId} 时同步更新钉钉资料失败，钉钉 userid={DingTalkUserId}", user.Id, existing.DingTalkUserId);
-                warning = $"钉钉同步更新失败：{ex.Message}（请到钉钉通讯录手动确认）";
-            }
-        }
-
-        return (true, warning);
+        return true;
     }
 
-    /// <summary>
-    /// 停用员工（离职）：本地不删除，只是禁止登录，考勤/审批等记录仍保留、可查询。
-    /// 如果这个人绑定了钉钉，顺带把他从钉钉企业通讯录里删掉——钉钉那边只有"删除"没有"临时禁用"，
-    /// 员工离职后没道理继续挂在企业通讯录里；本地 DingTalkUserId 也一并清空，以后万一重新入职，
-    /// 会当成一个新员工重新走一遍"创建/邀请加入"的流程。钉钉这边删除失败不拦住本地停用，只带一句提示回去。
-    /// </summary>
-    public async Task<(bool Success, string? DingTalkWarning)> DeactivateUserAsync(int userId)
+    /// <summary>停用员工（离职）：本地不删除，只是禁止登录，考勤/审批等记录仍保留、可查询。</summary>
+    public async Task<bool> DeactivateUserAsync(int userId)
     {
         var user = await db.Users.FindAsync(userId);
-        if (user is null) return (false, null);
-
-        string? warning = null;
-        if (string.IsNullOrEmpty(user.DingTalkUserId))
-        {
-            logger.LogInformation("停用员工 {UserId}：本地未绑定钉钉账号（DingTalkUserId 为空），跳过钉钉同步删除", userId);
-        }
-        else
-        {
-            try
-            {
-                await dingTalkContactClient.DeleteEmployeeAsync(user.DingTalkUserId);
-                logger.LogInformation("停用员工 {UserId} 时同步删除钉钉账号成功，钉钉 userid={DingTalkUserId}", userId, user.DingTalkUserId);
-            }
-            catch (Exception ex)
-            {
-                // 钉钉那边删不掉（比如令牌过期、网络问题、对方已经手动删过），不能因此拦住本地停用，
-                // 只记日志 + 告诉管理员一句，让他知道钉钉通讯录可能需要手动处理
-                logger.LogWarning(ex, "停用员工 {UserId} 时同步删除钉钉账号失败，钉钉 userid={DingTalkUserId}", userId, user.DingTalkUserId);
-                warning = $"钉钉同步删除失败：{ex.Message}（请到钉钉通讯录手动确认/删除）";
-            }
-            user.DingTalkUserId = null;   // 不论钉钉那边删没删成，本地都不再当他是"已绑定钉钉"，避免以后同步到一个其实已经不存在的 userid
-        }
+        if (user is null) return false;
 
         user.IsActive  = false;
         user.UpdatedAt = DateTime.Now;
         await db.SaveChangesAsync();
-        return (true, warning);
+        return true;
     }
 
     /// <summary>重新启用员工。黑名单员工不能直接启用，需先移出黑名单。</summary>
@@ -323,19 +199,13 @@ public class UserService(
         return true;
     }
 
-    /// <summary>
-    /// 彻底删除员工（连同其考勤记录/打卡/审批/通知按外键级联一并删除）。慎用。
-    /// 如果这个人绑定了钉钉，顺带把他从钉钉企业通讯录里也删掉——
-    /// 钉钉开放平台只提供"删除"，没有"临时禁用"，所以只在这个不可恢复的操作上联动，不在"停用/拉黑"上做。
-    /// </summary>
-    public async Task<(bool Success, string? DingTalkWarning)> DeleteUserAsync(int userId)
+    /// <summary>彻底删除员工（连同其考勤记录/打卡/审批/通知按外键级联一并删除）。慎用。</summary>
+    public async Task<bool> DeleteUserAsync(int userId)
     {
         var user = await db.Users.FindAsync(userId);
-        if (user is null) return (false, null);
+        if (user is null) return false;
 
-        // 先检查这个人是不是还挂在某个考勤组的"审批人"名单里——数据库不允许删除还被这样引用着的人，
-        // 之前没做这个检查时，删除会先把钉钉那边的账号删掉、本地才因为这个外键约束保存失败，
-        // 变成"钉钉已删、本地没删"的不一致状态；现在提前查一遍，直接给出清楚的提示，不去动钉钉
+        // 先检查这个人是不是还挂在某个考勤组的"审批人"名单里——数据库不允许删除还被这样引用着的人
         var approverOfGroups = await db.AttendanceGroupApprovers
             .Where(a => a.UserId == userId)
             .Join(db.AttendanceGroups, a => a.AttendanceGroupId, g => g.Id, (a, g) => g.GroupName)
@@ -344,37 +214,12 @@ public class UserService(
             throw new InvalidOperationException(
                 $"该员工是「{string.Join("、", approverOfGroups)}」考勤组的审批人，无法直接删除，请先到「考勤组管理」把他从审批人名单里移除后再删除");
 
-        string? warning = null;
-        if (string.IsNullOrEmpty(user.DingTalkUserId))
-        {
-            logger.LogInformation("删除员工 {UserId}：本地未绑定钉钉账号（DingTalkUserId 为空），跳过钉钉同步删除", userId);
-        }
-        else
-        {
-            try
-            {
-                await dingTalkContactClient.DeleteEmployeeAsync(user.DingTalkUserId);
-                logger.LogInformation("删除员工 {UserId} 时同步删除钉钉账号成功，钉钉 userid={DingTalkUserId}", userId, user.DingTalkUserId);
-            }
-            catch (Exception ex)
-            {
-                // 钉钉那边删不掉（比如令牌过期、网络问题、对方已经手动删过），不能因此拦住本地删除，
-                // 只记日志 + 告诉管理员一句，让他知道钉钉通讯录可能需要手动处理
-                logger.LogWarning(ex, "删除员工 {UserId} 时同步删除钉钉账号失败，钉钉 userid={DingTalkUserId}", userId, user.DingTalkUserId);
-                warning = $"钉钉同步删除失败：{ex.Message}（请到钉钉通讯录手动确认/删除）";
-            }
-        }
-
         db.Users.Remove(user);
         await db.SaveChangesAsync();
-        return (true, warning);
+        return true;
     }
 
-    /// <summary>
-    /// 批量启用/停用。启用时会跳过黑名单员工（黑名单需先移出）。返回实际处理条数。
-    /// 批量停用（离职）时，和单个停用一样，绑定了钉钉的员工会顺带从钉钉通讯录里删掉（本地记录仍保留）；
-    /// 某个人钉钉那边删除失败不影响其他人，也不拦住本地停用，只记日志，不在这里逐条往上抛提示。
-    /// </summary>
+    /// <summary>批量启用/停用。启用时会跳过黑名单员工（黑名单需先移出）。返回实际处理条数。</summary>
     public async Task<int> SetActiveBatchAsync(IEnumerable<int> userIds, bool active)
     {
         var ids   = userIds.Distinct().ToList();
@@ -385,20 +230,6 @@ public class UserService(
         {
             if (active && u.IsBlacklisted) continue;   // 黑名单不参与批量启用
             if (u.IsActive == active) continue;
-
-            if (!active && !string.IsNullOrEmpty(u.DingTalkUserId))
-            {
-                try
-                {
-                    await dingTalkContactClient.DeleteEmployeeAsync(u.DingTalkUserId);
-                    logger.LogInformation("批量停用员工 {UserId} 时同步删除钉钉账号成功，钉钉 userid={DingTalkUserId}", u.Id, u.DingTalkUserId);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "批量停用员工 {UserId} 时同步删除钉钉账号失败，钉钉 userid={DingTalkUserId}", u.Id, u.DingTalkUserId);
-                }
-                u.DingTalkUserId = null;
-            }
 
             u.IsActive  = active;
             u.UpdatedAt = DateTime.Now;

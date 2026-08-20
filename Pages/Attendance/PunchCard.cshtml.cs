@@ -19,7 +19,7 @@ public class PunchCardModel : AppPageModel
     [BindProperty] public double? Latitude  { get; set; }
     [BindProperty] public double? Longitude { get; set; }
 
-    // 本系统的手动打卡功能已关闭：改成统一只认钉钉人脸打卡的数据，避免两边数据对不上。
+    // 本系统的手动打卡功能已关闭：改成统一只认考勤机（熵基设备）同步过来的数据，避免两边数据对不上。
     // GET/POST 都直接跳到"我的记录"，不再显示这个页面。
     public IActionResult OnGetAsync() => RedirectToPage("/Attendance/MyRecord");
 

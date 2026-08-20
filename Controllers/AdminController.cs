@@ -64,9 +64,8 @@ public class AdminController(
             Email             = req.Email,
             HireDate          = req.HireDate
         };
-        var (created, warning) = await userService.CreateUserAsync(user, req.InitialPassword);
-        var message = warning is null ? "员工创建成功" : $"员工创建成功（{warning}）";
-        return Ok(new { Success = true, Message = message, UserId = created.Id });
+        var created = await userService.CreateUserAsync(user, req.InitialPassword);
+        return Ok(new { Success = true, Message = "员工创建成功", UserId = created.Id });
     }
 
     /// <summary>修改员工。</summary>
@@ -87,18 +86,16 @@ public class AdminController(
             Email             = req.Email,
             HireDate          = req.HireDate
         };
-        var (ok, warning) = await userService.UpdateUserAsync(user);
-        var message = !ok ? "用户不存在" : warning is null ? "更新成功" : $"更新成功（{warning}）";
-        return Ok(new { Success = ok, Message = message });
+        var ok = await userService.UpdateUserAsync(user);
+        return Ok(new { Success = ok, Message = ok ? "更新成功" : "用户不存在" });
     }
 
     /// <summary>停用员工（DELETE 在这里表示“停用”，不是真删）。</summary>
     [HttpDelete("users/{id:int}")]
     public async Task<IActionResult> DeactivateUser(int id)
     {
-        var (ok, warning) = await userService.DeactivateUserAsync(id);
-        var message = !ok ? "用户不存在" : warning is null ? "已停用" : $"已停用（{warning}）";
-        return Ok(new { Success = ok, Message = message });
+        var ok = await userService.DeactivateUserAsync(id);
+        return Ok(new { Success = ok, Message = ok ? "已停用" : "用户不存在" });
     }
 
     /// <summary>重置某员工密码，返回新密码明文。</summary>

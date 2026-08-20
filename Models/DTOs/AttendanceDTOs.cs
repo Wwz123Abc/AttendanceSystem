@@ -104,7 +104,7 @@ public class AttendanceRecordDto
     public bool    IsHoliday         { get; set; }   // 是否节假日（说明：目前系统里没有任何地方会把这个值设成 true，取值始终是 false，等于暂时没在用）
     public string? ApprovalNote      { get; set; }   // 审批说明
 
-    /// <summary>定位异常，需要人工审核（钉钉同步来的打卡，定位和考勤组配置的地点对不上）。不影响上面的考勤状态判定。</summary>
+    /// <summary>定位异常，需要人工审核（打卡定位和考勤组配置的地点对不上）。不影响上面的考勤状态判定。</summary>
     public bool    LocationAbnormal     { get; set; }
     public string? LocationAbnormalNote { get; set; }
 }
@@ -150,7 +150,6 @@ public class TemplateReportRowDto
     public string? EmployeeNo      { get; set; }   // 工号
     public string? Position        { get; set; }   // 职位
     public string? ContractCompany { get; set; }   // 合同公司
-    public string? DingTalkUserId  { get; set; }   // 钉钉 UserId（导出报表不显示，仅内部保留）
 
     /// <summary>标准工时（取这段时间里用得最多的那个班次的标准工时，没排过班就是空）</summary>
     public decimal? StandardDailyHours { get; set; }

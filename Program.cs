@@ -58,7 +58,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 
         // 网页请求没登录/无权限 → 跳转登录页（默认行为）；
         // 但 /api 接口请求不能跳转，否则调用方拿到的是 302 重定向而不是 401/403，
-        // 无法正确判断“未登录”还是“无权限”（钉钉同步、报表导出等接口调用方都靠状态码判断）。
+        // 无法正确判断“未登录”还是“无权限”（报表导出等接口调用方都靠状态码判断）。
         var redirectToLogin = options.Events.OnRedirectToLogin;
         options.Events.OnRedirectToLogin = ctx =>
         {
@@ -101,23 +101,6 @@ builder.Services.AddScoped<IAttendanceGroupService, AttendanceGroupService>();
 builder.Services.AddScoped<IEmployeeRegistrationService, EmployeeRegistrationService>();
 builder.Services.AddScoped<IAnnouncementService,   AnnouncementService>();
 
-// ── 钉钉对接相关注册 ────────────────────────────────────────────────────────────
-builder.Services.Configure<DingTalkOptions>(
-    builder.Configuration.GetSection(DingTalkOptions.SectionName));
-builder.Services.AddMemoryCache();   // 用于缓存钉钉令牌
-// 下面三个是带超时设置的 HTTP 客户端，分别调钉钉的“令牌/打卡/通讯录”接口
-builder.Services.AddHttpClient<IDingTalkTokenProvider,    DingTalkTokenProvider>(
-    c => c.Timeout = TimeSpan.FromSeconds(30));
-builder.Services.AddHttpClient<IDingTalkAttendanceClient, DingTalkAttendanceClient>(
-    c => c.Timeout = TimeSpan.FromSeconds(30));
-builder.Services.AddHttpClient<IDingTalkContactClient,    DingTalkContactClient>(
-    c => c.Timeout = TimeSpan.FromSeconds(60));
-builder.Services.AddHttpClient<IDingTalkLeaveClient,      DingTalkLeaveClient>(
-    c => c.Timeout = TimeSpan.FromSeconds(30));
-builder.Services.AddHttpClient<IDingTalkNotifyClient,     DingTalkNotifyClient>(
-    c => c.Timeout = TimeSpan.FromSeconds(30));
-builder.Services.AddScoped<IDingTalkSyncService,          DingTalkSyncService>();
-
 // ── 阿里云人脸识别（打卡用：活体检测 + 1:1 人脸比对）────────────────────────────────
 builder.Services.Configure<AliyunFaceOptions>(
     builder.Configuration.GetSection(AliyunFaceOptions.SectionName));
@@ -127,7 +110,6 @@ builder.Services.AddScoped<IAliyunFaceClient, AliyunFaceClient>();
 builder.Services.Configure<ZKDeviceOptions>(
     builder.Configuration.GetSection(ZKDeviceOptions.SectionName));
 builder.Services.AddScoped<IZKDeviceSyncService, ZKDeviceSyncService>();
-builder.Services.AddScoped<IPasswordResetService,         PasswordResetService>();   // 忘记密码找回（钉钉工作通知验证码）
 
 // ── 网页(Razor Pages) + 接口(Web API)──────────────────────────────────────────
 builder.Services.AddRazorPages();
@@ -149,7 +131,7 @@ builder.Services.AddSession(o =>           // 会话（临时存一些用户相�
 });
 builder.Services.AddHttpContextAccessor();
 
-// 后台定时任务（旷工标记 + 月度汇总 + 可选钉钉同步）
+// 后台定时任务（旷工标记 + 月度汇总）
 builder.Services.AddHostedService<AttendanceBackgroundService>();
 
 // 文件上传限制：整个上传请求体上限 50MB（约相当于 5 个 10MB 附件）
