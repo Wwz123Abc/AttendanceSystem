@@ -1,0 +1,135 @@
+@page
+@model AttendanceSystem.Pages.Admin.ZKDeviceManageModel
+@{
+    ViewData["Title"] = "考勤机管理";
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-hdd-network me-2 text-primary"></i>考勤机管理</h4>
+    <button class="btn btn-primary btn-sm" onclick="openAdd()">
+        <i class="bi bi-plus me-1"></i>添加设备
+    </button>
+</div>
+<p class="text-muted small mb-3">只有添加在这里、且"启用中"的设备，序列号才会被系统认成已知设备接受打卡数据；停用/删除后，该设备的请求会被拒绝。</p>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+}
+
+<div class="card">
+    <div class="card-header">设备列表（共 @Model.Devices.Count 台）</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>序列号 (SN)</th><th>别名</th><th>状态</th><th>最近在线</th><th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.Devices.Any())
+                    {
+                        <tr><td colspan="5" class="empty-state"><i class="bi bi-inbox"></i>暂无设备，点右上角"添加设备"</td></tr>
+                    }
+                    @foreach (var d in Model.Devices)
+                    {
+                        var online = d.LastSeenAt.HasValue && d.LastSeenAt.Value > DateTime.Now.AddMinutes(-2);
+                        <tr>
+                            <td class="fw-semibold">@d.SN</td>
+                            <td>@(d.Name ?? "—")</td>
+                            <td>
+                                @if (d.IsActive)
+                                {
+                                    <span class="badge bg-success">启用</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">已停用</span>
+                                }
+                                @if (online)
+                                {
+                                    <span class="badge bg-info ms-1">在线</span>
+                                }
+                            </td>
+                            <td class="small text-muted">@(d.LastSeenAt?.ToString("MM-dd HH:mm:ss") ?? "从未通信")</td>
+                            <td>
+                                <button type="button" class="btn btn-outline-primary btn-sm"
+                                        onclick="openEdit(@d.Id, '@d.SN', '@(d.Name ?? "")', @(d.IsActive ? "true" : "false"))">
+                                    <i class="bi bi-pencil"></i>编辑
+                                </button>
+                                <form method="post" asp-page-handler="Delete" class="d-inline"
+                                      onsubmit="return confirm('确认删除设备 @d.SN？删除后该设备将无法再对接系统。')">
+                                    <input type="hidden" name="id" value="@d.Id" />
+                                    <button type="submit" class="btn btn-outline-danger btn-sm">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 新增/编辑设备 Modal -->
+<div class="modal fade" id="deviceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deviceModalTitle">添加设备</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" asp-page-handler="Save" id="deviceForm">
+                <input type="hidden" asp-for="Id" id="fId" />
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">序列号 (SN) <span class="text-danger">*</span></label>
+                        <input asp-for="SN" id="fSN" class="form-control" required maxlength="50" placeholder="如：UQV6262800344" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">设备别名</label>
+                        <input asp-for="Name" id="fName" class="form-control" maxlength="100" placeholder="如：一楼前台机" />
+                    </div>
+                    <div class="form-check">
+                        <input asp-for="IsActive" id="fIsActive" class="form-check-input" type="checkbox" checked />
+                        <label class="form-check-label" for="fIsActive">启用（停用后该设备的请求会被拒绝）</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+function openAdd() {
+    document.getElementById('deviceModalTitle').textContent = '添加设备';
+    document.getElementById('fId').value = 0;
+    document.getElementById('fSN').value = '';
+    document.getElementById('fName').value = '';
+    document.getElementById('fIsActive').checked = true;
+    new bootstrap.Modal(document.getElementById('deviceModal')).show();
+}
+function openEdit(id, sn, name, isActive) {
+    document.getElementById('deviceModalTitle').textContent = '编辑设备 - ' + sn;
+    document.getElementById('fId').value = id;
+    document.getElementById('fSN').value = sn;
+    document.getElementById('fName').value = name;
+    document.getElementById('fIsActive').checked = isActive;
+    new bootstrap.Modal(document.getElementById('deviceModal')).show();
+}
+</script>
+}

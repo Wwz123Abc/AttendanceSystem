@@ -27,22 +27,28 @@ public class ZKDeviceController(
     private static readonly Encoding Gbk = Encoding.GetEncoding("GBK");
     private readonly ZKDeviceOptions _opt = options.Value;
 
-    /// <summary>设备序列号是否在白名单里（白名单留空 = 不限制，仅本地联调用，正式环境务必配置）。</summary>
-    private bool IsKnownDevice(string? sn) =>
+    /// <summary>设备序列号是否在数据库白名单里、且是启用状态（"考勤机管理"页面维护这张表）。</summary>
+    private async Task<bool> IsKnownDeviceAsync(string? sn, CancellationToken ct = default) =>
         !string.IsNullOrWhiteSpace(sn) &&
-        (_opt.AllowedSerialNumbers.Count == 0 || _opt.AllowedSerialNumbers.Contains(sn));
+        await db.ZKDevices.AnyAsync(d => d.SN == sn && d.IsActive, ct);
+
+    /// <summary>记录这台设备最近一次成功通信的时间，供后台页面显示在线/离线。</summary>
+    private Task TouchLastSeenAsync(string sn, CancellationToken ct = default) =>
+        db.ZKDevices.Where(d => d.SN == sn)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenAt, DateTime.Now), ct);
 
     /// <summary>初始化握手：设备开机/联网后第一个请求，服务器返回配置块，设备收到后开始定期心跳。</summary>
     [HttpGet("/iclock/cdata")]
-    public IActionResult Init([FromQuery] string? SN, [FromQuery] string? options, [FromQuery] string? language,
-        [FromQuery] string? pushver, [FromQuery] string? PushOptionsFlag)
+    public async Task<IActionResult> Init([FromQuery] string? SN, [FromQuery] string? options, [FromQuery] string? language,
+        [FromQuery] string? pushver, [FromQuery] string? PushOptionsFlag, CancellationToken ct)
     {
         logger.LogInformation("考勤机初始化请求：SN={SN}, options={Options}, pushver={PushVer}", SN, options, pushver);
-        if (!IsKnownDevice(SN))
+        if (!await IsKnownDeviceAsync(SN, ct))
         {
             logger.LogWarning("未知设备序列号尝试初始化：{SN}", SN);
             return Content("UNKNOWN DEVICE", "text/plain", Encoding.ASCII);
         }
+        await TouchLastSeenAsync(SN!, ct);
 
         var sb = new StringBuilder();
         sb.Append("GET OPTION FROM: ").Append(SN);
@@ -62,11 +68,12 @@ public class ZKDeviceController(
     [HttpPost("/iclock/cdata")]
     public async Task<IActionResult> Upload([FromQuery] string? SN, [FromQuery] string? table, CancellationToken ct)
     {
-        if (!IsKnownDevice(SN))
+        if (!await IsKnownDeviceAsync(SN, ct))
         {
             logger.LogWarning("未知设备序列号尝试上传数据：{SN}", SN);
             return Content("UNKNOWN DEVICE", "text/plain", Encoding.ASCII);
         }
+        await TouchLastSeenAsync(SN!, ct);
 
         var bodyBytes = await ReadBodyBytesAsync();
 
@@ -100,8 +107,9 @@ public class ZKDeviceController(
     [HttpGet("/iclock/getrequest")]
     public async Task<IActionResult> Heartbeat([FromQuery] string? SN, CancellationToken ct)
     {
-        if (!IsKnownDevice(SN))
+        if (!await IsKnownDeviceAsync(SN, ct))
             return Content("UNKNOWN DEVICE", "text/plain", Encoding.ASCII);
+        await TouchLastSeenAsync(SN!, ct);
 
         var pending = await db.ZKDeviceCommands
             .Where(c => c.SN == SN && !c.Sent)

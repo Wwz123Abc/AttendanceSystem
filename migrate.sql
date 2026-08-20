@@ -2076,5 +2076,56 @@ DELIMITER ;
 CALL MigrationsScript();
 DROP PROCEDURE MigrationsScript;
 
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260820075658_AddZKDeviceTable') THEN
+
+    CREATE TABLE `ZKDevice` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `SN` varchar(50) CHARACTER SET utf8mb4 NOT NULL,
+        `Name` varchar(100) CHARACTER SET utf8mb4 NULL,
+        `IsActive` tinyint(1) NOT NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        `LastSeenAt` datetime(6) NULL,
+        CONSTRAINT `PK_ZKDevice` PRIMARY KEY (`Id`)
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260820075658_AddZKDeviceTable') THEN
+
+    CREATE UNIQUE INDEX `IX_ZKDevice_SN` ON `ZKDevice` (`SN`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260820075658_AddZKDeviceTable') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20260820075658_AddZKDeviceTable', '9.0.9');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
 COMMIT;
 

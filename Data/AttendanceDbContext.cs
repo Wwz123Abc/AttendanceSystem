@@ -36,6 +36,7 @@ public class AttendanceDbContext : DbContext
     public DbSet<Announcement>              Announcements              => Set<Announcement>();
     public DbSet<AnnouncementRead>          AnnouncementReads          => Set<AnnouncementRead>();
     public DbSet<ZKDeviceCommand>           ZKDeviceCommands           => Set<ZKDeviceCommand>();
+    public DbSet<ZKDevice>                  ZKDevices                  => Set<ZKDevice>();
 
     // 这个方法在“建立数据库模型”时被调用，用来配置表名、关系、索引、唯一约束等。
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -241,6 +242,12 @@ public class AttendanceDbContext : DbContext
              .WithMany()
              .HasForeignKey(r => r.UserId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── ZKDevice：序列号唯一，不允许两条设备记录共用一个 SN ──
+        modelBuilder.Entity<ZKDevice>(e =>
+        {
+            e.HasIndex(d => d.SN).IsUnique();
         });
 
         // ── 写入初始“种子数据”（首次建库时自动插入）──

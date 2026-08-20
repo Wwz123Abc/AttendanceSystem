@@ -1,9 +1,7 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
-using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.Implementations;
@@ -13,8 +11,7 @@ namespace AttendanceSystem.Services.Implementations;
 /// upsert 考勤日记录），区别只是数据来源——这边设备已经明确告诉我们是上班还是下班（Status 字段），
 /// 不需要像钉钉那样自己猜；迟到/早退状态改成当场按班次算（钉钉是它自己判定好直接给结果）。
 /// </summary>
-public class ZKDeviceSyncService(
-    AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger, IOptions<ZKDeviceOptions> zkOptions) : IZKDeviceSyncService
+public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger) : IZKDeviceSyncService
 {
     public async Task ProcessAttLogAsync(string sn, List<ZKAttLogRow> rows, CancellationToken ct = default)
     {
@@ -136,7 +133,7 @@ public class ZKDeviceSyncService(
     /// </summary>
     public async Task EnqueuePushUserInfoAsync(User user, CancellationToken ct = default)
     {
-        var snList = zkOptions.Value.AllowedSerialNumbers;
+        var snList = await db.ZKDevices.Where(d => d.IsActive).Select(d => d.SN).ToListAsync(ct);
         if (snList.Count == 0 || string.IsNullOrWhiteSpace(user.EmployeeNo)) return;
 
         var name = user.RealName.Replace('\t', ' ');   // 名字里不该有 Tab，保险起见替换掉，避免破坏字段分隔
