@@ -16,6 +16,7 @@ public sealed class CurrentUser
     public UserRole Role              { get; init; }                    // 角色
     public int?     AttendanceGroupId { get; init; }                    // 所属考勤组
     public int?     DepartmentId      { get; init; }                    // 所属部门
+    public string?  ContractCompany   { get; init; }                    // 劳务公司（合同公司，用于页面水印）
 
     // 下面 3 个是便捷判断（页面里直接用，不用每次写一长串条件）
     public bool IsAdmin    => Role == UserRole.Admin;   // 是不是管理员
@@ -37,14 +38,14 @@ public class CurrentUserMiddleware(RequestDelegate next)
             // 从 Cookie 的身份标签里取出用户编号
             var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "0");
 
-            // 去数据库查这个账号是否还“在职/有效”
-            var isActive = await db.Users
+            // 去数据库查这个账号是否还“在职/有效”，顺便把劳务公司（水印要用）一起查出来
+            var info = await db.Users
                 .Where(u => u.Id == userId)
-                .Select(u => (bool?)u.IsActive)
+                .Select(u => new { u.IsActive, u.ContractCompany })
                 .FirstOrDefaultAsync();
 
             // 账号被停用或已删除 → 即使 Cookie 还没过期，也立刻登出并跳回登录页
-            if (isActive != true)
+            if (info?.IsActive != true)
             {
                 await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                 context.Response.Redirect("/Login?disabled=1");
@@ -59,7 +60,8 @@ public class CurrentUserMiddleware(RequestDelegate next)
                 RealName          = context.User.FindFirstValue("RealName")           ?? "",
                 Role              = Enum.Parse<UserRole>(context.User.FindFirstValue(ClaimTypes.Role) ?? "Employee"),
                 AttendanceGroupId = context.User.FindFirstValue("AttendanceGroupId") is { } g ? int.Parse(g) : null,
-                DepartmentId      = context.User.FindFirstValue("DepartmentId")      is { } d ? int.Parse(d) : null
+                DepartmentId      = context.User.FindFirstValue("DepartmentId")      is { } d ? int.Parse(d) : null,
+                ContractCompany   = info?.ContractCompany
             };
         }
 

@@ -246,6 +246,13 @@
         .pagination .page-link { border: none; color: var(--text-2); border-radius: var(--radius-sm); margin: 0 2px; font-size: .875rem; }
         .pagination .page-item.active .page-link { background: var(--brand); color: #fff; }
         .pagination .page-item.disabled .page-link { color: var(--text-4); background: transparent; }
+
+        /* ── 页面水印：公告栏/我的记录/我的考勤日历/提交申请这几个页面显示，内容是当前登录人姓名+劳务公司 ── */
+        .page-watermark {
+            position: fixed; inset: 0; z-index: 1035;
+            pointer-events: none; user-select: none;
+            background-repeat: repeat;
+        }
     </style>
     @await RenderSectionAsync("Styles", required: false)
 </head>
@@ -254,6 +261,31 @@
     var currentUser = Context.Items["CurrentUser"] as AttendanceSystem.Middlewares.CurrentUser;
     bool isAuth = User.Identity?.IsAuthenticated == true;
     string currentPath = Context.Request.Path.Value ?? "";
+
+    // 水印：仅这几个页面显示，内容是“姓名 + 劳务公司”，用密集平铺的 SVG 背景图实现，做到“多、明显”
+    string? watermarkUrl = null;
+    if (isAuth && currentUser != null)
+    {
+        var watermarkPages = new[] { "/Notice/Board", "/Attendance/MyRecord", "/Attendance/MyCalendar", "/Approval/ApplySubmit" };
+        if (watermarkPages.Any(p => currentPath.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+        {
+            var wmText = string.Join("   ", new[] { currentUser.RealName, currentUser.ContractCompany }
+                .Where(s => !string.IsNullOrWhiteSpace(s)));
+            if (!string.IsNullOrWhiteSpace(wmText))
+            {
+                var encoded = System.Net.WebUtility.HtmlEncode(wmText);
+                var svg = "<svg xmlns='http://www.w3.org/2000/svg' width='240' height='130'>"
+                        + "<text x='4' y='72' font-size='14' fill='rgba(50,50,50,0.24)' "
+                        + "font-family='Microsoft YaHei,sans-serif' transform='rotate(-18 120 65)'>" + encoded + "</text>"
+                        + "</svg>";
+                watermarkUrl = "data:image/svg+xml;utf8," + Uri.EscapeDataString(svg);
+            }
+        }
+    }
+}
+@if (watermarkUrl != null)
+{
+    <div class="page-watermark" style="background-image:url('@watermarkUrl');"></div>
 }
 @if (isAuth && currentUser != null)
 {
