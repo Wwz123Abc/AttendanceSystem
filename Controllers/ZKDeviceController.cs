@@ -46,7 +46,7 @@ public class ZKDeviceController(
         if (!await IsKnownDeviceAsync(SN, ct))
         {
             logger.LogWarning("未知设备序列号尝试初始化：{SN}", SN);
-            return Content("UNKNOWN DEVICE", "text/plain", Encoding.ASCII);
+            return Content("UNKNOWN DEVICE", "text/plain", Gbk);
         }
         await TouchLastSeenAsync(SN!, ct);
 
@@ -61,7 +61,7 @@ public class ZKDeviceController(
         sb.Append("\nRealtime=1");           // 有打卡就立即推，不等心跳周期
         sb.Append("\nEncrypt=None");
         sb.Append('\n');
-        return Content(sb.ToString(), "text/plain", Encoding.ASCII);
+        return Content(sb.ToString(), "text/plain", Gbk);
     }
 
     /// <summary>数据上传：设备真正推数据的地方，用 table 区分数据类型。</summary>
@@ -71,7 +71,7 @@ public class ZKDeviceController(
         if (!await IsKnownDeviceAsync(SN, ct))
         {
             logger.LogWarning("未知设备序列号尝试上传数据：{SN}", SN);
-            return Content("UNKNOWN DEVICE", "text/plain", Encoding.ASCII);
+            return Content("UNKNOWN DEVICE", "text/plain", Gbk);
         }
         await TouchLastSeenAsync(SN!, ct);
 
@@ -100,7 +100,7 @@ public class ZKDeviceController(
             logger.LogError(ex, "处理考勤机 {SN} 推送的数据失败（table={Table}）", SN, table);
         }
 
-        return Content("OK", "text/plain", Encoding.ASCII);
+        return Content("OK", "text/plain", Gbk);
     }
 
     /// <summary>心跳：设备定期来问"有没有要我做的事"，顺便把排队的命令带给它。</summary>
@@ -108,7 +108,7 @@ public class ZKDeviceController(
     public async Task<IActionResult> Heartbeat([FromQuery] string? SN, CancellationToken ct)
     {
         if (!await IsKnownDeviceAsync(SN, ct))
-            return Content("UNKNOWN DEVICE", "text/plain", Encoding.ASCII);
+            return Content("UNKNOWN DEVICE", "text/plain", Gbk);
         await TouchLastSeenAsync(SN!, ct);
 
         var pending = await db.ZKDeviceCommands
@@ -117,7 +117,7 @@ public class ZKDeviceController(
             .ToListAsync(ct);
 
         if (pending.Count == 0)
-            return Content("OK", "text/plain", Encoding.ASCII);
+            return Content("OK", "text/plain", Gbk);
 
         var sb = new StringBuilder();
         for (var i = 0; i < pending.Count; i++)
@@ -128,12 +128,14 @@ public class ZKDeviceController(
         }
         await db.SaveChangesAsync(ct);
 
-        return Content(sb.ToString(), "text/plain", Encoding.ASCII);
+        // 命令里可能带中文姓名（DATA UPDATE USERINFO 的 Name 字段），必须用设备协议实际用的 GBK 编码返回，
+        // 用 ASCII 的话中文字节会被替换成 '?'，设备上显示的姓名就会变成一串问号
+        return Content(sb.ToString(), "text/plain", Gbk);
     }
 
     /// <summary>备用心跳：设备上传大量数据时改发这个，服务器只能回 OK，不能夹带命令。</summary>
     [HttpGet("/iclock/ping")]
-    public IActionResult Ping() => Content("OK", "text/plain", Encoding.ASCII);
+    public IActionResult Ping() => Content("OK", "text/plain", Gbk);
 
     /// <summary>设备执行完命令后，回报执行结果，先只记日志。</summary>
     [HttpPost("/iclock/devicecmd")]
@@ -141,7 +143,7 @@ public class ZKDeviceController(
     {
         var bodyBytes = await ReadBodyBytesAsync();
         logger.LogInformation("考勤机 {SN} 命令执行结果：{Result}", SN, Gbk.GetString(bodyBytes));
-        return Content("OK", "text/plain", Encoding.ASCII);
+        return Content("OK", "text/plain", Gbk);
     }
 
     private async Task<byte[]> ReadBodyBytesAsync()
