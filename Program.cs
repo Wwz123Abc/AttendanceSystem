@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
@@ -265,10 +266,20 @@ app.UseMiddleware<CurrentUserMiddleware>();    // 自定义关卡：停用账号
 app.MapRazorPages();      // 网页
 app.MapControllers();     // 接口
 
-// 访问根路径 "/" 时，直接跳到登录页
+// 访问根路径 "/"：已登录就按角色直接跳目标首页，没登录才跳登录页
+// （以前不管有没有登录都先跳 /Login，登录页自己再判断一次已登录就跳首页，多绕一次）
 app.MapGet("/", ctx =>
 {
-    ctx.Response.Redirect("/Login");
+    if (ctx.User.Identity?.IsAuthenticated == true)
+    {
+        var roleStr = ctx.User.FindFirst(ClaimTypes.Role)?.Value;
+        Enum.TryParse<UserRole>(roleStr, out var role);
+        ctx.Response.Redirect(AttendanceSystem.Pages.LoginModel.HomeUrl(role));
+    }
+    else
+    {
+        ctx.Response.Redirect("/Login");
+    }
     return Task.CompletedTask;
 });
 

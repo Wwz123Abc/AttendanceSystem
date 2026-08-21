@@ -95,15 +95,28 @@ public class ZKDeviceController(
                 logger.LogInformation("考勤机 {SN} 推送了暂不处理的数据类型：table={Table}", SN, table);
             }
         }
+        catch (DbUpdateException ex)
+        {
+            // 落库重试了几次还是冲突（多半是打卡高峰期撞车撞得太狠），这批数据没能保存成功。
+            // 故意不回 "OK"——让设备以为这次没传成功，它自己的重传机制会在下次上传时把这批数据再推一遍，
+            // 不用另外建一张"待重试"表。返回 "OK" 反而会让这批数据永久静默丢失（设备以为传成功了就不会再传）。
+            logger.LogError(ex, "处理考勤机 {SN} 推送的数据失败（table={Table}），已重试仍冲突，让设备下次重传", SN, table);
+            return Content("ERROR", "text/plain", Gbk);
+        }
         catch (Exception ex)
         {
+            // 其它异常（比如数据格式解析失败）重传也没用，还是回 "OK" 避免设备陷入无意义的死循环重传
             logger.LogError(ex, "处理考勤机 {SN} 推送的数据失败（table={Table}）", SN, table);
         }
 
         return Content("OK", "text/plain", Gbk);
     }
 
-    /// <summary>心跳：设备定期来问"有没有要我做的事"，顺便把排队的命令带给它。</summary>
+    /// <summary>心跳：设备定期来问"有没有要我做的事"，顺便把排队的命令带给它。
+    /// 命令序号直接用数据库主键 Id（不是"这次心跳里的第几条"），这样设备在 /iclock/devicecmd 回执里
+    /// 带回来的 ID 才能直接对应回具体是哪条命令。没确认过、且超过 CommandConfirmTimeoutMinutes 还没确认的
+    /// 命令会被当成"上次没送达"重新下发；单次心跳最多带 MaxCommandsPerHeartbeat 条，多的留到下次心跳再发，
+    /// 避免批量导入/批量停用时一次性命令太多让设备处理不过来。</summary>
     [HttpGet("/iclock/getrequest")]
     public async Task<IActionResult> Heartbeat([FromQuery] string? SN, CancellationToken ct)
     {
@@ -111,20 +124,22 @@ public class ZKDeviceController(
             return Content("UNKNOWN DEVICE", "text/plain", Gbk);
         await TouchLastSeenAsync(SN!, ct);
 
+        var retryBefore = DateTime.Now.AddMinutes(-_opt.CommandConfirmTimeoutMinutes);
         var pending = await db.ZKDeviceCommands
-            .Where(c => c.SN == SN && !c.Sent)
+            .Where(c => c.SN == SN && !c.Confirmed && (c.SentAt == null || c.SentAt < retryBefore))
             .OrderBy(c => c.CreatedAt)
+            .Take(_opt.MaxCommandsPerHeartbeat)
             .ToListAsync(ct);
 
         if (pending.Count == 0)
             return Content("OK", "text/plain", Gbk);
 
         var sb = new StringBuilder();
-        for (var i = 0; i < pending.Count; i++)
+        foreach (var cmd in pending)
         {
-            sb.Append("C:").Append(i + 1).Append(':').Append(pending[i].CommandText).Append("\r\n\r\n");
-            pending[i].Sent   = true;
-            pending[i].SentAt = DateTime.Now;
+            sb.Append("C:").Append(cmd.Id).Append(':').Append(cmd.CommandText).Append("\r\n\r\n");
+            cmd.Sent   = true;
+            cmd.SentAt = DateTime.Now;
         }
         await db.SaveChangesAsync(ct);
 
@@ -137,13 +152,60 @@ public class ZKDeviceController(
     [HttpGet("/iclock/ping")]
     public IActionResult Ping() => Content("OK", "text/plain", Gbk);
 
-    /// <summary>设备执行完命令后，回报执行结果，先只记日志。</summary>
+    /// <summary>
+    /// 设备执行完命令后，回报执行结果——按 ID（心跳下发时用的就是 ZKDeviceCommand.Id）把命令标记为已确认，
+    /// 只有 Return=0 才算真正执行成功。回执 body 具体格式目前没有官方文档确认，这里按通用参考实现处理
+    /// （每行一条 "ID=x&Return=y&..." 这样用 & 连接的 key=value），部署后需要拿真实设备的日志核对格式
+    /// 是否对得上——如果对不上，只用改 <see cref="ParseDeviceCmdResult"/> 这一个方法，不影响其它部分。
+    /// </summary>
     [HttpPost("/iclock/devicecmd")]
-    public async Task<IActionResult> DeviceCmd([FromQuery] string? SN)
+    public async Task<IActionResult> DeviceCmd([FromQuery] string? SN, CancellationToken ct)
     {
+        if (!await IsKnownDeviceAsync(SN, ct))
+            return Content("UNKNOWN DEVICE", "text/plain", Gbk);
+        await TouchLastSeenAsync(SN!, ct);
+
         var bodyBytes = await ReadBodyBytesAsync();
-        logger.LogInformation("考勤机 {SN} 命令执行结果：{Result}", SN, Gbk.GetString(bodyBytes));
+        var text = Gbk.GetString(bodyBytes);
+        logger.LogInformation("考勤机 {SN} 命令执行结果：{Result}", SN, text);
+
+        try
+        {
+            var confirmedIds = ParseDeviceCmdResult(text);
+            if (confirmedIds.Count > 0)
+            {
+                await db.ZKDeviceCommands
+                    .Where(c => confirmedIds.Contains(c.Id))
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(c => c.Confirmed, true)
+                        .SetProperty(c => c.ConfirmedAt, DateTime.Now), ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 解析不出来就按"没确认"处理，命令会在超时后自动重新下发，不会因为解析失败而卡住整个流程
+            logger.LogWarning(ex, "解析考勤机 {SN} 的命令执行回执失败", SN);
+        }
+
         return Content("OK", "text/plain", Gbk);
+    }
+
+    /// <summary>从回执文本里挑出 Return=0（执行成功）的那些行，取出对应的命令 ID。</summary>
+    private static List<int> ParseDeviceCmdResult(string text)
+    {
+        var ids = new List<int>();
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var fields = line.TrimEnd('\r').Split('&')
+                .Select(p => p.Split('=', 2))
+                .Where(p => p.Length == 2)
+                .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
+
+            if (fields.TryGetValue("ID", out var idStr) && int.TryParse(idStr, out var id) &&
+                fields.TryGetValue("Return", out var ret) && ret == "0")
+                ids.Add(id);
+        }
+        return ids;
     }
 
     /// <summary>

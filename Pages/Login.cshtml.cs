@@ -76,8 +76,8 @@ public class LoginModel(IUserService userService, IOptions<AppSettingsOptions> a
         return Redirect(HomeUrl(user.Role));   // 按角色跳首页
     }
 
-    /// <summary>按角色决定登录后进哪个首页。</summary>
-    private static string HomeUrl(UserRole? role) => role switch
+    /// <summary>按角色决定登录后进哪个首页。Program.cs 的根路径 "/" 处理也复用这个方法，避免重复一份映射逻辑。</summary>
+    internal static string HomeUrl(UserRole? role) => role switch
     {
         UserRole.Admin or UserRole.Clerk                 => "/Admin/Dashboard",            // 管理/文员→看板
         UserRole.Supervisor or UserRole.TeamLeader       => "/Approval/PendingApproval",   // 主管/班组长→待审批

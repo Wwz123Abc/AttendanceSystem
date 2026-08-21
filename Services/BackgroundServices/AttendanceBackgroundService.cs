@@ -1,7 +1,10 @@
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.BackgroundServices;
@@ -11,7 +14,9 @@ namespace AttendanceSystem.Services.BackgroundServices;
 /// <summary>
 /// 考勤后台定时任务（每分钟检查一次）：
 /// ● 每天 23:58：把当天没打卡的在职员工标记为旷工/未打卡；
-/// ● 每月 1 日 00:02：生成上一个月的考勤汇总。
+/// ● 每月 1 日 00:10：生成上一个月的考勤汇总（比月初留几分钟缓冲，给设备重传/网络延迟一点时间，
+///   免得月末最后几分钟的打卡因为还没到账就被漏算进汇总）；
+/// ● 每天 03:00：清理考勤机相关的过期数据（已确认的命令记录、过期的考勤照片）。
 /// 用「上次执行日期」做记号，保证同一时间窗内只执行一次。
 /// </summary>
 public class AttendanceBackgroundService(
@@ -19,9 +24,10 @@ public class AttendanceBackgroundService(
     ILogger<AttendanceBackgroundService> logger)
     : BackgroundService
 {
-    // 记录两类任务“上次执行的时间”，避免在同一分钟窗口里重复跑
+    // 记录三类任务“上次执行的时间”，避免在同一分钟窗口里重复跑
     private DateTime _lastAbsentDate    = DateTime.MinValue;
     private DateTime _lastSummaryDate   = DateTime.MinValue;
+    private DateTime _lastCleanupDate   = DateTime.MinValue;
 
     // 程序启动后这个方法一直在后台循环运行，直到程序关闭
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -39,12 +45,19 @@ public class AttendanceBackgroundService(
                     await MarkAbsentAsync();
                 }
 
-                // 每月 1 日 00:02 且这个月还没生成过 → 生成上个月汇总
-                if (now.Day == 1 && now.Hour == 0 && now.Minute >= 2 && _lastSummaryDate.Date < now.Date)
+                // 每月 1 日 00:10 且这个月还没生成过 → 生成上个月汇总
+                if (now.Day == 1 && now.Hour == 0 && now.Minute >= 10 && _lastSummaryDate.Date < now.Date)
                 {
                     _lastSummaryDate = now;
                     var prev = now.AddMonths(-1);   // 上个月
                     await GenerateSummaryAsync(prev.Year, prev.Month);
+                }
+
+                // 每天 03:00 且今天还没清理过 → 清理考勤机过期数据
+                if (now.Hour == 3 && _lastCleanupDate.Date < now.Date)
+                {
+                    _lastCleanupDate = now;
+                    await CleanupZKDeviceDataAsync();
                 }
             }
             catch (Exception ex)
@@ -177,5 +190,58 @@ public class AttendanceBackgroundService(
         var svc = scope.ServiceProvider.GetRequiredService<IAttendanceService>();
         await svc.GenerateMonthlySummaryAsync(year, month);
         logger.LogInformation("月度汇总生成完成：{Year}/{Month}", year, month);
+    }
+
+    /// <summary>
+    /// 清理考勤机相关的过期数据，避免两张表/目录一直只增不删：
+    /// ① 已经收到设备确认（Confirmed=true）超过 RetentionDays 天的命令记录——确认过的命令不会再被
+    ///    重新下发，留着只是历史记录，没有查询价值；
+    /// ② 超过 RetentionDays 天的考勤照片（ATTPHOTO）——目前全仓库没有任何地方读取/展示这些照片，
+    ///    纯粹只写不用，放着只会一直占磁盘。
+    /// 保留天数和 Serilog 日志一致（30 天），不给运维增加新的心智负担。
+    /// </summary>
+    private async Task CleanupZKDeviceDataAsync()
+    {
+        const int retentionDays = 30;
+        var cutoff = DateTime.Now.AddDays(-retentionDays);
+
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+
+        var deletedCommands = await db.ZKDeviceCommands
+            .Where(c => c.Confirmed && c.ConfirmedAt != null && c.ConfirmedAt < cutoff)
+            .ExecuteDeleteAsync();
+
+        var deletedPhotoDirs = CleanupOldZkPhotoDirs(scope, cutoff);
+
+        logger.LogInformation("考勤机数据清理完成：删除已确认命令 {CmdCount} 条，删除考勤照片目录 {DirCount} 个",
+            deletedCommands, deletedPhotoDirs);
+    }
+
+    /// <summary>删掉 wwwroot/{UploadPath}/zkdevice 下文件夹名能解析成日期、且早于 cutoff 的整个目录
+    /// （目录名格式是 ZKDeviceController.SaveAttPhotoAsync 存照片时定好的 yyyyMMdd，按文件夹名判断即可，
+    /// 不用挨个读文件的创建时间）。</summary>
+    private static int CleanupOldZkPhotoDirs(IServiceScope scope, DateTime cutoff)
+    {
+        var env        = scope.ServiceProvider.GetRequiredService<IWebHostEnvironment>();
+        var appOptions = scope.ServiceProvider.GetRequiredService<IOptions<AppSettingsOptions>>().Value;
+
+        var uploadPath  = appOptions.UploadPath.Trim('/', '\\');
+        var webRoot     = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
+        var zkPhotoRoot = Path.Combine(webRoot, uploadPath, "zkdevice");
+        if (!Directory.Exists(zkPhotoRoot)) return 0;
+
+        var deleted = 0;
+        foreach (var dir in Directory.GetDirectories(zkPhotoRoot))
+        {
+            var name = Path.GetFileName(dir);
+            if (DateTime.TryParseExact(name, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var dirDate)
+                && dirDate < cutoff.Date)
+            {
+                Directory.Delete(dir, recursive: true);
+                deleted++;
+            }
+        }
+        return deleted;
     }
 }

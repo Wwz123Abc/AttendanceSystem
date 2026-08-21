@@ -12,22 +12,27 @@ namespace AttendanceSystem.Services.Implementations;
 /// </summary>
 public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger) : IZKDeviceSyncService
 {
+    private const int MaxAttempts = 5;
+
     /// <summary>
     /// 外层套一层重试：高峰期设备可能因为网络抖动/服务器响应慢而重发同一批数据，两个几乎同时到达的请求
-    /// 都以为"这条考勤日记录还不存在"就都想新建，数据库的唯一约束（同一人同一天只能一条）会拦住后到的那个、
-    /// 抛出 DbUpdateException，导致这一整批 SaveChanges 失败。这种情况直接重新读一遍最新数据重跑一次就能
-    /// 处理好（第二次跑的时候后到的那次会看到记录已存在，走更新分支），不是脏数据问题，最多重试 3 次。
+    /// 都以为"这条考勤日记录还不存在"就都想新建，数据库的唯一约束（同一人同一天只能一条；以及同一人同类型
+    /// 同一分钟只能一条打卡流水）会拦住后到的那个、抛出 DbUpdateException，导致这一整批 SaveChanges 失败。
+    /// 这种情况直接重新读一遍最新数据重跑一次就能处理好（第二次跑的时候后到的那次会看到记录已存在，走更新
+    /// 分支），不是脏数据问题，最多重试 5 次（打卡高峰期冲突概率比平时高，多给点缓冲）。5 次仍然冲突的话，
+    /// 异常会继续往上抛给 ZKDeviceController.Upload，那边会告诉设备这次没传成功，让设备自己重传这批数据，
+    /// 不会静默丢数据。
     /// </summary>
     public async Task ProcessAttLogAsync(string sn, List<ZKAttLogRow> rows, CancellationToken ct = default)
     {
-        for (var attempt = 1; attempt <= 3; attempt++)
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             try
             {
                 await ProcessAttLogCoreAsync(sn, rows, ct);
                 return;
             }
-            catch (DbUpdateException ex) when (attempt < 3)
+            catch (DbUpdateException ex) when (attempt < MaxAttempts)
             {
                 logger.LogWarning(ex, "考勤机 {SN} 打卡数据落库遇到并发冲突，第 {Attempt} 次重试", sn, attempt);
                 db.ChangeTracker.Clear();   // 丢弃这次没保存成功的改动，下一轮重新从数据库读最新状态
@@ -98,7 +103,8 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             db.AttendancePunches.Add(new AttendancePunch
             {
                 UserId     = uid,
-                PunchTime  = r.Time,
+                PunchTime  = TruncateToMinute(r.Time),   // 和 App 打卡（AttendanceService.PunchAsync）一样精确到分钟，
+                                                          // 落库值和上面 punchSet 去重键、数据库唯一索引三处口径一致
                 PunchType  = type,
                 DeviceInfo = $"ZKDevice:{sn}",
                 IsValid    = true,

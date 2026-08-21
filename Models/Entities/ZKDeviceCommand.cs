@@ -23,8 +23,14 @@ public class ZKDeviceCommand
 
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 
-    /// <summary>是否已经在某次心跳里发给设备了（发过就不再重复发）</summary>
+    /// <summary>是否已经在某次心跳里发给设备了（只代表"最近一次尝试下发过"，不代表设备真的执行成功了）</summary>
     public bool Sent { get; set; } = false;
 
+    /// <summary>最近一次下发的时间。超过 CommandConfirmTimeoutMinutes 还没等到设备确认，会被当成"这次没送达"重新下发。</summary>
     public DateTime? SentAt { get; set; }
+
+    /// <summary>设备是否已经通过 /iclock/devicecmd 回执确认执行成功（Return=0）——只有这个字段为 true 才代表命令真正生效了。</summary>
+    public bool Confirmed { get; set; } = false;
+
+    public DateTime? ConfirmedAt { get; set; }
 }
