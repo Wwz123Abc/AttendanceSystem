@@ -179,7 +179,8 @@ public class UserService(
         return true;
     }
 
-    /// <summary>重新启用员工。黑名单员工不能直接启用，需先移出黑名单。</summary>
+    /// <summary>重新启用员工。黑名单员工不能直接启用，需先移出黑名单。停用时考勤机上的记录被删过，
+    /// 重新启用要顺带补发一次下发，不然设备上刷不了脸。</summary>
     public async Task<bool> ActivateUserAsync(int userId)
     {
         var user = await db.Users.FindAsync(userId);
@@ -190,6 +191,7 @@ public class UserService(
         user.IsActive  = true;
         user.UpdatedAt = DateTime.Now;
         await db.SaveChangesAsync();
+        await TryPushToZKDeviceAsync(user);
         return true;
     }
 

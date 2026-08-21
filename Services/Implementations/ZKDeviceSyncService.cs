@@ -65,7 +65,7 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                 .Where(p => uids.Contains(p.UserId) && dates.Contains(DateOnly.FromDateTime(p.PunchTime)))
                 .Select(p => new { p.UserId, p.PunchType, p.PunchTime })
                 .ToListAsync(ct))
-            .Select(p => (p.UserId, p.PunchType, p.PunchTime))
+            .Select(p => (p.UserId, p.PunchType, Minute: TruncateToMinute(p.PunchTime)))
             .ToHashSet();
 
         var recordMap = (await db.AttendanceRecords
@@ -93,7 +93,7 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             };
             var workDate = DateOnly.FromDateTime(r.Time);
 
-            if (!punchSet.Add((uid, type, r.Time))) continue;   // 去重：同一人同类型同一分钟已经存过就跳过
+            if (!punchSet.Add((uid, type, TruncateToMinute(r.Time)))) continue;   // 去重：同一人同类型同一分钟已经存过就跳过
 
             db.AttendancePunches.Add(new AttendancePunch
             {
@@ -182,4 +182,8 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
         }
         await db.SaveChangesAsync(ct);
     }
+
+    /// <summary>去重粒度用"分钟"而不是"秒"：同一人同一分钟内多次刷卡（设备防抖间隔内的重复上报）
+    /// 只记一条，避免原始打卡流水表里出现同一次打卡被拆成两条秒数不同的记录。</summary>
+    private static DateTime TruncateToMinute(DateTime dt) => new(dt.Year, dt.Month, dt.Day, dt.Hour, dt.Minute, 0);
 }
