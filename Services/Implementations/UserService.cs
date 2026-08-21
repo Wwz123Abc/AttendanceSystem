@@ -155,6 +155,7 @@ public class UserService(
         existing.EmergencyContactName   = user.EmergencyContactName;
         existing.EmergencyContactPhone  = user.EmergencyContactPhone;
         existing.IdCardPhotoUrl         = user.IdCardPhotoUrl;
+        existing.AllowRemotePunch       = user.AllowRemotePunch;
         // 注意：不在这里覆盖 Email。员工表单不含这个字段，若在这里赋值，每次编辑都会把数据库里已有的值冲成空。
         existing.UpdatedAt          = DateTime.Now;
         await db.SaveChangesAsync();

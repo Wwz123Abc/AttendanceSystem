@@ -193,11 +193,13 @@ public class AttendanceBackgroundService(
     }
 
     /// <summary>
-    /// 清理考勤机相关的过期数据，避免两张表/目录一直只增不删：
-    /// ① 已经收到设备确认（Confirmed=true）超过 RetentionDays 天的命令记录——确认过的命令不会再被
+    /// 清理考勤机 + 远程打卡相关的过期数据，避免相关表/目录一直只增不删：
+    /// ① 已经收到设备确认（Confirmed=true）超过 RetentionDays 天的考勤机命令记录——确认过的命令不会再被
     ///    重新下发，留着只是历史记录，没有查询价值；
-    /// ② 超过 RetentionDays 天的考勤照片（ATTPHOTO）——目前全仓库没有任何地方读取/展示这些照片，
-    ///    纯粹只写不用，放着只会一直占磁盘。
+    /// ② 超过 RetentionDays 天的考勤照片（ATTPHOTO）和远程打卡现场照片——目前都是只写不读的留痕数据，
+    ///    放着只会一直占磁盘；
+    /// ③ 超过 RetentionDays 天的人脸识别尝试记录（FaceVerifyAttempt）——只在限流查询里用到最近几分钟内的，
+    ///    更早的没有查询价值。
     /// 保留天数和 Serilog 日志一致（30 天），不给运维增加新的心智负担。
     /// </summary>
     private async Task CleanupZKDeviceDataAsync()
@@ -212,27 +214,33 @@ public class AttendanceBackgroundService(
             .Where(c => c.Confirmed && c.ConfirmedAt != null && c.ConfirmedAt < cutoff)
             .ExecuteDeleteAsync();
 
-        var deletedPhotoDirs = CleanupOldZkPhotoDirs(scope, cutoff);
+        var deletedAttempts = await db.FaceVerifyAttempts
+            .Where(a => a.CreatedAt < cutoff)
+            .ExecuteDeleteAsync();
 
-        logger.LogInformation("考勤机数据清理完成：删除已确认命令 {CmdCount} 条，删除考勤照片目录 {DirCount} 个",
-            deletedCommands, deletedPhotoDirs);
+        var deletedZkPhotoDirs   = CleanupOldDateDirs(scope, "zkdevice", cutoff);
+        var deletedFacePhotoDirs = CleanupOldDateDirs(scope, Path.Combine("faces", "attempts"), cutoff);
+
+        logger.LogInformation(
+            "考勤机/远程打卡数据清理完成：删除已确认命令 {CmdCount} 条，删除人脸尝试记录 {AttemptCount} 条，" +
+            "删除考勤照片目录 {ZkDirCount} 个，删除远程打卡照片目录 {FaceDirCount} 个",
+            deletedCommands, deletedAttempts, deletedZkPhotoDirs, deletedFacePhotoDirs);
     }
 
-    /// <summary>删掉 wwwroot/{UploadPath}/zkdevice 下文件夹名能解析成日期、且早于 cutoff 的整个目录
-    /// （目录名格式是 ZKDeviceController.SaveAttPhotoAsync 存照片时定好的 yyyyMMdd，按文件夹名判断即可，
-    /// 不用挨个读文件的创建时间）。</summary>
-    private static int CleanupOldZkPhotoDirs(IServiceScope scope, DateTime cutoff)
+    /// <summary>删掉 wwwroot/{UploadPath}/{subPath} 下文件夹名能解析成日期、且早于 cutoff 的整个目录
+    /// （目录名格式是 yyyyMMdd，按文件夹名判断即可，不用挨个读文件的创建时间）。</summary>
+    private static int CleanupOldDateDirs(IServiceScope scope, string subPath, DateTime cutoff)
     {
         var env        = scope.ServiceProvider.GetRequiredService<IWebHostEnvironment>();
         var appOptions = scope.ServiceProvider.GetRequiredService<IOptions<AppSettingsOptions>>().Value;
 
-        var uploadPath  = appOptions.UploadPath.Trim('/', '\\');
-        var webRoot     = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-        var zkPhotoRoot = Path.Combine(webRoot, uploadPath, "zkdevice");
-        if (!Directory.Exists(zkPhotoRoot)) return 0;
+        var uploadPath = appOptions.UploadPath.Trim('/', '\\');
+        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
+        var root       = Path.Combine(webRoot, uploadPath, subPath);
+        if (!Directory.Exists(root)) return 0;
 
         var deleted = 0;
-        foreach (var dir in Directory.GetDirectories(zkPhotoRoot))
+        foreach (var dir in Directory.GetDirectories(root))
         {
             var name = Path.GetFileName(dir);
             if (DateTime.TryParseExact(name, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var dirDate)

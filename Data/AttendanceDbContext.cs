@@ -37,6 +37,7 @@ public class AttendanceDbContext : DbContext
     public DbSet<AnnouncementRead>          AnnouncementReads          => Set<AnnouncementRead>();
     public DbSet<ZKDeviceCommand>           ZKDeviceCommands           => Set<ZKDeviceCommand>();
     public DbSet<ZKDevice>                  ZKDevices                  => Set<ZKDevice>();
+    public DbSet<FaceVerifyAttempt>         FaceVerifyAttempts         => Set<FaceVerifyAttempt>();
 
     // 这个方法在“建立数据库模型”时被调用，用来配置表名、关系、索引、唯一约束等。
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -257,6 +258,17 @@ public class AttendanceDbContext : DbContext
         modelBuilder.Entity<ZKDeviceCommand>(e =>
         {
             e.HasIndex(c => new { c.SN, c.Confirmed });
+        });
+
+        // ── FaceVerifyAttempt：按(员工,时间)建索引，匹配远程打卡限流查询"这个人最近失败了几次" ──
+        modelBuilder.Entity<FaceVerifyAttempt>(e =>
+        {
+            e.HasIndex(a => new { a.UserId, a.CreatedAt });
+
+            e.HasOne(a => a.User)
+             .WithMany()
+             .HasForeignKey(a => a.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── 写入初始“种子数据”（首次建库时自动插入）──

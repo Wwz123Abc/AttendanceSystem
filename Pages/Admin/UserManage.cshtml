@@ -233,7 +233,8 @@
                                                         homeAddress = u.HomeAddress ?? "",
                                                         emergencyContactName = u.EmergencyContactName ?? "",
                                                         emergencyContactPhone = u.EmergencyContactPhone ?? "",
-                                                        idCardPhotoUrl = u.IdCardPhotoUrl ?? ""
+                                                        idCardPhotoUrl = u.IdCardPhotoUrl ?? "",
+                                                        allowRemotePunch = u.AllowRemotePunch
                                                     }))">编辑</button>
                                             @if (u.Status == EmployeeStatus.Active)
                                             {
@@ -485,6 +486,12 @@
                                 </a>
                             </div>
                         </div>
+                        <div class="col-md-12">
+                            <div class="form-check">
+                                <input asp-for="AllowRemotePunch" class="form-check-input" type="checkbox" id="fAllowRemotePunch" />
+                                <label class="form-check-label" for="fAllowRemotePunch">允许远程打卡（手机定位+人脸识别，给出差/到不了考勤机的员工用）</label>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -714,6 +721,7 @@ function openAdd() {
         .forEach(id => document.getElementById(id).value = '');
     document.getElementById('fIdCardPhoto').value = '';
     document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';   // 新建员工还没有照片，不显示预览
+    document.getElementById('fAllowRemotePunch').checked = false;   // 新建员工默认不开远程打卡
     document.getElementById('fRole').value = 'Employee';
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
@@ -772,6 +780,7 @@ function openConfirm(data) {
     } else {
         document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';
     }
+    document.getElementById('fAllowRemotePunch').checked = false;   // 新建员工默认不开远程打卡
     document.getElementById('fRole').value       = 'Employee';
     document.getElementById('fDeptId').value     = SELECTED_DEPT !== null ? SELECTED_DEPT : '';
     document.getElementById('fGroupId').value    = '';
@@ -827,6 +836,7 @@ function openEdit(data) {
     document.getElementById('fEmergencyContactName').value  = data.emergencyContactName || '';
     document.getElementById('fEmergencyContactPhone').value = data.emergencyContactPhone || '';
     document.getElementById('fIdCardPhoto').value = '';   // 文件框永远从空开始，不选=保留原照片
+    document.getElementById('fAllowRemotePunch').checked = !!data.allowRemotePunch;
     if (data.idCardPhotoUrl) {
         document.getElementById('fIdCardPhotoPreviewWrap').style.display = '';
         document.getElementById('fIdCardPhotoPreview').src = data.idCardPhotoUrl;

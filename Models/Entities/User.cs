@@ -99,6 +99,12 @@ public class User
     /// <summary>是否在黑名单（永不录用）。拉黑时同时把 IsActive 置 false，禁止登录。</summary>
     public bool IsBlacklisted { get; set; } = false;
 
+    /// <summary>
+    /// 是否允许用"远程打卡"（手机定位+人脸识别，给出差/到不了考勤机的员工用）。
+    /// 默认 false——管理员要单独给需要的人开，不能所有人默认都能绕开考勤机自己打卡。
+    /// </summary>
+    public bool AllowRemotePunch { get; set; } = false;
+
     /// <summary>员工状态（由 IsActive/IsBlacklisted 推导，仅展示/筛选用，不单独存库）：在职 / 已停用 / 黑名单。</summary>
     [NotMapped]
     public EmployeeStatus Status => IsBlacklisted ? EmployeeStatus.Blacklisted

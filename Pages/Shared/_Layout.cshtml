@@ -340,6 +340,18 @@
                         <i class="bi bi-calendar3"></i>我的考勤日历
                     </a>
                 </li>
+                <li>
+                    <a class="nav-link @(currentPath.StartsWith("/Attendance/RemotePunch") ? "active" : "")"
+                       href="/Attendance/RemotePunch">
+                        <i class="bi bi-geo-alt"></i>远程打卡
+                    </a>
+                </li>
+                <li>
+                    <a class="nav-link @(currentPath.StartsWith("/Employee/FaceEnroll") ? "active" : "")"
+                       href="/Employee/FaceEnroll">
+                        <i class="bi bi-person-bounding-box"></i>人脸信息
+                    </a>
+                </li>
 
                 <li><span class="nav-section">申请</span></li>
                 <li>

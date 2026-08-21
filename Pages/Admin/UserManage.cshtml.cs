@@ -69,6 +69,7 @@ public class UserManageModel(
     [BindProperty] public string? EmergencyContactName   { get; set; }
     [BindProperty] public string? EmergencyContactPhone  { get; set; }
     [BindProperty] public IFormFile? IdCardPhoto         { get; set; }   // 身份证照片，不选就是不改
+    [BindProperty] public bool    AllowRemotePunch { get; set; }   // 是否允许用手机定位+人脸的"远程打卡"
     [BindProperty] public int     EditUserId     { get; set; }
 
     /// <summary>本次"新建员工"是不是在确认某条扫码登记（非空=确认通过后要联动把那条登记标记为已确认）。</summary>
@@ -342,7 +343,8 @@ public class UserManageModel(
         HireDate          = !string.IsNullOrEmpty(HireDate) && DateOnly.TryParse(HireDate, out var hd) ? hd : null,
         HomeAddress            = string.IsNullOrWhiteSpace(HomeAddress)           ? null : HomeAddress.Trim(),
         EmergencyContactName   = string.IsNullOrWhiteSpace(EmergencyContactName)  ? null : EmergencyContactName.Trim(),
-        EmergencyContactPhone  = string.IsNullOrWhiteSpace(EmergencyContactPhone) ? null : EmergencyContactPhone.Trim()
+        EmergencyContactPhone  = string.IsNullOrWhiteSpace(EmergencyContactPhone) ? null : EmergencyContactPhone.Trim(),
+        AllowRemotePunch       = AllowRemotePunch
         // IdCardPhotoUrl 不在这里赋值，由 SaveIdCardPhotoAsync() 上传后单独设置
         // Role/HireDate 这里用 TryParse 兜底而不是再抛异常：ValidateContact() 已经校验过一遍，正常流程走不到 fallback 分支
     };

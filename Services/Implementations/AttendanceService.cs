@@ -20,7 +20,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 1) 校验是否节假日；2) 若开了定位打卡，校验距离；
     /// 3) 写一条原始打卡流水；4) 取/建当天考勤记录并算出迟到/早退/工时/加班/状态。
     /// </summary>
-    public async Task<PunchResponseDto> PunchAsync(int userId, PunchRequestDto request)
+    public async Task<PunchResponseDto> PunchAsync(int userId, PunchRequestDto request, bool skipLocationCheck = false)
     {
         var now   = DateTime.Now;
         var today = DateOnly.FromDateTime(now);
@@ -62,36 +62,15 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (await IsHolidayAsync(workDate, user.AttendanceGroupId))
             return new PunchResponseDto { Success = false, Message = "今日为节假日，无需打卡" };
 
-        // 定位打卡校验：如果考勤组开了定位打卡、且配了打卡地点，就要看打卡位置离「任意一个」地点够不够近
-        // （多地点是"或"的关系：命中其中一个地点的有效半径内就算通过，不要求同时满足全部地点）
-        if (user.AttendanceGroupId.HasValue)
+        // 定位打卡校验：考勤组开了定位打卡、且配了打卡地点才会真的比对距离，没开/没配就直接放行。
+        // skipLocationCheck=true（远程打卡）时整段跳过——远程打卡自己会在调用这个方法之前先调
+        // ValidateLocationAsync 做过一次同样的校验了（见该方法注释），这里不用再查一遍数据库重复判断。
+        if (!skipLocationCheck)
         {
-            var group = await db.AttendanceGroups
-                .Include(g => g.Locations)
-                .FirstOrDefaultAsync(g => g.Id == user.AttendanceGroupId.Value);
-            if (group is { EnableLocationPunch: true } && group.Locations.Count > 0)
-            {
-                if (!request.Latitude.HasValue || !request.Longitude.HasValue)
-                    return new PunchResponseDto { Success = false, Message = "该考勤组已启用定位打卡，请允许浏览器获取位置权限后重试" };
-
-                // 算到每个配置地点的距离，取最近的一个来判断
-                var nearest = group.Locations
-                    .Select(l => new
-                    {
-                        l.LocationName,
-                        l.RadiusMeters,
-                        Distance = HaversineMeters(request.Latitude.Value, request.Longitude.Value, l.Latitude, l.Longitude)
-                    })
-                    .OrderBy(x => x.Distance)
-                    .First();
-
-                if (nearest.Distance > nearest.RadiusMeters)   // 离最近的地点都还超出范围
-                    return new PunchResponseDto
-                    {
-                        Success = false,
-                        Message = $"打卡位置超出有效范围（距最近的「{nearest.LocationName ?? "打卡点"}」{nearest.Distance:F0} 米，限 {nearest.RadiusMeters} 米内）"
-                    };
-            }
+            var (locationValid, locationMessage) =
+                await ValidateLocationAsync(user.AttendanceGroupId, request.Latitude, request.Longitude);
+            if (!locationValid)
+                return new PunchResponseDto { Success = false, Message = locationMessage! };
         }
 
         // 打卡时间精确到分钟（把秒抹掉）
@@ -103,19 +82,27 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             ? await db.ShiftSchedules.FindAsync(assignment.ShiftScheduleId)
             : null;
 
-        // 第 3 步：写一条原始打卡流水（时间仍然是打卡的真实时刻，不受 workDate 影响）
-        db.AttendancePunches.Add(new AttendancePunch
+        // 第 3 步：写一条原始打卡流水（时间仍然是打卡的真实时刻，不受 workDate 影响）。
+        // 同一人同类型同一分钟只能有一条（数据库唯一索引兜底），远程打卡这类"可以反复打"的场景
+        // 同一分钟内点第二次很常见，这里先查一下是不是已经有了，有就不重复插入，避免撞唯一索引报错——
+        // 不影响下面照常按这次的打卡时间刷新 ClockIn/ClockOutTime 和考勤状态。
+        var alreadyPunchedThisMinute = await db.AttendancePunches.AnyAsync(p =>
+            p.UserId == userId && p.PunchType == request.PunchType && p.PunchTime == punchTime);
+        if (!alreadyPunchedThisMinute)
         {
-            UserId     = userId,
-            PunchTime  = punchTime,
-            PunchType  = request.PunchType,
-            Latitude   = request.Latitude,
-            Longitude  = request.Longitude,
-            Address    = request.Address,
-            DeviceInfo = request.DeviceInfo,
-            IsValid    = true,
-            CreatedAt  = now
-        });
+            db.AttendancePunches.Add(new AttendancePunch
+            {
+                UserId     = userId,
+                PunchTime  = punchTime,
+                PunchType  = request.PunchType,
+                Latitude   = request.Latitude,
+                Longitude  = request.Longitude,
+                Address    = request.Address,
+                DeviceInfo = request.DeviceInfo,
+                IsValid    = true,
+                CreatedAt  = now
+            });
+        }
 
         // 第 4 步：取出 workDate 那天的考勤日记录，没有就新建一条（并填上应上/应下班时间）
         var record = openYesterdayRecord ?? await db.AttendanceRecords
@@ -191,6 +178,42 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             StatusText = StatusText(status),
             LateMinutes = lateMinutes
         };
+    }
+
+    /// <summary>
+    /// 校验一个经纬度是否落在指定考勤组配置的允许打卡地点范围内。考勤组没开"定位打卡"、或没配置任何
+    /// 地点，直接算通过（跟 PunchAsync 里原来的定位校验是同一套判断，抽出来给远程打卡单独调用）。
+    /// 远程打卡会在真正调用（付费的）阿里云人脸识别接口之前，先调这个方法确认人在允许的地点里，
+    /// 不在范围内就直接拒绝，不用白白浪费一次人脸识别调用。
+    /// </summary>
+    public async Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude)
+    {
+        if (!attendanceGroupId.HasValue) return (true, null);   // 没分配考勤组，没有地点可比对，不限制
+
+        var group = await db.AttendanceGroups
+            .Include(g => g.Locations)
+            .FirstOrDefaultAsync(g => g.Id == attendanceGroupId.Value);
+        if (group is not { EnableLocationPunch: true } || group.Locations.Count == 0)
+            return (true, null);   // 没开定位打卡/没配置地点，不限制
+
+        if (!latitude.HasValue || !longitude.HasValue)
+            return (false, "该考勤组已启用定位打卡，请允许浏览器获取位置权限后重试");
+
+        // 算到每个配置地点的距离，取最近的一个来判断（多地点是"或"的关系，命中一个就算通过）
+        var nearest = group.Locations
+            .Select(l => new
+            {
+                l.LocationName,
+                l.RadiusMeters,
+                Distance = HaversineMeters(latitude.Value, longitude.Value, l.Latitude, l.Longitude)
+            })
+            .OrderBy(x => x.Distance)
+            .First();
+
+        if (nearest.Distance > nearest.RadiusMeters)
+            return (false, $"打卡位置超出有效范围（距最近的「{nearest.LocationName ?? "打卡点"}」{nearest.Distance:F0} 米，限 {nearest.RadiusMeters} 米内）");
+
+        return (true, null);
     }
 
     /// <summary>

@@ -6,8 +6,17 @@ namespace AttendanceSystem.Services.Interfaces;
 /// <summary>考勤业务服务契约。</summary>
 public interface IAttendanceService
 {
-    /// <summary>打卡（上班/下班），返回打卡结果与计算出的考勤状态。</summary>
-    Task<PunchResponseDto>         PunchAsync(int userId, PunchRequestDto request);
+    /// <summary>
+    /// 打卡（上班/下班），返回打卡结果与计算出的考勤状态。
+    /// skipLocationCheck=true 时跳过"打卡位置是否在考勤组配置地点范围内"的校验（远程打卡用——
+    /// 人本来就在外地，不该拿公司地点的围栏卡他），经纬度仍然照常记录留痕，只是不用来做距离比对。
+    /// </summary>
+    Task<PunchResponseDto>         PunchAsync(int userId, PunchRequestDto request, bool skipLocationCheck = false);
+    /// <summary>
+    /// 校验一个经纬度是否落在指定考勤组配置的允许打卡地点范围内（考勤组没开"定位打卡"/没配置地点则直接算通过）。
+    /// 远程打卡在调用付费的人脸识别接口之前会先调这个，人不在允许的地点里就直接拒绝，不浪费识别调用。
+    /// </summary>
+    Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude);
     /// <summary>获取某员工今日考勤记录。</summary>
     Task<AttendanceRecordDto?>     GetTodayAttendanceAsync(int userId);
     /// <summary>按条件查询个人考勤记录列表。</summary>
