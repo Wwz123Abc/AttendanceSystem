@@ -97,9 +97,9 @@
                                     onclick="openEdit(@g.Id,'@g.GroupName.Replace("'","\\'")',
                                              @(g.EnableLocationPunch ? "true" : "false"),
                                              @g.LunchBreakMinutes,@g.DinnerBreakMinutes,
-                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(approverIds))',
-                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(deptIds))',
-                                             '@Html.Raw(System.Text.Json.JsonSerializer.Serialize(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters })))',
+                                             '@System.Text.Json.JsonSerializer.Serialize(approverIds)',
+                                             '@System.Text.Json.JsonSerializer.Serialize(deptIds)',
+                                             '@System.Text.Json.JsonSerializer.Serialize(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters }))',
                                              '@g.ApprovalLevel')">
                                 <i class="bi bi-pencil"></i>
                             </button>

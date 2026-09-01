@@ -225,6 +225,13 @@
             <span>~</span>
             <input type="date" name="viewEnd" value="@Model.ViewEnd.ToString("yyyy-MM-dd")" class="form-control form-control-sm w-auto" />
             <button type="submit" class="btn btn-outline-primary btn-sm">查询</button>
+            <!-- GET 表单提交时，浏览器会把 action/formaction 里原有的查询参数整个丢掉、只用表单字段重新拼一次，
+                 所以 formaction="...?handler=Export" 这种写法在 GET 表单里不会生效（跟以前"导出汇总表"点了没反应
+                 是同一类问题）。改成给按钮本身加 name="handler" value="Export"——按钮的 name/value 只有在
+                 这个按钮被点击时才会被当成表单字段一起提交，这样 handler=Export 才能真正带到请求里。 -->
+            <button type="submit" name="handler" value="Export" class="btn btn-outline-success btn-sm" title="导出所选组、当前日期范围内每个人的排班情况，没排班的日子会标红方便检查">
+                <i class="bi bi-download me-1"></i>导出排班记录
+            </button>
         </form>
     </div>
     <div class="card-body p-0">

@@ -179,6 +179,52 @@ public class AttendanceBackgroundService(
             }
         }
 
+        // 昨天是不是有夜班（跨天班次）打了上班卡、一直没打下班卡的记录——昨天这个时间点检查时，
+        // 因为"人可能还在上班、要到今天凌晨才下班"特意跳过了（见上面 IsCrossDay 那个 continue）。
+        // 现在已经过了整整一天，如果还是没有下班卡，说明是真的漏打了（忘记打卡/离职/设备故障），
+        // 需要在这里补上标记——不然这条记录会永远停在"已上班未下班"，旷工/未打卡看板永远看不到、
+        // 也永远收不到提醒（因为后续每天的检查只看"今天"的记录，不会再回头看这条）。
+        var yesterday        = today.AddDays(-1);
+        var activeUserIds    = users.Select(u => u.Id).ToHashSet();   // 复用上面已查好的"当前在职员工"名单
+        var yesterdayOpenRecords = (await db.AttendanceRecords
+            .Where(r => r.WorkDate == yesterday && r.ClockInTime != null && r.ClockOutTime == null
+                     && r.AttendanceStatus != AttendanceStatus.NotPunched
+                     && r.AttendanceStatus != AttendanceStatus.OnLeave
+                     && r.AttendanceStatus != AttendanceStatus.Holiday
+                     && r.AttendanceStatus != AttendanceStatus.BusinessTrip)
+            .ToListAsync())
+            .Where(r => activeUserIds.Contains(r.UserId))   // 已离职/停用的人不再标记、不再发提醒
+            .ToList();
+        if (yesterdayOpenRecords.Count > 0)
+        {
+            var openUserIds = yesterdayOpenRecords.Select(r => r.UserId).ToList();
+            var yesterdayAssignByUser = (await db.ShiftAssignments
+                    .Include(a => a.ShiftSchedule)
+                    .Where(a => a.WorkDate == yesterday && openUserIds.Contains(a.UserId))
+                    .ToListAsync())
+                .GroupBy(a => a.UserId).ToDictionary(g => g.Key, g => g.First());
+
+            foreach (var record in yesterdayOpenRecords)
+            {
+                // 只处理"昨天排的确实是跨天班次"这种情况——普通白班漏打下班卡当天就已经处理过了，
+                // 不会走到这里；这里只是给夜班这一类"故意延后一天再判定"的情况兜底。
+                if (!yesterdayAssignByUser.TryGetValue(record.UserId, out var assign) || !assign.ShiftSchedule.IsCrossDay)
+                    continue;
+
+                record.AttendanceStatus = AttendanceStatus.NotPunched;
+                record.UpdatedAt        = DateTime.Now;
+                db.Notifications.Add(new Notification
+                {
+                    UserId           = record.UserId,
+                    Title            = "下班未打卡提醒",
+                    Content          = $"您 {yesterday:MM/dd} 的夜班一直未打下班卡，如有异议请提交补卡申请",
+                    NotificationType = "PunchReminder",
+                    CreatedAt        = DateTime.Now
+                });
+                marked++;
+            }
+        }
+
         await db.SaveChangesAsync();
         logger.LogInformation("旷工标记完成，日期：{Date}，标记 {Count} 人", today, marked);
     }

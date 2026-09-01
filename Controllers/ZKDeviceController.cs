@@ -92,7 +92,7 @@ public class ZKDeviceController(
             }
             else
             {
-                logger.LogInformation("考勤机 {SN} 推送了暂不处理的数据类型：table={Table}", SN, table);
+                logger.LogInformation("考勤机 {SN} 推送了暂不处理的数据类型：table={Table}，内容={Body}", SN, table, Gbk.GetString(bodyBytes));
             }
         }
         catch (DbUpdateException ex)
@@ -151,6 +151,46 @@ public class ZKDeviceController(
     /// <summary>备用心跳：设备上传大量数据时改发这个，服务器只能回 OK，不能夹带命令。</summary>
     [HttpGet("/iclock/ping")]
     public IActionResult Ping() => Content("OK", "text/plain", Gbk);
+
+    /// <summary>
+    /// 部分新固件（走 iClock Proxy 云端中转）在初始化握手阶段会先调用这个接口"注册"，
+    /// 按官方 PUSH SDK 参考实现，这一步必须回 "RegistryCode=xxx" 这个格式，设备才认为注册成功、
+    /// 才会往下走正常心跳/上传流程——之前只回 "OK"，格式不对，设备一直卡在反复重试注册这一步。
+    /// </summary>
+    [HttpPost("/iclock/registry")]
+    public async Task<IActionResult> Registry([FromQuery] string? SN, CancellationToken ct)
+    {
+        if (!await IsKnownDeviceAsync(SN, ct))
+            return Content("UNKNOWN DEVICE", "text/plain", Gbk);
+        await TouchLastSeenAsync(SN!, ct);
+        return Content("RegistryCode=" + SN, "text/plain", Gbk);
+    }
+
+    /// <summary>
+    /// 注册成功后，这类新固件接着会调用这个接口要一份"推送配置"（按官方 PUSH SDK 参考实现的字段），
+    /// 里面的 SessionID 之类的字段设备认为拿到了才会继续走正常的上传/心跳流程。
+    /// </summary>
+    [HttpPost("/iclock/push")]
+    public async Task<IActionResult> Push([FromQuery] string? SN, CancellationToken ct)
+    {
+        if (!await IsKnownDeviceAsync(SN, ct))
+            return Content("UNKNOWN DEVICE", "text/plain", Gbk);
+        await TouchLastSeenAsync(SN!, ct);
+
+        var sb = new StringBuilder();
+        sb.Append("ServerVersion=3.0.1\n");
+        sb.Append("ServerName=ADMS\n");
+        sb.Append("PushVersion=3.0.1\n");
+        sb.Append("ErrorDelay=30\n");
+        sb.Append("RequestDelay=").Append(_opt.HeartbeatIntervalSeconds).Append('\n');
+        sb.Append("TransTimes=00:00;14:00\n");
+        sb.Append("TransInterval=1\n");
+        sb.Append("TransTables=User Transaction\n");
+        sb.Append("Realtime=1\n");
+        sb.Append("SessionID=").Append(SN).Append('\n');
+        sb.Append("TimeoutSec=10\n");
+        return Content(sb.ToString(), "text/plain", Gbk);
+    }
 
     /// <summary>
     /// 设备执行完命令后，回报执行结果——按 ID（心跳下发时用的就是 ZKDeviceCommand.Id）把命令标记为已确认，

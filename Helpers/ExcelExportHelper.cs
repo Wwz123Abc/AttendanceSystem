@@ -278,6 +278,86 @@ public static class ExcelExportHelper
         ICellStyle redIfPositive(int v) => v > 0 ? redStyle : dataStyle;
     }
 
+    // ── 报表 3.2：排班记录（排班页导出，一行一人，每天一格显示排的什么班，方便看有没有人漏排）──
+    public static byte[] ExportShiftAssignments(
+        List<DateOnly> dates,
+        List<(string RealName, string EmployeeNo, string GroupName, string? DeptName, List<string?> DailyShiftName, List<bool> DailyMissing, int MissingCount)> rows)
+    {
+        var wb    = new XSSFWorkbook();
+        var sheet = wb.CreateSheet("排班记录");
+
+        var titleStyle    = TitleStyle(wb);
+        var subTitleStyle = DataStyle(wb);
+        var headerStyle   = HeaderStyleNoFill(wb);
+        var dataStyle     = DataStyle(wb);
+        var missingStyle  = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);   // 漏排的格子标红，一眼看出来
+
+        var dayCount  = dates.Count;
+        var fixedCols = 4;    // 姓名/工号/考勤组/部门
+        var tailCols  = 1;    // 漏排班天数
+        var totalCols = fixedCols + dayCount + tailCols;
+
+        var titleRow = sheet.CreateRow(0);
+        SetCell(titleRow, 0, $"排班记录 统计日期：{dates.First():yyyy-MM-dd} 至 {dates.Last():yyyy-MM-dd}", titleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, totalCols - 1));
+        titleRow.HeightInPoints = 26;
+
+        var genRow = sheet.CreateRow(1);
+        SetCell(genRow, 0, $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}", subTitleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
+
+        var headerRow = sheet.CreateRow(2);
+        headerRow.HeightInPoints = 20;
+        string[] fixedHeaders = ["姓名", "工号", "考勤组", "部门"];
+        for (var i = 0; i < fixedHeaders.Length; i++) SetCell(headerRow, i, fixedHeaders[i], headerStyle);
+        string[] weekLabel = ["日", "一", "二", "三", "四", "五", "六"];   // DayOfWeek: 0=周日...6=周六
+        for (var i = 0; i < dayCount; i++)
+        {
+            var date = dates[i];
+            SetCell(headerRow, fixedCols + i, $"{date.Month}/{date.Day} 周{weekLabel[(int)date.DayOfWeek]}", headerStyle);
+        }
+        SetCell(headerRow, fixedCols + dayCount, "漏排班天数", headerStyle);
+
+        sheet.SetColumnWidth(0, 10 * 256);
+        sheet.SetColumnWidth(1, 12 * 256);
+        sheet.SetColumnWidth(2, 16 * 256);
+        sheet.SetColumnWidth(3, 12 * 256);
+        for (var i = 0; i < dayCount; i++) sheet.SetColumnWidth(fixedCols + i, 9 * 256);
+        sheet.SetColumnWidth(fixedCols + dayCount, 11 * 256);
+        ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 3, repeatHeaderRows: 3);
+
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var row  = rows[r];
+            var xRow = sheet.CreateRow(r + 3);
+
+            SetCell(xRow, 0, row.RealName,             dataStyle);
+            SetCell(xRow, 1, row.EmployeeNo,            dataStyle);
+            SetCell(xRow, 2, row.GroupName,             dataStyle);
+            SetCell(xRow, 3, row.DeptName ?? "",        dataStyle);
+
+            for (var i = 0; i < dayCount; i++)
+            {
+                if (row.DailyShiftName[i] is { } name)
+                {
+                    SetCell(xRow, fixedCols + i, name, dataStyle);
+                }
+                else if (row.DailyMissing[i])
+                {
+                    SetCell(xRow, fixedCols + i, "未排班", missingStyle);   // 该上班却没排班，格子直接标红，一眼看出漏在哪天
+                }
+                else
+                {
+                    xRow.CreateCell(fixedCols + i).CellStyle = dataStyle;   // 休息日/节假日/入职前，留空白格子
+                }
+            }
+
+            SetCell(xRow, fixedCols + dayCount, row.MissingCount, row.MissingCount > 0 ? missingStyle : dataStyle);
+        }
+
+        return ToBytes(wb);
+    }
+
     // ── 报表 3.5：打卡时间表（月度报表页，按部门范围导出多个人的每日打卡明细，一行一人一天）──
     public static byte[] ExportClockTimeSheet(List<AttendanceRecordDto> records, DateOnly start, DateOnly end)
     {

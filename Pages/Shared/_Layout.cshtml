@@ -63,9 +63,6 @@
         /* ── 侧边栏 ───────────────────────────────────────────────────── */
         .sidebar { width: 224px; min-height: 100vh; background: var(--bg-sidebar); flex-shrink: 0; }
         .sidebar-brand { color: #fff; padding: 1rem .9rem 1.1rem; border-bottom: 1px solid rgba(255,255,255,.08); }
-        .sidebar-logo { width: 100%; display: block; border-radius: 5px; }
-        .topbar-logo { height: 26px; display: block; border-radius: 4px; }
-        .kr-sub { font-size: .72rem; letter-spacing: .08em; }
         .app-footer { text-align: center; color: #9aa3b2; font-size: .78rem; padding: .85rem 0 1rem; }
         .sidebar .nav-link {
             color: rgba(255,255,255,.68); padding: .5rem .85rem; border-radius: var(--radius-sm);
@@ -247,7 +244,7 @@
         .pagination .page-item.active .page-link { background: var(--brand); color: #fff; }
         .pagination .page-item.disabled .page-link { color: var(--text-4); background: transparent; }
 
-        /* ── 页面水印：公告栏/我的记录/我的考勤日历/提交申请这几个页面显示，内容是当前登录人姓名+劳务公司 ── */
+        /* ── 页面水印：公告栏/我的记录/我的考勤日历/提交申请/人脸信息/远程打卡这几个页面显示，内容是当前登录人姓名+劳务公司 ── */
         .page-watermark {
             position: fixed; inset: 0; z-index: 1035;
             pointer-events: none; user-select: none;
@@ -267,7 +264,7 @@
     string? watermarkBaseText = null;
     if (isAuth && currentUser != null)
     {
-        var watermarkPages = new[] { "/Notice/Board", "/Attendance/MyRecord", "/Attendance/MyCalendar", "/Approval/ApplySubmit" };
+        var watermarkPages = new[] { "/Notice/Board", "/Attendance/MyRecord", "/Attendance/MyCalendar", "/Approval/ApplySubmit", "/Employee/FaceEnroll", "/Attendance/RemotePunch" };
         if (watermarkPages.Any(p => currentPath.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
         {
             var wmText = string.Join("   ", new[] { currentUser.RealName, currentUser.ContractCompany }

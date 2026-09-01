@@ -3,7 +3,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Entities;
+using AttendanceSystem.Models.Enums;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -127,6 +129,98 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
             .Select(g => new AssignmentRow(g.Key.WorkDate, g.Key.ShiftName, g.Key.Color,
                 g.Select(x => x.RealName).OrderBy(n => n).ToList()))
             .ToList();
+    }
+
+    /// <summary>
+    /// 导出"排班记录"：所选组每个人在所选日期区间里，每天排的是哪个班次，没排班就留空并计入
+    /// "漏排班天数"（方便一眼看出有没有人漏排）。休息日/法定节假日（非调班补班）不算漏排——
+    /// 这两种"该不该算漏排"的判断口径跟 <see cref="AttendanceService.GenerateTemplateReportAsync"/>
+    /// 里"没排班时按全局周末兜底"的逻辑保持一致：没有排班就不知道这个人具体哪天该休，
+    /// 只能退一步按公司通用的"周六周日 + 假期表"来判断，不是真的按每个人的班次休息日精确算。
+    /// </summary>
+    public async Task<IActionResult> OnGetExportAsync(int[]? groupIds, string? viewStart, string? viewEnd)
+    {
+        var selectedGroupIds = (groupIds is { Length: > 0 }) ? groupIds.Where(id => id > 0).Distinct().ToList() : [];
+        if (selectedGroupIds.Count == 0) { ErrorMessage = "请先勾选至少一个考勤组"; return RedirectToSelf(viewStart, viewEnd, selectedGroupIds); }
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var start = DateOnly.TryParse(viewStart, out var vs) ? vs : today;
+        var end   = DateOnly.TryParse(viewEnd,   out var ve) ? ve : today.AddDays(30);
+        if (end < start) end = start;
+        if (end.DayNumber - start.DayNumber > 366) { ErrorMessage = "导出的日期范围不能超过 366 天"; return RedirectToSelf(viewStart, viewEnd, selectedGroupIds); }
+
+        var dates = new List<DateOnly>();
+        for (var d = start; d <= end; d = d.AddDays(1)) dates.Add(d);
+
+        var members = await db.Users
+            .Include(u => u.AttendanceGroup)
+            .Include(u => u.Department)
+            .Where(u => u.IsActive && u.AttendanceGroupId != null && selectedGroupIds.Contains(u.AttendanceGroupId.Value))
+            .OrderBy(u => u.AttendanceGroup!.GroupName).ThenBy(u => u.RealName)
+            .ToListAsync();
+        if (members.Count == 0) { ErrorMessage = "所选考勤组内没有在职员工"; return RedirectToSelf(viewStart, viewEnd, selectedGroupIds); }
+
+        var userIds = members.Select(u => u.Id).ToList();
+        var assignByUser = (await db.ShiftAssignments
+                .Include(a => a.ShiftSchedule)
+                .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end)
+                .ToListAsync())
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(a => a.WorkDate));
+
+        var holidays = await db.Holidays
+            .Where(h => h.HolidayDate >= start && h.HolidayDate <= end
+                     && (h.AttendanceGroupId == null || selectedGroupIds.Contains(h.AttendanceGroupId.Value)))
+            .ToListAsync();
+
+        var rows = new List<(string RealName, string EmployeeNo, string GroupName, string? DeptName, List<string?> DailyShiftName, List<bool> DailyMissing, int MissingCount)>();
+        foreach (var user in members)
+        {
+            var assignByDate = assignByUser.GetValueOrDefault(user.Id) ?? new Dictionary<DateOnly, ShiftAssignment>();
+            var myHolidays   = holidays.Where(h => h.AttendanceGroupId == null || h.AttendanceGroupId == user.AttendanceGroupId).ToList();
+
+            var dailyShiftName = new List<string?>();
+            var dailyMissing   = new List<bool>();
+            var missingCount = 0;
+            foreach (var date in dates)
+            {
+                if (user.HireDate is { } hireDate && date < hireDate)
+                {
+                    dailyShiftName.Add(null);   // 还没入职，不算漏排
+                    dailyMissing.Add(false);
+                    continue;
+                }
+                if (assignByDate.TryGetValue(date, out var assign))
+                {
+                    dailyShiftName.Add(assign.ShiftSchedule.ShiftName);
+                    dailyMissing.Add(false);
+                    continue;
+                }
+
+                var holiday      = myHolidays.FirstOrDefault(h => h.HolidayDate == date);
+                var isCompDay    = holiday?.HolidayType == HolidayType.CompensatoryWorkDay;
+                var isHolidayOff = holiday is not null && !isCompDay;
+                var isWeekendOff = !isCompDay && date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+                dailyShiftName.Add(null);
+                if (isHolidayOff || isWeekendOff)
+                {
+                    dailyMissing.Add(false);   // 休息日/节假日，不算漏排
+                }
+                else
+                {
+                    dailyMissing.Add(true);    // 正常工作日却没排班 → 漏排，格子会标红
+                    missingCount++;
+                }
+            }
+
+            rows.Add((user.RealName, user.EmployeeNo, user.AttendanceGroup!.GroupName,
+                user.Department?.DeptName, dailyShiftName, dailyMissing, missingCount));
+        }
+
+        var bytes = ExcelExportHelper.ExportShiftAssignments(dates, rows);
+        return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"排班记录_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
 
     /// <summary>保存班次（新增/修改）。班次归属所选的某个考勤组。</summary>
@@ -314,9 +408,15 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     /// 提交后重定向回本页，保持当前选中的考勤组（手动拼 ?groupIds=1&amp;groupIds=2，
     /// 避免 RedirectToPage 对集合路由值处理不一致导致多选丢失）。
     /// </summary>
-    private IActionResult RedirectToSelf(string? viewStart = null, string? viewEnd = null)
+    /// <summary>
+    /// groupIds 不传时用 CtxGroupIds（POST 表单场景，[BindProperty] 会自动绑上）；
+    /// GET 处理方法（比如 OnGetExportAsync）里 [BindProperty] 不会绑定，必须显式把当次请求
+    /// 实际收到的 groupIds 传进来，不然重定向会把已选的考勤组弄丢，退回到默认只选第一个组。
+    /// </summary>
+    private IActionResult RedirectToSelf(string? viewStart = null, string? viewEnd = null, IEnumerable<int>? groupIds = null)
     {
-        var parts = CtxGroupIds.Where(id => id > 0).Select(id => $"groupIds={id}").ToList();
+        var ids   = (groupIds ?? CtxGroupIds).Where(id => id > 0);
+        var parts = ids.Select(id => $"groupIds={id}").ToList();
         if (!string.IsNullOrEmpty(viewStart)) parts.Add("viewStart=" + viewStart);
         if (!string.IsNullOrEmpty(viewEnd))   parts.Add("viewEnd=" + viewEnd);
         var url = "/Admin/ShiftManage" + (parts.Count > 0 ? "?" + string.Join("&", parts) : "");

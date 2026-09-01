@@ -39,41 +39,56 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         decimal? businessTripDuration = dto.BusinessTripStartTime.HasValue && dto.BusinessTripEndTime.HasValue
             ? (decimal)(dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays : null;
 
-        // 组装一张申请单
-        var request = new ApprovalRequest
+        // 组装一张申请单。单号（RequestNo）是"当天第几单"数出来的，两个人几乎同时提交、
+        // 都数到同一个"第几单"的话，单号会撞上数据库的唯一索引导致存不进去——这种情况概率很低，
+        // 但请假高峰期（比如放假前）不是不可能发生，所以套一层重试：撞了就重新数一次单号再试。
+        ApprovalRequest? request = null;
+        const int maxAttempts = 3;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            RequestNo          = await GenerateRequestNoAsync(dto.ApprovalType),   // 生成单号
-            ApplicantUserId    = applicantUserId,
-            ApprovalType       = dto.ApprovalType,
-            ApprovalStatus     = ApprovalStatus.Pending,
-            PunchDate          = dto.PunchDate,
-            PunchType          = dto.PunchType,
-            PunchTime          = dto.PunchTime,
-            LeaveType          = dto.LeaveType,
-            LeaveStartTime     = dto.LeaveStartTime,
-            LeaveEndTime       = dto.LeaveEndTime,
-            LeaveDurationHours = leaveDuration,
-            OvertimeStartTime  = dto.OvertimeStartTime,
-            OvertimeEndTime    = dto.OvertimeEndTime,
-            OvertimeDurationHours = overtimeDuration,
-            BusinessTripStartTime    = dto.BusinessTripStartTime,
-            BusinessTripEndTime      = dto.BusinessTripEndTime,
-            BusinessTripDurationDays = businessTripDuration,
-            BusinessTripDestination  = dto.BusinessTripDestination,
-            Reason             = dto.Reason,
-            // 附件列表转成 JSON 文本存进一个字段
-            AttachmentUrls     = dto.AttachmentUrls.Count > 0
-                ? JsonSerializer.Serialize(dto.AttachmentUrls) : null,
-            SubmittedAt        = DateTime.Now,
-            UpdatedAt          = DateTime.Now
-        };
+            request = new ApprovalRequest
+            {
+                RequestNo          = await GenerateRequestNoAsync(dto.ApprovalType),   // 生成单号
+                ApplicantUserId    = applicantUserId,
+                ApprovalType       = dto.ApprovalType,
+                ApprovalStatus     = ApprovalStatus.Pending,
+                PunchDate          = dto.PunchDate,
+                PunchType          = dto.PunchType,
+                PunchTime          = dto.PunchTime,
+                LeaveType          = dto.LeaveType,
+                LeaveStartTime     = dto.LeaveStartTime,
+                LeaveEndTime       = dto.LeaveEndTime,
+                LeaveDurationHours = leaveDuration,
+                OvertimeStartTime  = dto.OvertimeStartTime,
+                OvertimeEndTime    = dto.OvertimeEndTime,
+                OvertimeDurationHours = overtimeDuration,
+                BusinessTripStartTime    = dto.BusinessTripStartTime,
+                BusinessTripEndTime      = dto.BusinessTripEndTime,
+                BusinessTripDurationDays = businessTripDuration,
+                BusinessTripDestination  = dto.BusinessTripDestination,
+                Reason             = dto.Reason,
+                // 附件列表转成 JSON 文本存进一个字段
+                AttachmentUrls     = dto.AttachmentUrls.Count > 0
+                    ? JsonSerializer.Serialize(dto.AttachmentUrls) : null,
+                SubmittedAt        = DateTime.Now,
+                UpdatedAt          = DateTime.Now
+            };
 
-        db.ApprovalRequests.Add(request);
-        await db.SaveChangesAsync();   // 先存单子，拿到它的 Id
+            db.ApprovalRequests.Add(request);
+            try
+            {
+                await db.SaveChangesAsync();   // 先存单子，拿到它的 Id
+                break;   // 存成功，跳出重试
+            }
+            catch (DbUpdateException) when (attempt < maxAttempts)
+            {
+                db.ChangeTracker.Clear();   // 丢弃这次没存成功的单号冲突记录，下一轮重新数一次单号
+            }
+        }
 
-        await CreateApprovalStepsAsync(request, user, dto.ApproverUserId);   // 建审批节点
-        await NotifyApproversAsync(request);             // 通知第一个审批人
-        return request;
+        await CreateApprovalStepsAsync(request!, user, dto.ApproverUserId);   // 建审批节点
+        await NotifyApproversAsync(request!);             // 通知第一个审批人
+        return request!;
     }
 
     /// <summary>

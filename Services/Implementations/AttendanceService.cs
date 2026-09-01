@@ -36,11 +36,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         // 跨天（夜班）班次是"18:00 上班、次日凌晨下班"，打下班卡时日历已经翻到第二天了：
         // 不能直接拿"打卡这一刻的日历日期"去找/建记录，否则会把下班时间分裂成单独一条新记录，
         // 原来那条上班记录永远缺下班时间（会被判成"未打卡"），工时也永远算不出来。
-        // 做法：下班卡优先续上"昨天已打上班卡、还没打下班卡"的记录——但只在昨天排的确实是跨天班次时才续，
-        // 避免把员工真的忘记打卡的旧记录（普通白班）误接到今天的下班卡上。
+        // 做法：下班卡（以及夜班过了午夜之后打的午间必打卡）优先续上"昨天已打上班卡、还没打下班卡"的记录——
+        // 但只在昨天排的确实是跨天班次时才续，避免把员工真的忘记打卡的旧记录（普通白班）误接到今天的打卡上。
+        // 午间打卡也要一起处理：不然夜班配的午间窗口如果落在凌晨（比如 02:00~03:00），
+        // 这次打卡会被错误地记到"今天"这条本来就不该存在的新记录上，还会连带影响漏打卡窗口的判定。
         var workDate         = today;
         AttendanceRecord? openYesterdayRecord = null;
-        if (request.PunchType == PunchType.ClockOut)
+        if (request.PunchType is PunchType.ClockOut or PunchType.MidCheck)
         {
             var yesterday = today.AddDays(-1);
             var candidate = await db.AttendanceRecords.FirstOrDefaultAsync(r =>
@@ -143,11 +145,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         {
             record.ClockOutTime = punchTime;
             status = CalcClockOutStatus(workDate, punchTime, shift, out var earlyMin);  // 算是否早退
+            record.EarlyLeaveMinutes = earlyMin;
+            // 只在当天状态还是"正常/早退/未打卡"这种由打卡本身决定的状态时才更新——
+            // "未打卡"要能被这次下班打卡覆盖掉（既然真的打了下班卡，就不再是"未打卡"了）；
+            // 已经迟到的不会被这次的下班状态覆盖掉，请假/出差/节假日/旷工这些状态也不受影响。
+            if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
+                record.AttendanceStatus = status;
             if (earlyMin > 0)
             {
-                record.EarlyLeaveMinutes = earlyMin;
-                if (record.AttendanceStatus == AttendanceStatus.Normal)   // 没迟到才把状态改成早退
-                    record.AttendanceStatus = AttendanceStatus.EarlyLeave;
                 message = $"下班打卡成功，早退 {earlyMin} 分钟";
             }
             else
@@ -848,12 +853,18 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             for (var d = sd; d <= ed; d = d.AddDays(1))   // 请假区间内每一天
             {
-                if (recordsInRange.TryGetValue(d, out var record))
+                // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
+                // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
+                if (!recordsInRange.TryGetValue(d, out var record))
                 {
-                    record.AttendanceStatus = AttendanceStatus.OnLeave;
-                    record.ApprovalNote     = $"请假审批通过（{approval.RequestNo}）";
-                    record.UpdatedAt        = DateTime.Now;
+                    record = new AttendanceRecord { UserId = approval.ApplicantUserId, WorkDate = d };
+                    db.AttendanceRecords.Add(record);
+                    recordsInRange[d] = record;
                 }
+
+                record.AttendanceStatus = AttendanceStatus.OnLeave;
+                record.ApprovalNote     = $"请假审批通过（{approval.RequestNo}）";
+                record.UpdatedAt        = DateTime.Now;
             }
         }
         // ── 出差 ──：出差期间不用打卡，逐天置为「出差」并按全勤记工时（工资按工时结算，不能漏记）
@@ -1049,6 +1060,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var dt = workDate.ToDateTime(time);
         if (shift.IsCrossDay && time < shift.WorkStartTime) dt = dt.AddDays(1);
         return dt;
+    }
+
+    /// <summary>某个打卡时刻是否落在班次配置的任意一段"午间必打卡"窗口内，没配班次/没配窗口一律算不在。
+    /// 供考勤机同步（ZKDeviceSyncService）判断"这次打卡算午间打卡还是下班"复用，避免两处各写一套判断逻辑、日后改窗口匹配规则时漏改一处。</summary>
+    public static bool IsWithinAnyMidCheckWindow(DateTime time, DateOnly workDate, ShiftSchedule? shift)
+    {
+        if (shift is null) return false;
+        return shift.ParseMidCheckWindows().Any(w =>
+            time >= ResolveShiftTime(workDate, w.Start, shift) &&
+            time <= ResolveShiftTime(workDate, w.End, shift));
     }
 
     /// <summary>
