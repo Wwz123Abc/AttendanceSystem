@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Options;
 
 namespace AttendanceSystem.Pages.Employee;
@@ -65,9 +66,9 @@ public class FaceEnrollModel(AttendanceDbContext db, IWebHostEnvironment env, IO
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
             throw new InvalidOperationException("人脸照片只支持 jpg / png / webp 格式");
 
-        var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
-        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-        var dir        = Path.Combine(webRoot, uploadPath, "faces", CurrentUserId.ToString());
+        var uploadPath  = appOptions.Value.UploadPath.Trim('/', '\\');
+        var privateRoot = PrivateFileStorage.GetRoot(env);   // 人脸照片是敏感文件，存在 wwwroot 之外，见 PrivateFilesController
+        var dir         = Path.Combine(privateRoot, uploadPath, "faces", CurrentUserId.ToString());
         Directory.CreateDirectory(dir);
 
         var fileName = $"{Guid.NewGuid():N}{ext}";
@@ -77,7 +78,7 @@ public class FaceEnrollModel(AttendanceDbContext db, IWebHostEnvironment env, IO
 
         if (!string.IsNullOrEmpty(oldUrl))   // 换了新照片，把旧文件删掉
         {
-            var oldPath = Path.Combine(webRoot, oldUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            var oldPath = Path.Combine(privateRoot, oldUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
             if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
         }
 

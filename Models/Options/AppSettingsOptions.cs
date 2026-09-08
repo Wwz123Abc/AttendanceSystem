@@ -7,11 +7,14 @@ public class AppSettingsOptions
 {
     public const string SectionName = "AppSettings";
 
-    /// <summary>新员工默认初始密码。这里是代码兜底值，appsettings.json 里配置的值优先。</summary>
-    public string DefaultPassword { get; set; } = "123456";
-
     /// <summary>登录有效期（小时）。</summary>
     public int TokenExpireHours { get; set; } = 8;
+
+    /// <summary>连续登录失败几次就临时锁定账号。</summary>
+    public int MaxFailedLoginAttempts { get; set; } = 5;
+
+    /// <summary>触发锁定后，锁定多少分钟（过了自动解锁，不需要人工处理）。</summary>
+    public int LoginLockoutMinutes { get; set; } = 15;
 
     /// <summary>上传文件根目录（相对 wwwroot）。</summary>
     public string UploadPath { get; set; } = "uploads";

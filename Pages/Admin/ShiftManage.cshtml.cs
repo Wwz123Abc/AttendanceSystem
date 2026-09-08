@@ -4,8 +4,10 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -13,9 +15,10 @@ namespace AttendanceSystem.Pages.Admin;
 /// 班次与排班管理页：
 /// ● 支持「多选考勤组」→ 合并这些组的成员；
 /// ● 可在合并名单里「跨组勾选」部分人，一起排到同一个班次+日期区间（工作调动/混排）。
+/// 分公司管理员只能选自己范围内的考勤组。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class ShiftManageModel(AttendanceDbContext db) : PageModel
+public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService) : PageModel
 {
     public List<AttendanceGroup> Groups           { get; set; } = [];   // 所有考勤组（多选用）
     public List<int>             SelectedGroupIds  { get; set; } = [];   // 当前选中的考勤组
@@ -86,10 +89,18 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     /// <summary>打开页面：加载考勤组、选中组的班次/合并成员/排班记录。</summary>
     public async Task OnGetAsync(int[]? groupIds = null, string? viewStart = null, string? viewEnd = null)
     {
-        Groups = await db.AttendanceGroups.Where(g => g.IsActive).OrderBy(g => g.GroupName).ToListAsync();
+        var cu = HttpContext.GetCurrentUser()!;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+
+        var allGroups = await db.AttendanceGroups.Include(g => g.Departments)
+            .Where(g => g.IsActive).OrderBy(g => g.GroupName).ToListAsync();
+        Groups = visibleIds is null
+            ? allGroups
+            : allGroups.Where(g => g.Departments.Count == 0 || g.Departments.Any(d => visibleIds.Contains(d.Id))).ToList();
+        var groupIdWhitelist = Groups.Select(g => g.Id).ToHashSet();
 
         SelectedGroupIds = (groupIds is { Length: > 0 })
-            ? groupIds.Where(id => id > 0).Distinct().ToList()
+            ? groupIds.Where(id => id > 0 && groupIdWhitelist.Contains(id)).Distinct().ToList()
             : (Groups.FirstOrDefault() is { } fg ? [fg.Id] : []);
 
         var today = DateOnly.FromDateTime(DateTime.Today);
@@ -140,7 +151,11 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     /// </summary>
     public async Task<IActionResult> OnGetExportAsync(int[]? groupIds, string? viewStart, string? viewEnd)
     {
-        var selectedGroupIds = (groupIds is { Length: > 0 }) ? groupIds.Where(id => id > 0).Distinct().ToList() : [];
+        var cu = HttpContext.GetCurrentUser()!;
+        var requested = (groupIds is { Length: > 0 }) ? groupIds.Where(id => id > 0).Distinct().ToList() : [];
+        var selectedGroupIds = new List<int>();
+        foreach (var gid in requested)
+            if (await IsGroupInScopeAsync(cu, gid)) selectedGroupIds.Add(gid);
         if (selectedGroupIds.Count == 0) { ErrorMessage = "请先勾选至少一个考勤组"; return RedirectToSelf(viewStart, viewEnd, selectedGroupIds); }
 
         var today = DateOnly.FromDateTime(DateTime.Today);
@@ -229,6 +244,16 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
         try
         {
             if (GroupId == 0) throw new Exception("请选择该班次所属的考勤组");
+            var cu = HttpContext.GetCurrentUser()!;
+            if (!await IsGroupWritableAsync(cu, GroupId))
+                throw new Exception("无权在该考勤组下设置班次");
+            if (ShiftId != 0)
+            {
+                var existingGroupId = await db.ShiftSchedules.Where(s => s.Id == ShiftId)
+                    .Select(s => (int?)s.AttendanceGroupId).FirstOrDefaultAsync();
+                if (existingGroupId.HasValue && !await IsGroupWritableAsync(cu, existingGroupId.Value))
+                    throw new Exception("无权编辑该班次");
+            }
             // 先判断原始值是否为空，再 Trim：字段留空提交时模型绑定会把它转成 null，直接 Trim() 会抛空引用异常
             if (string.IsNullOrWhiteSpace(ShiftName)) throw new Exception("请填写班次名称");
             var name = ShiftName.Trim();
@@ -320,8 +345,38 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
     public async Task<IActionResult> OnPostDeleteShiftAsync(int id)
     {
         var s = await db.ShiftSchedules.FindAsync(id);
-        if (s is not null) { s.IsActive = false; s.UpdatedAt = DateTime.Now; await db.SaveChangesAsync(); }
+        if (s is not null)
+        {
+            if (!await IsGroupWritableAsync(HttpContext.GetCurrentUser()!, s.AttendanceGroupId))
+            { ErrorMessage = "无权删除该班次"; return RedirectToSelf(); }
+            s.IsActive = false; s.UpdatedAt = DateTime.Now; await db.SaveChangesAsync();
+        }
         return RedirectToSelf();
+    }
+
+    /// <summary>某个考勤组是否在当前登录者的管理范围内（口径跟 GroupManage 页一致）。</summary>
+    private async Task<bool> IsGroupInScopeAsync(CurrentUser cu, int groupId)
+    {
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return true;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        return deptIds.Any(id => visibleIds!.Contains(id));
+    }
+
+    /// <summary>某个考勤组是否允许当前登录者"写"（新增/修改/停用挂在这个组下的班次配置）：不受限一律
+    /// 可以；受限管理员只能写"关联部门都在自己范围内"的组——完全没关联部门的全局/共享考勤组（可能有
+    /// 多个分公司在用）只有总部管理员能改班次配置，避免分公司管理员动了别的分公司也在用的共用班次。
+    /// 注意：这个限制只管"改配置"，不管"用这个班次给自己范围内的员工排班"（见 OnPostAssignAsync 仍然
+    /// 用 IsGroupInScopeAsync）——日常排班是在用共用配置，不是在改共用配置。</summary>
+    private async Task<bool> IsGroupWritableAsync(CurrentUser cu, int groupId)
+    {
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return false;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        // 必须是"关联部门都在自己范围内"才能写（All，不是 Any）——否则跨司共用组会变成双方受限管理员都能改
+        return deptIds.All(id => visibleIds!.Contains(id));
     }
 
     /// <summary>批量排班：给勾选的员工（可跨多个组）在日期区间内每天排上指定班次。</summary>
@@ -336,14 +391,36 @@ public class ShiftManageModel(AttendanceDbContext db) : PageModel
                 throw new Exception("日期格式不正确");
             if (end < start)
                 throw new Exception("结束日期不能早于开始日期");
-            _ = await db.ShiftSchedules.FindAsync(AssignShiftId) ?? throw new Exception("班次不存在");
+            var shift = await db.ShiftSchedules.FindAsync(AssignShiftId) ?? throw new Exception("班次不存在");
+
+            var cu = HttpContext.GetCurrentUser()!;
+            if (!await IsGroupInScopeAsync(cu, shift.AttendanceGroupId))
+                throw new Exception("无权使用该班次排班");
+
+            // 受限管理员：只能选自己范围内的考勤组/员工来排班，绕过界面直接 POST 别的分公司的
+            // 组 id/员工 id 都会在这里被过滤掉
+            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+            var ctxGroupIds = CtxGroupIds;
+            if (visibleIds is not null)
+            {
+                var allowedGroupIds = (await db.AttendanceGroups.Include(g => g.Departments).ToListAsync())
+                    .Where(g => g.Departments.Count == 0 || g.Departments.Any(d => visibleIds.Contains(d.Id)))
+                    .Select(g => g.Id).ToHashSet();
+                ctxGroupIds = ctxGroupIds.Where(allowedGroupIds.Contains).ToList();
+            }
 
             // 勾了“所选组全部成员”就取选中组的全部在职员工；否则用勾选的人（可跨组混排）
             List<int> userIds = AssignAll
                 ? await db.Users.Where(u => u.IsActive && u.AttendanceGroupId != null
-                                         && CtxGroupIds.Contains(u.AttendanceGroupId.Value))
+                                         && ctxGroupIds.Contains(u.AttendanceGroupId.Value))
                                 .Select(u => u.Id).ToListAsync()
                 : AssignUserIds.Distinct().ToList();
+            if (visibleIds is not null)
+            {
+                var allowedUserIds = await db.Users.Where(u => u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value))
+                    .Select(u => u.Id).ToListAsync();
+                userIds = userIds.Where(allowedUserIds.Contains).ToList();
+            }
 
             if (userIds.Count == 0)
                 throw new Exception("请至少勾选一名员工，或勾选「所选组全部成员」");

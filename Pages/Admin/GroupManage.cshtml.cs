@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
@@ -13,11 +14,14 @@ namespace AttendanceSystem.Pages.Admin;
 /// <summary>
 /// 考勤组管理页：考勤组的新增/修改/启停，统计各组在职人数；
 /// 支持配一个或多个打卡地点、勾选长期跟随本组的部门（替代以前"一个部门一个考勤组"的自动同步）。
+/// 分公司管理员只能看到/管理"关联部门落在自己范围内"的考勤组（还没关联任何部门的组，当成
+/// 全公司通用组，所有管理员都能看到——跟节假日管理里"不挂考勤组的假期全公司通用"是同一个口径）。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
 public class GroupManageModel(
     AttendanceDbContext db,
     IAttendanceGroupService groupService,
+    IDeptScopeService deptScopeService,
     IOptions<AMapOptions> amapOptions) : PageModel
 {
     /// <summary>高德地图 Web端(JS API) Key（配置了才会在页面上加载地图选点功能）。</summary>
@@ -74,9 +78,15 @@ public class GroupManageModel(
     /// <summary>打开页面：列出所有考勤组、每组在职人数/审批人/所属部门/打卡地点，及可选的审批人、部门树。</summary>
     public async Task OnGetAsync()
     {
-        var groups = await db.AttendanceGroups
+        var cu = HttpContext.GetCurrentUser()!;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+
+        var groups = await db.AttendanceGroups.Include(g => g.Departments)
             .OrderBy(g => g.GroupName)
             .ToListAsync();
+        if (visibleIds is not null)
+            groups = groups.Where(g => g.Departments.Count == 0 || g.Departments.Any(d => visibleIds.Contains(d.Id))).ToList();
+
         // 按考勤组分组，数出每组多少在职人
         var userCounts = await db.Users
             .Where(u => u.IsActive && u.AttendanceGroupId != null)
@@ -90,11 +100,13 @@ public class GroupManageModel(
         // 能当审批人的人：以后新增只能选"班组长"角色（一级审批人）；
         // 但存量已经配置成审批人的历史数据（哪怕角色不是班组长）也要留在候选名单里，
         // 保证编辑这个组的其它字段、保存时不会把这些人悄悄清掉——只有管理员自己手动取消勾选才会移除。
+        // 受限管理员只能选自己范围内的人当审批人（不能跨分公司指定审批人）。
         var legacyApproverIds = await db.AttendanceGroupApprovers.Select(a => a.UserId).Distinct().ToListAsync();
-        ApproverOptions = await db.Users
-            .Where(u => u.IsActive && (u.Role == Models.Enums.UserRole.TeamLeader || legacyApproverIds.Contains(u.Id)))
-            .OrderBy(u => u.RealName)
-            .ToListAsync();
+        var approverQuery = db.Users
+            .Where(u => u.IsActive && (u.Role == Models.Enums.UserRole.TeamLeader || legacyApproverIds.Contains(u.Id)));
+        if (visibleIds is not null)
+            approverQuery = approverQuery.Where(u => u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value));
+        ApproverOptions = await approverQuery.OrderBy(u => u.RealName).ToListAsync();
 
         // 每个考勤组已经配了哪些审批人，用于编辑时勾选回显
         GroupApproverIds = (await db.AttendanceGroupApprovers.ToListAsync())
@@ -106,13 +118,16 @@ public class GroupManageModel(
             .GroupBy(l => l.AttendanceGroupId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        await LoadDeptTreeAsync();
+        await LoadDeptTreeAsync(cu, visibleIds);
     }
 
-    /// <summary>加载部门树（扁平化+层级深度），并按跟随的考勤组分组，供勾选框回显和"所属部门"列展示。</summary>
-    private async Task LoadDeptTreeAsync()
+    /// <summary>加载部门树（扁平化+层级深度），并按跟随的考勤组分组，供勾选框回显和"所属部门"列展示；
+    /// 受限管理员只看到自己范围内的部门。</summary>
+    private async Task LoadDeptTreeAsync(CurrentUser cu, HashSet<int>? visibleIds)
     {
-        var depts   = await db.Departments.Where(d => d.IsActive).OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
+        var depts = await db.Departments.Where(d => d.IsActive).OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
+        if (visibleIds is not null)
+            depts = depts.Where(d => visibleIds.Contains(d.Id)).ToList();
         var byParent = depts.GroupBy(d => d.ParentId ?? 0).ToDictionary(g => g.Key, g => g.ToList());
 
         DeptTree = [];
@@ -125,12 +140,50 @@ public class GroupManageModel(
                 Walk(d.Id, depth + 1);
             }
         }
-        Walk(0, 0);
+        if (cu.IsScoped)
+        {
+            var root = depts.FirstOrDefault(d => d.Id == cu.ScopedDepartmentId!.Value);
+            if (root is not null)
+            {
+                DeptTree.Add(new DeptTreeNode(root.Id, root.ParentId, root.DeptName, 0, root.AttendanceGroupId));
+                Walk(root.Id, 1);
+            }
+        }
+        else
+        {
+            Walk(0, 0);
+        }
 
         GroupDepartmentIds = depts
             .Where(d => d.AttendanceGroupId.HasValue)
             .GroupBy(d => d.AttendanceGroupId!.Value)
             .ToDictionary(g => g.Key, g => g.Select(d => d.Id).ToList());
+    }
+
+    /// <summary>某个考勤组是否在当前登录者的管理范围内：不受限一律可以；受限的话，看这个组关联的部门
+    /// 有没有落在自己范围内——一个部门都没关联（还没分配给任何分公司）的组，当成全公司通用组，
+    /// 所有管理员都能看到/编辑（跟看板/节假日那边的口径一致）。</summary>
+    private async Task<bool> IsGroupInScopeAsync(CurrentUser cu, int groupId)
+    {
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return true;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        return deptIds.Any(id => visibleIds!.Contains(id));
+    }
+
+    /// <summary>某个考勤组是否允许当前登录者"写"（修改/停用/删除这个组本身）：不受限一律可以；
+    /// 受限管理员只能写"关联部门都在自己范围内"的组——完全没关联部门的全局/共享考勤组（可能有多个
+    /// 分公司在用）只有总部管理员能改，避免分公司管理员动了别的分公司也在用的共用配置（可见，但不能
+    /// 改，跟上面 IsGroupInScopeAsync 的"能看到"口径区分开）。</summary>
+    private async Task<bool> IsGroupWritableAsync(CurrentUser cu, int groupId)
+    {
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return false;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        // 必须是"关联部门都在自己范围内"才能写（All，不是 Any）——否则跨司共用组会变成双方受限管理员都能改
+        return deptIds.All(id => visibleIds!.Contains(id));
     }
 
     /// <summary>点“保存”：新增或修改考勤组。</summary>
@@ -149,6 +202,23 @@ public class GroupManageModel(
             if (loc.Longitude.Value is < -180 or > 180) { ErrorMessage = "打卡地点经度不正确（应在 -180 到 180 之间）"; await OnGetAsync(); return Page(); }
             if (loc.Radius is < 0 or > 5000) { ErrorMessage = "打卡范围半径请填 0-5000 米之间"; await OnGetAsync(); return Page(); }
             if (loc.Name?.Trim().Length > 200) { ErrorMessage = "打卡地点名称不能超过 200 个字"; await OnGetAsync(); return Page(); }
+        }
+
+        var cu = HttpContext.GetCurrentUser()!;
+        if (EditId != 0 && !await IsGroupWritableAsync(cu, EditId))
+        { ErrorMessage = "无权编辑该考勤组"; await OnGetAsync(); return Page(); }
+
+        // 受限管理员：勾选的审批人、跟随部门都必须在自己范围内——不能跨分公司指定审批人，
+        // 也不能把自己范围外的部门拉进来跟随这个组
+        if (cu.IsScoped)
+        {
+            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+            var approverDeptIds = await db.Users.Where(u => ApproverUserIds.Contains(u.Id))
+                .Select(u => u.DepartmentId).ToListAsync();
+            if (approverDeptIds.Any(id => !id.HasValue || !visibleIds!.Contains(id.Value)))
+            { ErrorMessage = "审批人必须是同一分公司范围内的人"; await OnGetAsync(); return Page(); }
+            if (SelectedDeptIds.Any(id => !visibleIds!.Contains(id)))
+            { ErrorMessage = "只能勾选自己管理范围内的部门"; await OnGetAsync(); return Page(); }
         }
 
         try
@@ -231,6 +301,8 @@ public class GroupManageModel(
     /// <summary>点“启用/停用”：切换某考勤组的启停状态。</summary>
     public async Task<IActionResult> OnPostToggleAsync(int id)
     {
+        var cu = HttpContext.GetCurrentUser()!;
+        if (!await IsGroupWritableAsync(cu, id)) return RedirectToPage();
         var g = await db.AttendanceGroups.FindAsync(id);
         if (g is not null) { g.IsActive = !g.IsActive; g.UpdatedAt = DateTime.Now; await db.SaveChangesAsync(); }
         return RedirectToPage();
@@ -245,6 +317,10 @@ public class GroupManageModel(
     {
         try
         {
+            var cu = HttpContext.GetCurrentUser()!;
+            if (!await IsGroupWritableAsync(cu, id))
+                throw new InvalidOperationException("无权删除该考勤组");
+
             var g = await db.AttendanceGroups.FindAsync(id);
             if (g is null) { ErrorMessage = "该考勤组不存在"; }
             else

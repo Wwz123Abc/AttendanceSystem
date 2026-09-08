@@ -52,6 +52,10 @@ public class User
     /// <summary>直属上级（审批流默认的第一个审批人）</summary>
     public int? SupervisorUserId { get; set; }
 
+    /// <summary>范围限定部门（可空）：仅管理员/文员角色有意义。为空 = 不受限（总部超级管理员，能看/管
+    /// 全公司数据）；有值 = 只能看/管这个部门及其所有下级部门范围内的数据（俗称"分公司管理员"）。</summary>
+    public int? ScopedDepartmentId { get; set; }
+
     [MaxLength(20)]
     public string? Phone { get; set; }                      // 手机号
 
@@ -111,6 +115,16 @@ public class User
                                   : IsActive      ? EmployeeStatus.Active
                                   :                 EmployeeStatus.Disabled;
 
+    /// <summary>是否需要在下次登录后强制修改密码：新建账号（初始密码是随机生成的）、
+    /// 或被管理员重置过密码时会置 true；员工自己成功改密后清掉。</summary>
+    public bool MustChangePassword { get; set; } = false;
+
+    /// <summary>连续登录失败次数，达到上限会临时锁定账号（见 <see cref="LockedUntil"/>）；登录成功清零。</summary>
+    public int FailedLoginCount { get; set; } = 0;
+
+    /// <summary>账号被临时锁定到什么时候（连续输错密码太多次触发）；过了这个时间点自动解锁，不需要人工处理。</summary>
+    public DateTime? LockedUntil { get; set; }
+
     public DateTime? LastLoginAt { get; set; }              // 最后一次登录时间
 
     public DateTime CreatedAt { get; set; } = DateTime.Now; // 这条记录的创建时间
@@ -126,8 +140,12 @@ public class User
     [ForeignKey("SupervisorUserId")]
     public User? Supervisor { get; set; }                   // 他的直属上级（也是一个 User）
 
+    [ForeignKey("ScopedDepartmentId")]
+    public Department? ScopedDepartment { get; set; }        // 他（如果是管理员/文员）被限定的管理范围
+
     public ICollection<AttendanceRecord>  AttendanceRecords  { get; set; } = [];  // 他的所有考勤日记录
     public ICollection<ApprovalRequest>   ApprovalRequests   { get; set; } = [];  // 他提交的所有审批申请
     public ICollection<ShiftAssignment>   ShiftAssignments   { get; set; } = [];  // 他的所有排班
     public ICollection<Notification>      Notifications      { get; set; } = [];  // 他收到的所有通知
+    public ICollection<UserZKDevice>      UserZKDevices      { get; set; } = [];  // 他被指定推送到的考勤机
 }

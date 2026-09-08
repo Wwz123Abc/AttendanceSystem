@@ -4,6 +4,7 @@
     ViewData["Title"] = "公告栏";
     var unreadCount = Model.Items.Count(i => !i.IsRead);
 }
+@Html.AntiForgeryToken()
 
 <div class="page-header">
     <h4><i class="bi bi-megaphone me-2 text-primary"></i>公告栏
@@ -79,7 +80,15 @@ noticeDetailModal.addEventListener('show.bs.modal', function (e) {
     const card = e.relatedTarget;
     card.classList.remove('border-primary');
     card.querySelector('.badge.bg-danger')?.remove();
-    fetch(`?handler=MarkRead&id=${id}`).catch(() => {});
+    // 标记已读会改变服务端数据，改用 POST + 防伪令牌（跟页面上其它几处 GET 的 ?handler= 只读查询不一样，
+    // 这个会写库，不能只靠 SameSite=Lax 兜底）。项目没有单独配置防伪令牌走请求头（HeaderName），
+    // 用默认的表单字段方式提交，跟 Razor Pages 表单自动生成的 <form> 提交方式一致。
+    const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
+    fetch(`?handler=MarkRead&id=${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `__RequestVerificationToken=${encodeURIComponent(token || '')}`
+    }).catch(() => {});
 });
 </script>
 }

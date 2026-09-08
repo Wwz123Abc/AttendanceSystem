@@ -13,4 +13,9 @@ public class ZKDeviceOptions
 
     /// <summary>单次心跳最多带多少条待下发命令，避免批量导入/批量停用时一次性命令太多，设备处理不过来。</summary>
     public int MaxCommandsPerHeartbeat { get; set; } = 50;
+
+    /// <summary>一条命令最多尝试下发几次（每次心跳带给设备算一次），超过这个次数还没等到设备确认，
+    /// 就不再重发了（标记 Failed）——设备大概率是彻底不认这条命令了（协议格式不对/设备已下线），
+    /// 无限重发只会让积压的旧命令一直占着 MaxCommandsPerHeartbeat 的名额，饿死新命令。</summary>
+    public int MaxSendAttempts { get; set; } = 5;
 }

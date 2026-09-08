@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Services.Interfaces;
 
@@ -8,12 +9,15 @@ namespace AttendanceSystem.Pages.Admin;
 
 /// <summary>管理后台首页：显示今日考勤看板（出勤、缺勤、迟到、请假等人数），支持点开卡片查看具体人员。</summary>
 [Authorize(Policy = "ManagePolicy")]
-public class DashboardModel(IAttendanceService attendanceService) : PageModel
+public class DashboardModel(IAttendanceService attendanceService, IDeptScopeService deptScopeService) : PageModel
 {
     public AttendanceStatsDto Stats { get; set; } = new();   // 看板统计数据
 
     public async Task OnGetAsync()
-        => Stats = await attendanceService.GetTodayStatsAsync();
+    {
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        Stats = await attendanceService.GetTodayStatsAsync(deptIds: visibleIds);
+    }
 
     /// <summary>
     /// 点开某张统计卡片时，AJAX 请求这里取该类别的具体人员名单。
@@ -21,7 +25,8 @@ public class DashboardModel(IAttendanceService attendanceService) : PageModel
     /// </summary>
     public async Task<JsonResult> OnGetDrilldownAsync(string category)
     {
-        var list = await attendanceService.GetTodayStatsDetailAsync(category);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var list = await attendanceService.GetTodayStatsDetailAsync(category, deptIds: visibleIds);
         return new JsonResult(new
         {
             Success = true,

@@ -561,6 +561,8 @@ namespace AttendanceSystem.Migrations
                     b.HasKey("Id")
                         .HasName("PK_AttendanceRecord");
 
+                    b.HasIndex("WorkDate");
+
                     b.HasIndex("UserId", "WorkDate")
                         .IsUnique();
 
@@ -664,6 +666,10 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("varchar(100)")
                         .HasColumnName("ContractCompany");
 
+                    b.Property<int?>("DepartmentId")
+                        .HasColumnType("int")
+                        .HasColumnName("DepartmentId");
+
                     b.Property<string>("EmergencyContactName")
                         .HasMaxLength(50)
                         .HasColumnType("varchar(50)")
@@ -729,6 +735,9 @@ namespace AttendanceSystem.Migrations
 
                     b.HasIndex("ConfirmedUserId")
                         .HasDatabaseName("IX_EmployeeRegistration_ConfirmedUserId");
+
+                    b.HasIndex("DepartmentId")
+                        .HasDatabaseName("IX_EmployeeRegistration_DepartmentId");
 
                     b.HasIndex("IdNumber");
 
@@ -1169,6 +1178,10 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("varchar(500)")
                         .HasColumnName("FaceReferencePhotoUrl");
 
+                    b.Property<int>("FailedLoginCount")
+                        .HasColumnType("int")
+                        .HasColumnName("FailedLoginCount");
+
                     b.Property<DateOnly?>("HireDate")
                         .HasColumnType("date")
                         .HasColumnName("HireDate");
@@ -1200,6 +1213,14 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("datetime(6)")
                         .HasColumnName("LastLoginAt");
 
+                    b.Property<DateTime?>("LockedUntil")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("LockedUntil");
+
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("MustChangePassword");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -1226,6 +1247,10 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("int")
                         .HasColumnName("Role");
 
+                    b.Property<int?>("ScopedDepartmentId")
+                        .HasColumnType("int")
+                        .HasColumnName("ScopedDepartmentId");
+
                     b.Property<int?>("SupervisorUserId")
                         .HasColumnType("int")
                         .HasColumnName("SupervisorUserId");
@@ -1240,8 +1265,7 @@ namespace AttendanceSystem.Migrations
                     b.HasIndex("AttendanceGroupId")
                         .HasDatabaseName("IX_User_AttendanceGroupId");
 
-                    b.HasIndex("DepartmentId")
-                        .HasDatabaseName("IX_User_DepartmentId");
+                    b.HasIndex("DepartmentId");
 
                     b.HasIndex("EmployeeNo")
                         .IsUnique();
@@ -1250,10 +1274,45 @@ namespace AttendanceSystem.Migrations
 
                     b.HasIndex("Phone");
 
+                    b.HasIndex("ScopedDepartmentId");
+
                     b.HasIndex("SupervisorUserId")
                         .HasDatabaseName("IX_User_SupervisorUserId");
 
                     b.ToTable("User");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.UserZKDevice", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("CreatedAt");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int")
+                        .HasColumnName("UserId");
+
+                    b.Property<int>("ZKDeviceId")
+                        .HasColumnType("int")
+                        .HasColumnName("ZKDeviceId");
+
+                    b.HasKey("Id")
+                        .HasName("PK_UserZKDevice");
+
+                    b.HasIndex("ZKDeviceId")
+                        .HasDatabaseName("IX_UserZKDevice_ZKDeviceId");
+
+                    b.HasIndex("UserId", "ZKDeviceId")
+                        .IsUnique();
+
+                    b.ToTable("UserZKDevice");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ZKDevice", b =>
@@ -1268,6 +1327,10 @@ namespace AttendanceSystem.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)")
                         .HasColumnName("CreatedAt");
+
+                    b.Property<int?>("DepartmentId")
+                        .HasColumnType("int")
+                        .HasColumnName("DepartmentId");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("tinyint(1)")
@@ -1290,6 +1353,9 @@ namespace AttendanceSystem.Migrations
 
                     b.HasKey("Id")
                         .HasName("PK_ZKDevice");
+
+                    b.HasIndex("DepartmentId")
+                        .HasDatabaseName("IX_ZKDevice_DepartmentId");
 
                     b.HasIndex("SN")
                         .IsUnique();
@@ -1324,19 +1390,23 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("datetime(6)")
                         .HasColumnName("CreatedAt");
 
+                    b.Property<bool>("Failed")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("Failed");
+
                     b.Property<string>("SN")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("varchar(50)")
                         .HasColumnName("SN");
 
-                    b.Property<bool>("Sent")
-                        .HasColumnType("tinyint(1)")
-                        .HasColumnName("Sent");
-
                     b.Property<DateTime?>("SentAt")
                         .HasColumnType("datetime(6)")
                         .HasColumnName("SentAt");
+
+                    b.Property<int>("SentCount")
+                        .HasColumnType("int")
+                        .HasColumnName("SentCount");
 
                     b.HasKey("Id")
                         .HasName("PK_ZKDeviceCommand");
@@ -1496,7 +1566,15 @@ namespace AttendanceSystem.Migrations
                         .OnDelete(DeleteBehavior.SetNull)
                         .HasConstraintName("FK_EmployeeRegistration_User_ConfirmedUserId");
 
+                    b.HasOne("AttendanceSystem.Models.Entities.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("FK_EmployeeRegistration_Department_DepartmentId");
+
                     b.Navigation("ConfirmedUser");
+
+                    b.Navigation("Department");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.FaceVerifyAttempt", b =>
@@ -1589,8 +1667,12 @@ namespace AttendanceSystem.Migrations
                     b.HasOne("AttendanceSystem.Models.Entities.Department", "Department")
                         .WithMany("Users")
                         .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.SetNull)
-                        .HasConstraintName("FK_User_Department_DepartmentId");
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("AttendanceSystem.Models.Entities.Department", "ScopedDepartment")
+                        .WithMany()
+                        .HasForeignKey("ScopedDepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("AttendanceSystem.Models.Entities.User", "Supervisor")
                         .WithMany()
@@ -1602,7 +1684,41 @@ namespace AttendanceSystem.Migrations
 
                     b.Navigation("Department");
 
+                    b.Navigation("ScopedDepartment");
+
                     b.Navigation("Supervisor");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.UserZKDevice", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.User", "User")
+                        .WithMany("UserZKDevices")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_UserZKDevice_User_UserId");
+
+                    b.HasOne("AttendanceSystem.Models.Entities.ZKDevice", "ZKDevice")
+                        .WithMany("UserZKDevices")
+                        .HasForeignKey("ZKDeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_UserZKDevice_ZKDevice_ZKDeviceId");
+
+                    b.Navigation("User");
+
+                    b.Navigation("ZKDevice");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.ZKDevice", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("FK_ZKDevice_Department_DepartmentId");
+
+                    b.Navigation("Department");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Announcement", b =>
@@ -1649,6 +1765,13 @@ namespace AttendanceSystem.Migrations
                     b.Navigation("Notifications");
 
                     b.Navigation("ShiftAssignments");
+
+                    b.Navigation("UserZKDevices");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.ZKDevice", b =>
+                {
+                    b.Navigation("UserZKDevices");
                 });
 #pragma warning restore 612, 618
         }

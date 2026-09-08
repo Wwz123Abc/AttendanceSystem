@@ -57,6 +57,17 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.ExpireTimeSpan    = TimeSpan.FromHours(appSettings.TokenExpireHours);  // 登录多久过期
         options.SlidingExpiration = true;                    // 有活动就自动续期
 
+        // 登录票据 Cookie：显式声明（跟 ASP.NET Core 默认值一致，只是不留给"没配置"的模糊状态）。
+        // HttpOnly=true：JS 读不到票据，挡 XSS 窃取会话；SameSite=Lax：跨站的 POST/AJAX 请求不会带上
+        // 这个 Cookie，是 CSRF 的第一道防线。SecurePolicy 暂时维持 SameAsRequest（HTTP 下也能登录）——
+        // 还没确认正式服 adt.colibri.com.cn:15080 前面是否有反向代理终结 HTTPS；等确认清楚整条链路
+        // 全程走 HTTPS 后，应该把这里改成 CookieSecurePolicy.Always（票据只在 HTTPS 下才会被发送，
+        // 防中间人窃取），并加 app.UseForwardedHeaders() + app.UseHttpsRedirection()，不要在没搞清楚
+        // 部署拓扑之前就贸然强制，否则反向代理配置不对会直接把所有人挡在登录页外面。
+        options.Cookie.HttpOnly     = true;
+        options.Cookie.SameSite     = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+
         // 网页请求没登录/无权限 → 跳转登录页（默认行为）；
         // 但 /api 接口请求不能跳转，否则调用方拿到的是 302 重定向而不是 401/403，
         // 无法正确判断“未登录”还是“无权限”（报表导出等接口调用方都靠状态码判断）。
@@ -101,6 +112,7 @@ builder.Services.AddScoped<IApprovalService,       ApprovalService>();
 builder.Services.AddScoped<IAttendanceGroupService, AttendanceGroupService>();
 builder.Services.AddScoped<IEmployeeRegistrationService, EmployeeRegistrationService>();
 builder.Services.AddScoped<IAnnouncementService,   AnnouncementService>();
+builder.Services.AddScoped<IDeptScopeService,      DeptScopeService>();
 
 // ── 阿里云人脸识别（打卡用：活体检测 + 1:1 人脸比对）────────────────────────────────
 builder.Services.Configure<AliyunFaceOptions>(

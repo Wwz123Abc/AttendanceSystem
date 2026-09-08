@@ -18,11 +18,19 @@ public sealed class CurrentUser
     public int?     DepartmentId      { get; init; }                    // 所属部门
     public string?  ContractCompany   { get; init; }                    // 劳务公司（合同公司，用于页面水印）
 
-    // 下面 3 个是便捷判断（页面里直接用，不用每次写一长串条件）
+    /// <summary>范围限定部门（仅管理员/文员有意义）：为空 = 不受限（总部超级管理员）；有值 = 只能看/管
+    /// 这个部门及其下级范围内的数据（"分公司管理员"）。故意每次请求都从数据库读（不放进登录 Cookie 的
+    /// claim），这样总部管理员改了某人的范围/把某人重新设成不受限，对方下一个请求就立刻生效，
+    /// 不用等到重新登录——跟 IsActive 停用踢线是同一个"每请求校验一次"的道理，这里本来就已经查库了，
+    /// 顺手带上这个字段幂等零成本。</summary>
+    public int?     ScopedDepartmentId { get; init; }
+
+    // 下面几个是便捷判断（页面里直接用，不用每次写一长串条件）
     public bool IsAdmin    => Role == UserRole.Admin;   // 是不是管理员
     public bool IsClerk    => Role == UserRole.Clerk;   // 是不是文员
     public bool CanApprove => Role is UserRole.Admin or UserRole.Clerk  // 有没有审批权限
                                    or UserRole.Supervisor or UserRole.TeamLeader;
+    public bool IsScoped   => ScopedDepartmentId.HasValue;   // 是不是"分公司管理员"（受部门范围限制）
 }
 
 // 「中间件」= 每个网络请求都会先经过的一道“关卡”。
@@ -38,17 +46,27 @@ public class CurrentUserMiddleware(RequestDelegate next)
             // 从 Cookie 的身份标签里取出用户编号
             var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "0");
 
-            // 去数据库查这个账号是否还“在职/有效”，顺便把劳务公司（水印要用）一起查出来
+            // 去数据库查这个账号是否还”在职/有效”，顺便把劳务公司（水印要用）、范围限定部门一起查出来；
+            // Role/DepartmentId/AttendanceGroupId 这三个以前是直接读 Cookie 里登录时签发的 claim，
+            // 总部把某人降权/调部门/调考勤组后，旧会话在 Cookie 有效期内会一直按旧值走，特别是”降权+
+            // 清空范围”这个组合：范围字段下一请求就生效了，但 Role 声明还是 Admin，会被 IsHqSuperAdmin
+            // （Role==Admin && !IsScoped）误判成不受限的总部超级管理员，反而是提权方向的窗口。现在这三个
+            // 也跟 ScopedDepartmentId 一样每请求查库，改了立刻生效，不用等重新登录。
             var info = await db.Users
                 .Where(u => u.Id == userId)
-                .Select(u => new { u.IsActive, u.ContractCompany })
+                .Select(u => new { u.IsActive, u.ContractCompany, u.ScopedDepartmentId, u.Role, u.DepartmentId, u.AttendanceGroupId })
                 .FirstOrDefaultAsync();
 
-            // 账号被停用或已删除 → 即使 Cookie 还没过期，也立刻登出并跳回登录页
+            // 账号被停用或已删除 → 即使 Cookie 还没过期，也立刻登出
             if (info?.IsActive != true)
             {
                 await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-                context.Response.Redirect("/Login?disabled=1");
+                // 网页请求跳回登录页；/api 接口请求不能跳转，否则调用方拿到的是 302 而不是 401，
+                // 判断不出来是"没登录"——跟 Program.cs 里登录 Cookie 的 OnRedirectToLogin 是同一个道理
+                if (context.Request.Path.StartsWithSegments("/api"))
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                else
+                    context.Response.Redirect("/Login?disabled=1");
                 return;   // 直接结束，不再往后走
             }
 
@@ -58,10 +76,11 @@ public class CurrentUserMiddleware(RequestDelegate next)
                 UserId            = userId,
                 EmployeeNo        = context.User.FindFirstValue(ClaimTypes.Name)     ?? "",
                 RealName          = context.User.FindFirstValue("RealName")           ?? "",
-                Role              = Enum.Parse<UserRole>(context.User.FindFirstValue(ClaimTypes.Role) ?? "Employee"),
-                AttendanceGroupId = context.User.FindFirstValue("AttendanceGroupId") is { } g ? int.Parse(g) : null,
-                DepartmentId      = context.User.FindFirstValue("DepartmentId")      is { } d ? int.Parse(d) : null,
-                ContractCompany   = info?.ContractCompany
+                Role              = info?.Role ?? UserRole.Employee,
+                AttendanceGroupId = info?.AttendanceGroupId,
+                DepartmentId      = info?.DepartmentId,
+                ContractCompany   = info?.ContractCompany,
+                ScopedDepartmentId = info?.ScopedDepartmentId
             };
         }
 

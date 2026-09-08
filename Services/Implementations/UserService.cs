@@ -2,9 +2,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.Implementations;
@@ -18,12 +20,16 @@ namespace AttendanceSystem.Services.Implementations;
 public class UserService(
     AttendanceDbContext db,
     IZKDeviceSyncService zkDeviceSyncService,
+    IOptions<AppSettingsOptions> appOptions,
+    IDeptScopeService deptScopeService,
     ILogger<UserService> logger) : IUserService
 {
-    /// <summary>校验工号+密码。成功返回用户；工号/密码错返回 null；账号停用则抛异常。</summary>
+    /// <summary>校验工号+密码。成功返回用户；工号/密码错、账号已停用、或账号被临时锁定，统一返回 null
+    /// （登录页看到的提示不区分这几种情况——区分开会让人拿不同提示反推出哪些工号是真实存在的账号，
+    /// 等于账号可被枚举）。</summary>
     public async Task<User?> ValidateLoginAsync(string employeeNo, string password)
     {
-        // 故意不在查询里过滤“在职”，这样才能区分“工号/密码错”和“账号被停用”两种情况
+        // 故意不在查询里过滤“在职”，好让下面能对"停用账号"单独记一条日志（对外仍然统一按失败处理）
         var user = await db.Users
             .Include(u => u.Department)
             .Include(u => u.AttendanceGroup)
@@ -31,33 +37,99 @@ public class UserService(
             .OrderByDescending(u => u.IsActive)   // 万一同工号有多条，优先取在职的
             .FirstOrDefaultAsync();
 
-        // 找不到人，或密码不对 → 登录失败
-        if (user is null || !VerifyPassword(password, user.PasswordHash))
+        // 工号不存在时也要跑一遍同样耗时的密码哈希计算（对着一个固定的假哈希值比对，结果反正会被
+        // "user is null"直接覆盖掉，不影响判断）——PBKDF2 故意做得很慢，如果工号不存在直接跳过这一步、
+        // 工号存在但密码错才要等哈希算完，两种情况的响应时间会有明显差异，能被人拿来批量探测哪些工号
+        // 是真实存在的账号（时序侧信道）。账号已经被锁定时同样要跑这一遍，不能提前 return，否则"被锁定"
+        // 又会变成一种新的、能靠响应时间区分出来的信号。
+        var passwordOk = VerifyPassword(password, user?.PasswordHash ?? DummyPasswordHashForTimingSafety);
+
+        // 连续输错密码次数太多，账号被临时锁定期间——不管这次密码对不对，一律按失败处理
+        if (user is not null && user.LockedUntil > DateTime.Now)
             return null;
 
-        // 人对密码也对，但账号被停用了 → 明确提示
-        if (!user.IsActive)
-            throw new InvalidOperationException("账号已停用，无法登录，请联系管理员");
+        // 找不到人，或密码不对 → 登录失败；工号存在的话顺便记一次失败次数，攒够次数就临时锁定
+        if (user is null || !passwordOk)
+        {
+            if (user is not null)
+            {
+                user.FailedLoginCount++;
+                if (user.FailedLoginCount >= appOptions.Value.MaxFailedLoginAttempts)
+                {
+                    user.LockedUntil = DateTime.Now.AddMinutes(appOptions.Value.LoginLockoutMinutes);
+                    logger.LogWarning("账号 {EmployeeNo} 连续登录失败 {Count} 次，临时锁定 {Minutes} 分钟",
+                        employeeNo, user.FailedLoginCount, appOptions.Value.LoginLockoutMinutes);
+                }
+                await db.SaveChangesAsync();
+            }
+            return null;
+        }
 
-        user.LastLoginAt = DateTime.Now;   // 记录这次登录时间
+        // 人对密码也对，但账号被停用了 → 对调用方统一按登录失败处理，只在服务端日志里留痕方便排查
+        if (!user.IsActive)
+        {
+            logger.LogWarning("停用账号 {EmployeeNo} 尝试登录", employeeNo);
+            return null;
+        }
+
+        user.FailedLoginCount = 0;      // 登录成功，失败计数清零
+        user.LockedUntil      = null;
+        user.LastLoginAt      = DateTime.Now;   // 记录这次登录时间
         await db.SaveChangesAsync();
         return user;
     }
 
-    /// <summary>创建员工（工号不能重复），对初始密码做哈希后保存，顺带把工号+姓名排进考勤机下发队列。</summary>
+    /// <summary>工号只能包含字母、数字、下划线、短横线——工号会被直接拼进身份证照片存储目录名、
+    /// 考勤机命令文本（PIN=工号），放行任意字符的话，"员工管理"页面表单虽然会拦，但这个方法本身
+    /// 是唯一入口（Admin API 走的也是这里），在这里统一校验一次，不用指望每个调用方都记得自己先查一遍。</summary>
+    private static void ValidateEmployeeNoFormat(string employeeNo)
+    {
+        if (string.IsNullOrWhiteSpace(employeeNo))
+            throw new InvalidOperationException("请填写工号");
+        if (employeeNo.Trim().Length > 50)
+            throw new InvalidOperationException("工号不能超过 50 个字");
+        if (!Regex.IsMatch(employeeNo.Trim(), @"^[A-Za-z0-9_-]+$"))
+            throw new InvalidOperationException("工号只能包含字母、数字、下划线和短横线");
+    }
+
+    /// <summary>创建员工（工号不能重复），对初始密码做哈希后保存，顺带把工号+姓名排进考勤机下发队列。
+    /// 初始密码是随机生成的（不再是全公司共用一个固定默认密码），首次登录后会被强制要求改密码。</summary>
     public async Task<User> CreateUserAsync(User user, string plainPassword)
     {
+        ValidateEmployeeNoFormat(user.EmployeeNo);
+
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo))
             throw new InvalidOperationException($"工号 {user.EmployeeNo} 已存在");
 
-        user.PasswordHash = HashPassword(plainPassword);   // 明文密码 → 哈希
-        user.CreatedAt    = DateTime.Now;
-        user.UpdatedAt    = DateTime.Now;
+        // 身份证号命中"已拉黑"人员（永不录用）就直接拒绝建档——黑名单是全公司共享的信息，
+        // 换个工号/换个分公司重新建档也要能被拦下来；判定以身份证号为准，手机号不作为黑名单命中依据
+        // （避免共用手机号/家庭成员误伤）。这条校验放在服务层唯一的建档入口，管理员手动建档和
+        // "确认扫码登记"两个入口都会调用这个方法，一起生效，不用各自重复实现。
+        if (!string.IsNullOrWhiteSpace(user.IdNumber)
+            && await db.Users.AnyAsync(u => u.IdNumber == user.IdNumber && u.IsBlacklisted))
+            throw new InvalidOperationException("该身份证号已被拉黑（永不录用），请联系总部处理");
+
+        user.PasswordHash       = HashPassword(plainPassword);   // 明文密码 → 哈希
+        user.MustChangePassword = true;
+        user.CreatedAt          = DateTime.Now;
+        user.UpdatedAt          = DateTime.Now;
 
         db.Users.Add(user);
-        await db.SaveChangesAsync();
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // 上面那个"存不存在"的检查和这里真正插入之间有个时间差：两个管理员几乎同时新建员工、
+            // 自动生成到了同一个工号的话，先查的时候都还没冲突，插的时候后到的这个会撞数据库的
+            // 唯一索引报错。这里捕获成友好提示，不让admin看到一句看不懂的原始数据库错误。
+            throw new InvalidOperationException($"工号 {user.EmployeeNo} 刚被别人抢先用掉了，请重新生成工号或换一个再试");
+        }
 
-        await TryPushToZKDeviceAsync(user);
+        // 注意：这里不下发考勤机推送——新建的这一刻员工还没被分配任何设备（UserZKDevice 关联记录
+        // 要等调用方接着调 SetUserDevicesAsync 才会建立），此时推送必然是"查到 0 台设备"的空跑。
+        // 真正的下发发生在 SetUserDevicesAsync 里（所有创建员工的入口都会紧接着调用它）。
         return user;
     }
 
@@ -80,7 +152,7 @@ public class UserService(
     {
         try
         {
-            await zkDeviceSyncService.EnqueueDeleteUserInfoAsync(employeeNo);
+            await zkDeviceSyncService.EnqueueDeleteUserInfoAsync(employeeNo, userId);
         }
         catch (Exception ex)
         {
@@ -95,8 +167,9 @@ public class UserService(
         if (user is null || !VerifyPassword(oldPassword, user.PasswordHash))   // 原密码不对就拒绝
             return false;
 
-        user.PasswordHash = HashPassword(newPassword);
-        user.UpdatedAt    = DateTime.Now;
+        user.PasswordHash       = HashPassword(newPassword);
+        user.MustChangePassword = false;   // 自己主动改过密码了，不用再强制跳改密码页
+        user.UpdatedAt          = DateTime.Now;
         await db.SaveChangesAsync();
         return true;
     }
@@ -122,8 +195,11 @@ public class UserService(
                 throw new InvalidOperationException("新密码不能少于 6 位");
         }
 
-        user.PasswordHash = HashPassword(password);
-        user.UpdatedAt    = DateTime.Now;
+        user.PasswordHash       = HashPassword(password);
+        user.MustChangePassword = true;   // 管理员重置的密码，员工下次登录也要强制改成自己的
+        user.FailedLoginCount   = 0;      // 重置密码顺带解除之前可能存在的登录锁定，不用等锁定自动过期
+        user.LockedUntil        = null;
+        user.UpdatedAt          = DateTime.Now;
         await db.SaveChangesAsync();
         return password;
     }
@@ -133,6 +209,8 @@ public class UserService(
     {
         var existing = await db.Users.FindAsync(user.Id);
         if (existing is null) return false;
+
+        ValidateEmployeeNoFormat(user.EmployeeNo);
 
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo, user.Id))
             throw new InvalidOperationException($"工号 {user.EmployeeNo} 已被其他员工占用");
@@ -239,10 +317,30 @@ public class UserService(
             throw new InvalidOperationException(
                 $"该员工是「{string.Join("、", approverOfGroups)}」考勤组的审批人，无法直接删除，请先到「考勤组管理」把他从审批人名单里移除后再删除");
 
+        // 审批节点(ApprovalStep.ApproverUserId)、公告发布人(Announcement.PublisherUserId)对 User 都是
+        // Restrict 外键（故意不让删，保留审批/发布历史）——数据库层面会直接拒绝，但那样抛出来的是原始的
+        // 外键约束错误，管理员看不懂也不知道该怎么处理，这里换成看得懂的提示，提前说清楚原因
+        if (await db.ApprovalSteps.AnyAsync(s => s.ApproverUserId == userId))
+            throw new InvalidOperationException("该员工有审批记录（曾经是某个申请单的审批人），无法删除，只能停用");
+        if (await db.Announcements.AnyAsync(a => a.PublisherUserId == userId))
+            throw new InvalidOperationException("该员工发布过公告，无法删除，只能停用");
+
+        // SupervisorUserId 是 SetNull 外键：直接删的话，还认这个人当"直属上级"的下属会被静默清空上级字段，
+        // 二级审批流程按 SupervisorUserId 找审批人会突然找不到人、悄悄断掉——不报错但结果是错的，
+        // 比抛异常更麻烦，所以这里主动拦下来，让管理员先手动把这些下属改派给别人
+        var subordinates = await db.Users.Where(u => u.SupervisorUserId == userId).Select(u => u.RealName).ToListAsync();
+        if (subordinates.Count > 0)
+            throw new InvalidOperationException(
+                $"「{string.Join("、", subordinates)}」的直属上级是该员工，无法删除，请先到「员工管理」把他们的直属上级改派给别人后再删除");
+
         var employeeNo = user.EmployeeNo;
+
+        // 必须在真正删除 User 行之前，先把"这个人绑定了哪些考勤机"的下发命令排好队——UserZKDevice
+        // 关联记录是级联删除的，User 一删，关联记录跟着没了，届时再查就查不到该往哪几台设备发删除命令了
+        await TryDeleteFromZKDeviceAsync(employeeNo, userId);
+
         db.Users.Remove(user);
         await db.SaveChangesAsync();
-        await TryDeleteFromZKDeviceAsync(employeeNo, userId);
         return true;
     }
 
@@ -287,7 +385,7 @@ public class UserService(
             query = query.Where(u => u.DepartmentId == null);
         else if (deptId.HasValue)                    // 看该部门 + 所有下级部门的员工（含下级）
         {
-            var subtreeIds = await GetDeptSubtreeIdsAsync(deptId.Value);
+            var subtreeIds = await deptScopeService.GetSubtreeIdsAsync(deptId.Value);
             query = query.Where(u => u.DepartmentId != null && subtreeIds.Contains(u.DepartmentId.Value));
         }
         if (groupId.HasValue)
@@ -330,23 +428,6 @@ public class UserService(
              .Include(u => u.Supervisor)
              .FirstOrDefaultAsync(u => u.Id == userId);
 
-    /// <summary>取某部门自己 + 所有下级部门的编号集合（用于“点某部门要看到含下级的全部人”）。</summary>
-    private async Task<HashSet<int>> GetDeptSubtreeIdsAsync(int deptId)
-    {
-        var all      = await db.Departments.Select(d => new { d.Id, d.ParentId }).ToListAsync();
-        var byParent = all.GroupBy(d => d.ParentId ?? 0).ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList());
-
-        var result = new HashSet<int> { deptId };
-        void Walk(int id)
-        {
-            if (!byParent.TryGetValue(id, out var kids)) return;
-            foreach (var k in kids)
-                if (result.Add(k)) Walk(k);   // Add 返回 false 说明已经访问过，防止部门数据成环时死循环
-        }
-        Walk(deptId);
-        return result;
-    }
-
     /// <summary>判断某工号是否已被占用（更新时可排除自己）。</summary>
     public async Task<bool> IsEmployeeNoExistsAsync(string employeeNo, int? excludeUserId = null)
     {
@@ -366,6 +447,16 @@ public class UserService(
         ["鼎力"]     = "DL",
         ["新能源"]   = "XNY",
         ["XNY"]      = "XNY",   // "XNY"是另一个独立部门（和"新能源"是并列的两个部门节点），命名规则顺延"新能源"，共用同一个前缀和流水号
+        // 组织架构调整（2026-09，见 docs/分公司隔离_组织架构适配.md）：原来的"成都鹰诺"/"新能源"整体
+        // 拆成了按地区独立的分公司节点，互相隔离、各自独立建部门树，每个新节点名都要能在这里精确匹配到，
+        // 同一公司族的不同地区共用同一个前缀和流水号（跟上面"新能源/XNY 共用序列"是同一个道理）
+        ["成都鹰诺-深圳地区"]   = "IN",
+        ["成都鹰诺-成都地区"]   = "IN",
+        ["科瑞新能源-成都地区"] = "XNY",
+        ["科瑞新能源-深圳地区"] = "XNY",
+        // 2026-09-04：科瑞新能源-成都地区/深圳地区 两个节点合并成一个"科瑞新能源"节点，上面两条旧名字保留不删（无同名部门则永不命中），这条是合并后的新名字
+        ["科瑞新能源"]         = "XNY",
+        ["苏州科瑞"]           = "SL",
         // 下面几个是测试阶段新建的部门（同一家公司的测试用副本），沿用同一套前缀，
         // 和上面对应的正式部门各自独立累计流水号（因为是不同的部门名，见下方查重逻辑按前缀而不是按部门算）
         ["深圳GA事业部"] = "GA",
@@ -410,6 +501,63 @@ public class UserService(
         return $"{prefix}{maxNum + 1:D5}";
     }
 
+    /// <summary>设置某员工被指定推送到的考勤机集合：全量覆盖式——先算出这次没勾选、但之前关联着的
+    /// （要解除），再算出这次新勾选、之前没关联过的（要新增），两步做完，不是简单的"先删光再全插"，
+    /// 避免没有实际变化的记录也被重新生成一条（CreatedAt 会被抹掉）。</summary>
+    public async Task SetUserDevicesAsync(int userId, IEnumerable<int> deviceIds)
+    {
+        var idSet = deviceIds.Distinct().ToHashSet();
+        var user  = await db.Users.FindAsync(userId);
+        if (user is null) return;
+
+        var existing = await db.UserZKDevices.Where(m => m.UserId == userId).ToListAsync();
+        var toRemove = existing.Where(m => !idSet.Contains(m.ZKDeviceId)).ToList();
+        var toAddIds = idSet.Except(existing.Select(m => m.ZKDeviceId)).ToList();
+        var removedDeviceIds = toRemove.Select(m => m.ZKDeviceId).ToList();
+
+        db.UserZKDevices.RemoveRange(toRemove);
+        db.UserZKDevices.AddRange(toAddIds.Select(deviceId => new UserZKDevice { UserId = userId, ZKDeviceId = deviceId }));
+
+        await db.SaveChangesAsync();
+
+        // 设备集合变化后顺带同步考勤机下发命令：新勾选的设备要收到这个人的信息（没法在设备上录人脸），
+        // 被取消勾选的设备要把这个人删掉（离职/调岗后人脸权限残留，独立分公司场景下还是跨公司越权风险）。
+        // 只在真的新增了设备时才需要下发 UPDATE 命令——原来保留不变的设备已经在 UpdateUserAsync 那次
+        // （编辑流程）或不需要（新增流程没有"保留不变"这一说）拿到过最新信息，这里再重推一遍纯属浪费。
+        if (removedDeviceIds.Count > 0)
+            await TryDeleteFromZKDeviceForDevicesAsync(user.EmployeeNo, removedDeviceIds);
+        if (toAddIds.Count > 0)
+            await TryPushToZKDeviceAsync(user);
+    }
+
+    /// <summary>把"删除该工号"排进考勤机下发队列，只发给指定的这几台设备（不是这个人当前绑定的全部设备）——
+    /// 用在"编辑员工时取消勾选了某台设备"的场景：这台设备此时已经从 UserZKDevice 关联里移除了，
+    /// 没法再用"查这个人绑定了哪些设备"的方式反查出它，必须显式传入要清掉的设备 id。</summary>
+    private async Task TryDeleteFromZKDeviceForDevicesAsync(string employeeNo, List<int> deviceIds)
+    {
+        try
+        {
+            await zkDeviceSyncService.EnqueueDeleteUserInfoForDevicesAsync(employeeNo, deviceIds);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "从指定考勤机（{Ids}）删除员工 {EmployeeNo} 失败", string.Join(",", deviceIds), employeeNo);
+        }
+    }
+
+    /// <summary>取某员工当前被指定推送到的考勤机 Id 列表。</summary>
+    public Task<List<int>> GetUserDeviceIdsAsync(int userId)
+        => db.UserZKDevices.Where(m => m.UserId == userId).Select(m => m.ZKDeviceId).ToListAsync();
+
+    public async Task SetScopedDepartmentAsync(int userId, int? scopedDepartmentId)
+    {
+        var user = await db.Users.FindAsync(userId);
+        if (user is null) return;
+        user.ScopedDepartmentId = scopedDepartmentId;
+        user.UpdatedAt = DateTime.Now;
+        await db.SaveChangesAsync();
+    }
+
     // ── 密码工具 ──────────────────────────────────────────────────────────────
     // 哈希 = 一种“不可逆加密”：能把密码算成一串乱码存起来，但没法从乱码反推回原密码。
     // 盐(salt) = 一段随机料，混进密码再哈希，让相同密码也产生不同结果，防止被批量破解。
@@ -418,31 +566,58 @@ public class UserService(
     /// 把明文密码变成可安全存储的哈希字符串。
     /// 做法：随机 16 字节盐 + PBKDF2(SHA256，迭代 1 万次)。存储格式「Base64(盐):Base64(哈希)」。
     /// </summary>
+    // 老哈希（两段式 "盐:哈希"，不带迭代次数）固定按这个次数校验——保证已经存在的账号密码不受影响，
+    // 不用强制全员重置密码就能完成升级。新哈希都用下面 CurrentIterations，带上迭代次数存成三段式，
+    // 以后想再调高强度，加个新版本号继续这么升级就行，老哈希还是能按它自己当初的次数正常校验。
+    private const int LegacyIterations = 10_000;
+    // OWASP 现在给 PBKDF2-HMAC-SHA256 的建议迭代次数（原来的 1 万次太低，暴力破解的成本太便宜了）
+    private const int CurrentIterations = 600_000;
+
     public static string HashPassword(string password)
     {
         var salt = RandomNumberGenerator.GetBytes(16);   // 生成随机盐
-        var hash = Rfc2898DeriveBytes.Pbkdf2(            // 用盐反复加密 1 万次
-            Encoding.UTF8.GetBytes(password), salt, 10_000, HashAlgorithmName.SHA256, 32);
-        return $"{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";  // 盐和哈希一起存
+        var hash = Rfc2898DeriveBytes.Pbkdf2(
+            Encoding.UTF8.GetBytes(password), salt, CurrentIterations, HashAlgorithmName.SHA256, 32);
+        return $"{CurrentIterations}:{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";
     }
 
     /// <summary>
-    /// 校验密码：从存储值里取出当初的盐，用同样方法把输入的密码再算一遍，比对是否一致。
-    /// 比对用“恒定时间比较”，防止通过比对耗时来猜密码（时序攻击）。
+    /// 校验密码：从存储值里取出当初的盐（和迭代次数，如果有的话），用同样方法把输入的密码再算一遍，
+    /// 比对是否一致。比对用“恒定时间比较”，防止通过比对耗时来猜密码（时序攻击）。
     /// </summary>
     public static bool VerifyPassword(string password, string storedHash)
     {
-        var parts = storedHash.Split(':');                  // 拆出 盐 和 哈希 两部分
-        if (parts.Length != 2) return false;
-        var salt         = Convert.FromBase64String(parts[0]);
-        var expectedHash = Convert.FromBase64String(parts[1]);
-        var actualHash   = Rfc2898DeriveBytes.Pbkdf2(       // 用同样的盐重算
-            Encoding.UTF8.GetBytes(password), salt, 10_000, HashAlgorithmName.SHA256, 32);
+        var parts = storedHash.Split(':');
+        int iterations;
+        byte[] salt, expectedHash;
+        if (parts.Length == 3)          // 新格式："迭代次数:盐:哈希"
+        {
+            if (!int.TryParse(parts[0], out iterations)) return false;
+            salt         = Convert.FromBase64String(parts[1]);
+            expectedHash = Convert.FromBase64String(parts[2]);
+        }
+        else if (parts.Length == 2)     // 老格式："盐:哈希"，没有迭代次数字段，按老次数算
+        {
+            iterations   = LegacyIterations;
+            salt         = Convert.FromBase64String(parts[0]);
+            expectedHash = Convert.FromBase64String(parts[1]);
+        }
+        else
+        {
+            return false;
+        }
+
+        var actualHash = Rfc2898DeriveBytes.Pbkdf2(       // 用同样的盐、同样的迭代次数重算
+            Encoding.UTF8.GetBytes(password), salt, iterations, HashAlgorithmName.SHA256, 32);
         return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);  // 安全比对
     }
 
-    /// <summary>生成随机密码（已剔除易混淆字符 0/O/1/I/l），用于重置密码。</summary>
-    private static string GenerateRandomPassword(int length)
+    /// <summary>登录时序侧信道防护用的假哈希：工号根本不存在时，也拿它跑一遍完整的哈希校验计算，
+    /// 让"工号不存在"和"工号存在但密码错"这两种失败在响应耗时上没有可观测的差别。</summary>
+    private static readonly string DummyPasswordHashForTimingSafety = HashPassword(Guid.NewGuid().ToString("N"));
+
+    /// <summary>生成随机密码（已剔除易混淆字符 0/O/1/I/l），用于重置密码、新建员工的初始密码。</summary>
+    public static string GenerateRandomPassword(int length)
     {
         const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!";
         return new string(Enumerable.Range(0, length)

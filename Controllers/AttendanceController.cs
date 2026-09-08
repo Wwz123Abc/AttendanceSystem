@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Services.Interfaces;
 
@@ -9,15 +10,13 @@ namespace AttendanceSystem.Controllers;
 [Authorize]
 [Route("api/[controller]")]
 [ApiController]
-public class AttendanceController(IAttendanceService attendanceService) : ApiControllerBase
+public class AttendanceController(IAttendanceService attendanceService, IDeptScopeService deptScopeService) : ApiControllerBase
 {
-    /// <summary>员工打卡（上班 / 下班）。</summary>
-    [HttpPost("punch")]
-    public async Task<IActionResult> Punch([FromBody] PunchRequestDto req)
-    {
-        var result = await attendanceService.PunchAsync(CurrentUserId, req);   // CurrentUserId=当前登录的人
-        return Ok(result);
-    }
+    // 原来这里有个 POST /api/attendance/punch 接口：只挂了 [Authorize]，不受"远程打卡"那套
+    // AllowRemotePunch 开关/人脸识别/地点校验的任何限制——任何登录着的人拿开发者工具直接 POST
+    // 这个接口，就能绕开人脸识别伪造打卡。系统里已经没有任何前端页面在调它了（都改走考勤机同步/
+    // 远程打卡页面），纯粹是历史遗留的孤儿接口，所以直接删掉。IAttendanceService.PunchAsync 这个
+    // 服务方法本身没删——远程打卡页面（Pages/Attendance/RemotePunch.cshtml.cs）还在正常调它。
 
     /// <summary>查自己今天的考勤状态。</summary>
     [HttpGet("today")]
@@ -38,7 +37,8 @@ public class AttendanceController(IAttendanceService attendanceService) : ApiCon
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> GetDepartment([FromQuery] DeptAttendanceQueryDto query)
     {
-        var list = await attendanceService.GetDeptAttendanceAsync(query);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var list = await attendanceService.GetDeptAttendanceAsync(query, visibleIds);
         return Ok(new { Success = true, Data = list, Total = list.Count });
     }
 
@@ -54,7 +54,8 @@ public class AttendanceController(IAttendanceService attendanceService) : ApiCon
         [FromQuery] int? deptId, [FromQuery] int? groupId,
         [FromQuery] int year, [FromQuery] int month)
     {
-        var list = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var list = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month, visibleIds);
         return Ok(new { Success = true, Data = list, Total = list.Count });
     }
 
@@ -62,5 +63,8 @@ public class AttendanceController(IAttendanceService attendanceService) : ApiCon
     [HttpGet("today-stats")]
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> GetTodayStats([FromQuery] int? groupId)
-        => Ok(new { Success = true, Data = await attendanceService.GetTodayStatsAsync(groupId) });
+    {
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        return Ok(new { Success = true, Data = await attendanceService.GetTodayStatsAsync(groupId, visibleIds) });
+    }
 }

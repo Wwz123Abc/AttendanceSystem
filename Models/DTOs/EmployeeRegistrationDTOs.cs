@@ -16,6 +16,7 @@ public class SubmitRegistrationDto
     public string? EmergencyContactName  { get; set; }                  // 紧急联系人姓名
     public string? EmergencyContactPhone { get; set; }                  // 紧急联系人电话
     public string? IdCardPhotoUrl        { get; set; }                  // 身份证照片地址（页面已经存好文件，这里只传地址）
+    public int?    DepartmentId          { get; set; }                  // 意向部门（从二维码链接的 deptId 参数带过来）
 }
 
 /// <summary>员工登记展示 DTO（管理员"待确认"列表里的一行）。</summary>
@@ -32,6 +33,9 @@ public class EmployeeRegistrationDto
     public string? EmergencyContactName  { get; set; }
     public string? EmergencyContactPhone { get; set; }
     public string? IdCardPhotoUrl        { get; set; }
+
+    public int?    DepartmentId { get; set; }
+    public string? DeptName     { get; set; }   // 意向部门名（没有则说明是旧版通用链接提交的，显示"未指定"）
 
     public RegistrationStatus Status     { get; set; }
     public string             StatusText { get; set; } = string.Empty;

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
@@ -201,8 +202,7 @@ public class ApplySubmitModel(
     {
         var uid        = CurrentUserId;
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');   // 上传根目录，取自配置
-        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-        var dir        = Path.Combine(webRoot, uploadPath, "approvals", uid.ToString());
+        var dir        = Path.Combine(PrivateFileStorage.GetRoot(env), uploadPath, "approvals", uid.ToString());
         Directory.CreateDirectory(dir);   // 没有就创建目录
 
         var urls    = new List<string>();

@@ -44,16 +44,8 @@ public class LoginModel(IUserService userService, IOptions<AppSettingsOptions> a
             return Page();
         }
 
-        AttendanceSystem.Models.Entities.User? user;
-        try
-        {
-            user = await userService.ValidateLoginAsync(EmployeeNo, Password);   // 校验
-        }
-        catch (InvalidOperationException ex)   // 账号已停用会抛异常
-        {
-            ErrorMessage = ex.Message;
-            return Page();
-        }
+        // 工号/密码错误、账号已停用，ValidateLoginAsync 统一返回 null，登录页不区分提示（避免账号被枚举）
+        var user = await userService.ValidateLoginAsync(EmployeeNo, Password);   // 校验
 
         if (user is null)
         {
@@ -72,6 +64,11 @@ public class LoginModel(IUserService userService, IOptions<AppSettingsOptions> a
                 IsPersistent = RememberMe,
                 ExpiresUtc   = DateTimeOffset.UtcNow.AddHours(appOptions.Value.TokenExpireHours)
             });
+
+        // 初始密码是随机生成的、或者密码是管理员重置过的，登录成功后先强制去改密码页，
+        // 改完才放行去正常首页——不能让人一直用系统自动生成、管理员也知道的那个密码继续用下去
+        if (user.MustChangePassword)
+            return Redirect("/Account/ChangePassword?forced=1");
 
         return Redirect(HomeUrl(user.Role));   // 按角色跳首页
     }

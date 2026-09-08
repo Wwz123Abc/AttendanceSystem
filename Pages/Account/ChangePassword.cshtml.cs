@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Account;
@@ -11,6 +13,10 @@ public class ChangePasswordModel(IUserService userService) : AppPageModel
     [BindProperty] public string OldPassword     { get; set; } = "";   // 原密码
     [BindProperty] public string NewPassword     { get; set; } = "";   // 新密码
     [BindProperty] public string ConfirmPassword { get; set; } = "";   // 再输一遍新密码
+
+    /// <summary>是不是登录时被强制跳转过来的（初始密码/被管理员重置过密码），来自 URL 上的 ?forced=1，
+    /// 只用来在页面上多显示一句说明，不影响改密码本身的逻辑。</summary>
+    [BindProperty(SupportsGet = true)] public bool Forced { get; set; }
 
     public string? ErrorMessage { get; set; }
     public bool    ShowSuccess  { get; set; }
@@ -32,6 +38,13 @@ public class ChangePasswordModel(IUserService userService) : AppPageModel
         var ok = await userService.ChangePasswordAsync(CurrentUserId, OldPassword, NewPassword);
 
         if (!ok) { ErrorMessage = "当前密码错误"; return Page(); }   // 原密码不对
+
+        // 是被强制跳过来改密码的，改完直接送去正常首页，不用再自己找入口点回去
+        if (Forced)
+        {
+            Enum.TryParse<UserRole>(User.FindFirstValue(ClaimTypes.Role), out var role);
+            return Redirect(LoginModel.HomeUrl(role));
+        }
 
         ShowSuccess = true;
         return Page();

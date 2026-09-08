@@ -14,8 +14,10 @@ public interface IAnnouncementService
     /// </summary>
     Task<Announcement> PublishAsync(int publisherUserId, UserRole publisherRole, PublishAnnouncementDto dto);
 
-    /// <summary>撤下一条公告（软删除）。只有发布人自己，或管理员/文员，才能撤。</summary>
-    Task<bool> WithdrawAsync(int operatorUserId, bool isManager, int announcementId);
+    /// <summary>撤下一条公告（软删除）。只有发布人自己，或管理范围覆盖这条公告发布范围的管理员/文员，才能撤——
+    /// 光是管理员/文员身份不够，范围外的（比如别的分公司、或总部"全公司"范围）不行。
+    /// <paramref name="managerVisibleDeptIds"/> 为 null 表示总部超级管理员，不受限。</summary>
+    Task<bool> WithdrawAsync(int operatorUserId, bool isManager, int announcementId, HashSet<int>? managerVisibleDeptIds = null);
 
     /// <summary>查"我能看到"的公告栏列表（我在受众名单里、且这条公告仍有效），按发布时间倒序。</summary>
     Task<List<AnnouncementBoardItemDto>> GetBoardForUserAsync(int userId);
@@ -27,10 +29,10 @@ public interface IAnnouncementService
     Task<List<AnnouncementPublishedItemDto>> GetMyPublishedAsync(int publisherUserId);
 
     /// <summary>
-    /// 查某条公告的已读明细（谁读了谁没读）。只有发布人自己，或管理员/文员，才能查；
-    /// 查不到公告、或没权限查，返回 null。
+    /// 查某条公告的已读明细（谁读了谁没读）。只有发布人自己，或管理范围覆盖这条公告的管理员/文员，才能查；
+    /// 查不到公告、或没权限查，返回 null。<paramref name="managerVisibleDeptIds"/> 语义同 <see cref="WithdrawAsync"/>。
     /// </summary>
-    Task<List<AnnouncementReadDetailDto>?> GetReadDetailAsync(int operatorUserId, bool isManager, int announcementId);
+    Task<List<AnnouncementReadDetailDto>?> GetReadDetailAsync(int operatorUserId, bool isManager, int announcementId, HashSet<int>? managerVisibleDeptIds = null);
 
     /// <summary>数一下"我的直属下属"有多少人，班组长/主管打开发布页时用来提示"将发给 N 人"。</summary>
     Task<int> CountDirectReportsAsync(int userId);

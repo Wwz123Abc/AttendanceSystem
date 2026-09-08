@@ -6,7 +6,8 @@ namespace AttendanceSystem.Services.Interfaces;
 /// <summary>用户/账号业务服务契约。</summary>
 public interface IUserService
 {
-    /// <summary>校验工号+密码：成功返回用户并更新最后登录时间；工号/密码错误返回 null；账号已停用则抛 <see cref="InvalidOperationException"/>。</summary>
+    /// <summary>校验工号+密码：成功返回用户并更新最后登录时间；工号/密码错误、或账号已停用，统一返回 null
+    /// （不区分这两种失败原因，避免账号被枚举）。</summary>
     Task<User?>   ValidateLoginAsync(string employeeNo, string password);
     /// <summary>创建员工（工号唯一），自动对初始密码做哈希，顺带把工号+姓名排进考勤机下发队列。</summary>
     Task<User>    CreateUserAsync(User user, string plainPassword);
@@ -48,4 +49,13 @@ public interface IUserService
     /// 找不到匹配的公司则返回 null（表示不自动生成，改回手动填写）。
     /// </summary>
     Task<string?> GenerateNextEmployeeNoAsync(int? departmentId);
+    /// <summary>设置某员工被指定推送到的考勤机集合（全量覆盖式：传入的 deviceIds 就是最终结果，
+    /// 没传到的会被解除关联）。</summary>
+    Task SetUserDevicesAsync(int userId, IEnumerable<int> deviceIds);
+    /// <summary>取某员工当前被指定推送到的考勤机 Id 列表。</summary>
+    Task<List<int>> GetUserDeviceIdsAsync(int userId);
+    /// <summary>设置某个管理员/文员的"范围限定部门"（分公司管理员/总部超级管理员的开关）。
+    /// 只应该由调用方确认过"当前操作者自己是不受限的总部管理员"之后才调用——这个方法本身不做
+    /// 调用者身份校验（服务层不感知 HTTP 请求上下文），校验责任在页面/控制器那一层。</summary>
+    Task SetScopedDepartmentAsync(int userId, int? scopedDepartmentId);
 }

@@ -28,4 +28,13 @@ public class ZKDevice
 
     /// <summary>最近一次成功跟服务器通信（握手/心跳/上传数据）的时间，用于后台显示在线/离线</summary>
     public DateTime? LastSeenAt { get; set; }
+
+    /// <summary>设备归属部门（可空）：为空表示尚未归类（历史设备/总部共用设备），只有不受限的总部管理员
+    /// 能看到和管理；有值表示归属某个部门（及其下级部门），分公司管理员的设备增删改被限制在自己范围内。</summary>
+    public int? DepartmentId { get; set; }
+
+    [ForeignKey("DepartmentId")]
+    public Department? Department { get; set; }
+
+    public ICollection<UserZKDevice> UserZKDevices { get; set; } = [];  // 被指定推送到这台设备的员工
 }

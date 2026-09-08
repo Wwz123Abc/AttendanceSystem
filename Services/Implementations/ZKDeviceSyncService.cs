@@ -51,14 +51,29 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
 
         // 1) 设备侧的 PIN 就是本系统的工号（EmployeeNo），查出对应的本地用户
         var pins = rows.Select(r => r.Pin).Distinct().ToList();
-        var users = await db.Users
+        var matchedUsers = await db.Users
             .Where(u => pins.Contains(u.EmployeeNo))
             .Select(u => new { u.Id, u.EmployeeNo, u.AttendanceGroupId })
             .ToListAsync(ct);
+
+        // 只认"这台设备名下真的绑定过这个人"的打卡——"员工管理"页"推送到哪些考勤机"勾选的就是这张
+        // UserZKDevice 关联表，只有勾选过的设备才会收到员工资料，理论上也只有这些设备才可能真的采到
+        // 他的人脸/指纹。不加这一步的话，任何一台合法白名单设备的 SN 都能在推送数据里随便填别的
+        // 分公司员工的工号，把打卡记录/工时写到跟这台设备毫不相干的人头上（跨分公司越权写打卡）。
+        var deviceId = await db.ZKDevices.Where(d => d.SN == sn).Select(d => (int?)d.Id).FirstOrDefaultAsync(ct);
+        var boundUserIds = deviceId.HasValue
+            ? (await db.UserZKDevices.Where(m => m.ZKDeviceId == deviceId.Value).Select(m => m.UserId).ToListAsync(ct)).ToHashSet()
+            : [];
+        var notBound = matchedUsers.Where(u => !boundUserIds.Contains(u.Id)).Select(u => u.EmployeeNo).ToList();
+        if (notBound.Count > 0)
+            logger.LogWarning("考勤机 {SN} 推送的打卡记录里，有工号对应的员工未绑定这台设备，已忽略：{Pins}", sn, string.Join(",", notBound));
+        var users = matchedUsers.Where(u => boundUserIds.Contains(u.Id)).ToList();
+
         var userByPin     = users.ToDictionary(u => u.EmployeeNo, u => u.Id);
         var groupIdByUser = users.ToDictionary(u => u.Id, u => u.AttendanceGroupId);
 
-        var unmatched = pins.Where(p => !userByPin.ContainsKey(p)).ToList();
+        var matchedPins = matchedUsers.Select(u => u.EmployeeNo).ToHashSet();
+        var unmatched   = pins.Where(p => !matchedPins.Contains(p)).ToList();   // 真正查无此人的（跟"查到人但没绑定这台设备"分开报，避免重复告警同一个工号）
         if (unmatched.Count > 0)
             logger.LogWarning("考勤机 {SN} 推送的打卡记录里，有工号在系统里找不到对应员工：{Pins}", sn, string.Join(",", unmatched));
 
@@ -74,6 +89,15 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
         var groupBreaks = await db.AttendanceGroups
             .Select(g => new { g.Id, g.LunchBreakMinutes, g.DinnerBreakMinutes })
             .ToDictionaryAsync(g => g.Id, g => (g.LunchBreakMinutes, g.DinnerBreakMinutes), ct);
+
+        // 节假日打卡本地打卡（PunchAsync）是直接拒绝的，考勤机这条链路以前完全没查这个，
+        // 导致节假日设备打卡照常按正常工作日结算工时，等于没走加班审批就白得了一天工时。
+        // 这里不拒绝设备推上来的原始打卡（那样会丢数据），改成节假日当天不结算工时、
+        // 状态标成"休假"，跟本地打卡"节假日不用打卡"的语义对齐；调班补班日不算节假日，照常结算。
+        var holidays = await db.Holidays.Where(h => dates.Contains(h.HolidayDate)).ToListAsync(ct);
+        bool IsHoliday(DateOnly date, int? groupId) => holidays.Any(h =>
+            h.HolidayDate == date && h.HolidayType != HolidayType.CompensatoryWorkDay &&
+            (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
 
         var punchSet = (await db.AttendancePunches
                 .Where(p => uids.Contains(p.UserId) && dates.Contains(DateOnly.FromDateTime(p.PunchTime)))
@@ -157,8 +181,15 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             {
                 record.ClockInTime = r.Time;
                 var status = AttendanceService.CalcClockInStatus(r.Time, shift, out var lateMin);
-                record.LateMinutes = lateMin;
-                if (status == AttendanceStatus.Late) record.AttendanceStatus = AttendanceStatus.Late;
+                // 旷工可以被真的打了上班卡这件事纠正回来（不管是不是迟到，只要打了卡就不算旷工了），
+                // 但请假/出差/节假日这些由审批流程或定时任务设置的状态，不能被这里的上班打卡同步顺手覆盖掉。
+                // 之前只在"迟到"时才更新状态，导致旷工的人如果准点打卡（不迟到）反而不会被纠正回来，
+                // 状态会一直卡在"旷工"，这次一并修正。迟到分钟数同理不写回，避免残留在报表里。
+                if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
+                {
+                    record.LateMinutes      = lateMin;
+                    record.AttendanceStatus = status;
+                }
             }
             else if (type == PunchType.ClockOut && (record.ClockOutTime is null || r.Time > record.ClockOutTime))
             {
@@ -174,7 +205,9 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                 // 定时任务或上班打卡设置的状态，优先级更高，不能被这里的下班打卡同步顺手覆盖掉。
                 record.ClockOutTime = r.Time;
                 var status = AttendanceService.CalcClockOutStatus(workDate, r.Time, shift, out var earlyMin);
-                record.EarlyLeaveMinutes = earlyMin;
+                // 请假/出差/节假日当天不写回早退分钟数，理由同上面 ClockIn 分支的 LateMinutes
+                if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
+                    record.EarlyLeaveMinutes = earlyMin;
                 if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
                     record.AttendanceStatus = status;
             }
@@ -189,6 +222,18 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
         {
             var record = recordMap[(uid, workDate)];
             if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) continue;
+
+            groupIdByUser.TryGetValue(uid, out var groupId);
+            if (IsHoliday(workDate, groupId))
+            {
+                if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip))
+                    record.AttendanceStatus = AttendanceStatus.Holiday;
+                continue;   // 节假日不结算工时，避免没走加班审批就白得工时
+            }
+            // 非节假日但当天是请假/出差/节假日状态（比如批准请假前设备已经同步过打卡），工时已经
+            // 由审批流程/定时任务定好了，不能被这里的考勤机同步顺手重算覆盖掉（避免既算请假又算工时）
+            if (record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday)
+                continue;
 
             shiftByUserDate.TryGetValue((uid, workDate), out var shift);
             var (lunch, dinner) = groupIdByUser.TryGetValue(uid, out var gid) && gid.HasValue
@@ -227,16 +272,27 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
     }
 
     /// <summary>
-    /// 给白名单里的每台设备都排一条"下发员工信息"命令，下次设备心跳（/iclock/getrequest）时会被取走。
-    /// 命令格式参考熵基官方 PUSH 协议参考实现（Demo-Java 的 GenerateCmd）：DATA UPDATE USERINFO，
-    /// 字段用 Tab 分隔，PIN 直接用本系统的工号（EmployeeNo）——这样设备推上来的打卡记录才能按工号对上人。
+    /// 给这个员工被指定分配到的每台设备（且启用中）都排一条"下发员工信息"命令，下次设备心跳
+    /// （/iclock/getrequest）时会被取走。命令格式参考熵基官方 PUSH 协议参考实现（Demo-Java 的
+    /// GenerateCmd）：DATA UPDATE USERINFO，字段用 Tab 分隔，PIN 直接用本系统的工号（EmployeeNo）——
+    /// 这样设备推上来的打卡记录才能按工号对上人。以前是不分青红皂白推给全部启用中的设备，现在改成
+    /// 只推给管理员在"员工管理"页手动勾选过的设备（`UserZKDevice` 关联表），一是避免把员工资料
+    /// 推到跟他毫不相干的分公司设备上，二是配合分公司数据隔离——管理员建档时能勾选的设备本来就
+    /// 已经被限定在自己范围内了。
     /// </summary>
     public async Task EnqueuePushUserInfoAsync(User user, CancellationToken ct = default)
     {
-        var snList = await db.ZKDevices.Where(d => d.IsActive).Select(d => d.SN).ToListAsync(ct);
+        var snList = await db.UserZKDevices
+            .Where(m => m.UserId == user.Id)
+            .Join(db.ZKDevices.Where(d => d.IsActive), m => m.ZKDeviceId, d => d.Id, (m, d) => d.SN)
+            .ToListAsync(ct);
         if (snList.Count == 0 || string.IsNullOrWhiteSpace(user.EmployeeNo)) return;
 
-        var name = user.RealName.Replace('\t', ' ');   // 名字里不该有 Tab，保险起见替换掉，避免破坏字段分隔
+        // 名字里不该有 Tab/回车/换行，保险起见都替换掉：不只是为了不破坏字段分隔，
+        // 心跳响应是把多条命令的 CommandText 原样用 "\r\n\r\n" 拼在一起返回给设备的（见 Heartbeat 方法），
+        // 姓名里如果混进了 "\r\nC:" 这种内容，会把当前这条命令行提前截断、伪造出一条新的设备命令行，
+        // 等于借着改自己姓名夹带命令注入进设备指令流
+        var name = user.RealName.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
         var commandText = $"DATA UPDATE USERINFO PIN={user.EmployeeNo}\tName={name}\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ=0000000000000000\tVerify=0\tViceCard=";
 
         foreach (var sn in snList)
@@ -246,14 +302,45 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
         await db.SaveChangesAsync(ct);
     }
 
-    /// <summary>给白名单里的每台设备都排一条"删除该工号"命令（DATA DELETE USERINFO），
-    /// 用在员工离职/被彻底删除、或者工号被改掉（旧工号在设备上就该清掉）这几个场景。</summary>
-    public async Task EnqueueDeleteUserInfoAsync(string employeeNo, CancellationToken ct = default)
+    /// <summary>给这个员工之前被指定分配到的每台设备（且启用中）都排一条"删除该工号"命令
+    /// （DATA DELETE USERINFO），用在员工离职/被彻底删除、或者工号被改掉（旧工号在设备上就该清掉）
+    /// 这几个场景。<paramref name="userId"/> 用来查这个人绑定过哪些设备——调用方必须在删除 `User`
+    /// 行（连带级联删除 `UserZKDevice` 关联记录）**之前**调用这个方法，不然关联记录已经没了，查不到
+    /// 该清哪些设备。</summary>
+    public async Task EnqueueDeleteUserInfoAsync(string employeeNo, int userId, CancellationToken ct = default)
     {
-        var snList = await db.ZKDevices.Where(d => d.IsActive).Select(d => d.SN).ToListAsync(ct);
+        var snList = await db.UserZKDevices
+            .Where(m => m.UserId == userId)
+            .Join(db.ZKDevices.Where(d => d.IsActive), m => m.ZKDeviceId, d => d.Id, (m, d) => d.SN)
+            .ToListAsync(ct);
         if (snList.Count == 0 || string.IsNullOrWhiteSpace(employeeNo)) return;
 
-        var commandText = $"DATA DELETE USERINFO PIN={employeeNo}";
+        // 工号新建/编辑时（UserManage 页）已经限制成只能是字母数字下划线短横线了，但这里保险起见还是
+        // 过滤一下 \r\n——万一是历史遗留的老工号，或者以后有别的入口调用这个方法时忘了做同样的校验，
+        // 这道过滤能防止工号里混进换行符，在心跳响应里伪造出一条新的设备命令行（跟 EnqueuePushUserInfoAsync
+        // 里姓名过滤的道理一样）
+        var safeEmployeeNo = employeeNo.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+        var commandText = $"DATA DELETE USERINFO PIN={safeEmployeeNo}";
+        foreach (var sn in snList)
+        {
+            db.ZKDeviceCommands.Add(new ZKDeviceCommand { SN = sn, CommandText = commandText });
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>给指定的这几台设备（且启用中）都排一条"删除该工号"命令，不查这个人当前绑定了哪些设备——
+    /// 用在编辑员工时取消勾选了某台设备的场景：那台设备此时已经从 UserZKDevice 关联表里解除了，
+    /// 没法再反查出来，只能由调用方显式传入要清掉的设备 id 列表。</summary>
+    public async Task EnqueueDeleteUserInfoForDevicesAsync(string employeeNo, IEnumerable<int> deviceIds, CancellationToken ct = default)
+    {
+        var ids = deviceIds.Distinct().ToList();
+        if (ids.Count == 0 || string.IsNullOrWhiteSpace(employeeNo)) return;
+
+        var snList = await db.ZKDevices.Where(d => ids.Contains(d.Id) && d.IsActive).Select(d => d.SN).ToListAsync(ct);
+        if (snList.Count == 0) return;
+
+        var safeEmployeeNo = employeeNo.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+        var commandText = $"DATA DELETE USERINFO PIN={safeEmployeeNo}";
         foreach (var sn in snList)
         {
             db.ZKDeviceCommands.Add(new ZKDeviceCommand { SN = sn, CommandText = commandText });

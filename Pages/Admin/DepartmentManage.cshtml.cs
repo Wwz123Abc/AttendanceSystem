@@ -3,14 +3,16 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Admin;
 
-/// <summary>部门管理页：单页树形表格，支持增删改、批量删除、添加子部门。</summary>
+/// <summary>部门管理页：单页树形表格，支持增删改、批量删除、添加子部门。分公司管理员只能在自己的
+/// 管理范围内新建/编辑子部门，看不到、动不了其他分公司或总部顶层的部门。</summary>
 [Authorize(Policy = "ManagePolicy")]
-public class DepartmentManageModel(AttendanceDbContext db) : PageModel
+public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService) : PageModel
 {
     /// <summary>树形展开后的扁平行（已按父子顺序排好，带层级深度）。</summary>
     public List<DeptRow> Rows { get; set; } = [];
@@ -36,8 +38,13 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
     // ── 读取并组装树 ──────────────────────────────────────────────────────────
     private async Task LoadAsync()
     {
+        var cu = HttpContext.GetCurrentUser()!;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+
         AllDepts = await db.Departments
             .OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
+        if (visibleIds is not null)
+            AllDepts = AllDepts.Where(d => visibleIds.Contains(d.Id)).ToList();   // 受限管理员看不到范围外的部门
 
         // 每个部门的“直属员工数”（DepartmentId 正好等于该部门的人数）
         var direct = (await db.Users.Where(u => u.DepartmentId != null)
@@ -61,8 +68,6 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
             total[deptId] = sum;
             return sum;
         }
-        if (byParent.TryGetValue(0, out var roots))
-            foreach (var r in roots) Rollup(r.Id);
 
         Rows = [];
         void Walk(int parentKey, int depth)
@@ -74,7 +79,26 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
                 Walk(d.Id, depth + 1);   // 递归处理它的子部门
             }
         }
-        Walk(0, 0);
+        if (cu.IsScoped)
+        {
+            // 受限管理员：树顶就是自己的范围根部门本身，不是"没有父部门"的那批顶级部门
+            var rootId = cu.ScopedDepartmentId!.Value;
+            if (byParent.TryGetValue(rootId, out var rootKids))
+                foreach (var r in rootKids) Rollup(r.Id);
+            Rollup(rootId);
+            var root = AllDepts.FirstOrDefault(d => d.Id == rootId);
+            if (root is not null)
+            {
+                Rows.Add(new DeptRow(root, 0, total.GetValueOrDefault(root.Id), byParent.ContainsKey(root.Id)));
+                Walk(root.Id, 1);
+            }
+        }
+        else
+        {
+            if (byParent.TryGetValue(0, out var roots))
+                foreach (var r in roots) Rollup(r.Id);
+            Walk(0, 0);
+        }
     }
 
     // ── 新增 ──────────────────────────────────────────────────────────────────
@@ -88,6 +112,12 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
                 throw new InvalidOperationException("部门名称不能超过 100 个字");
             if (SortIndex is < 0 or > 9999)
                 throw new InvalidOperationException("排序号请填 0-9999 之间");
+
+            var cu = HttpContext.GetCurrentUser()!;
+            if (cu.IsScoped && !ParentId.HasValue)
+                throw new InvalidOperationException("只能在自己的管理范围内新建子部门，不能新建顶级部门");
+            if (!await deptScopeService.CanAccessDeptAsync(cu, ParentId))
+                throw new InvalidOperationException("无权在该上级部门下新建子部门");
 
             var dept = new Department
             {
@@ -116,6 +146,27 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
         {
             var dept = await db.Departments.FindAsync(EditId)
                        ?? throw new InvalidOperationException("部门不存在");
+
+            var cu = HttpContext.GetCurrentUser()!;
+            // 目标部门本身、改完之后的新上级，都必须在自己的管理范围内——防止受限管理员绕过界面
+            // 直接拿别的分公司的部门 id 编辑，或者把自己范围内的部门"挪"到范围外（改父部门实现越权）
+            if (!await deptScopeService.CanAccessDeptAsync(cu, dept.Id))
+                throw new InvalidOperationException("无权编辑该部门");
+            if (cu.IsScoped && dept.Id == cu.ScopedDepartmentId!.Value)
+            {
+                // 自己的管理范围根部门本身：允许改名字/排序/启用状态，但不能改父部门——
+                // 改了父部门等于把自己整个管理范围挪到别的位置，这种事只有总部管理员能做
+                if (ParentId != dept.ParentId)
+                    throw new InvalidOperationException("不能修改自己管理范围根部门的上级部门，如需调整请联系总部管理员");
+            }
+            else
+            {
+                if (cu.IsScoped && !ParentId.HasValue)
+                    throw new InvalidOperationException("不能把部门挪到自己管理范围之外（顶级）");
+                if (!await deptScopeService.CanAccessDeptAsync(cu, ParentId))
+                    throw new InvalidOperationException("无权把部门挪到该上级部门下");
+            }
+
             if (string.IsNullOrWhiteSpace(DeptName))
                 throw new InvalidOperationException("请填写部门名称");
             if (DeptName.Trim().Length > 100)
@@ -153,6 +204,16 @@ public class DepartmentManageModel(AttendanceDbContext db) : PageModel
                 .Where(i => i > 0).Distinct().ToList();
             if (ids.Count == 0)
                 throw new InvalidOperationException("请先勾选要删除的部门");
+
+            var cu = HttpContext.GetCurrentUser()!;
+            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+            // 受限管理员：范围外的 id 静默剔除（不能删别的分公司的部门）；自己的范围根部门本身也不能删——
+            // 删了自己的范围根，整个管理范围就没了着落（数据库外键其实也会拦住这个操作，这里提前给个
+            // 看得懂的提示，不让它变成一句原始的外键约束错误）
+            if (visibleIds is not null)
+                ids = ids.Where(id => visibleIds.Contains(id) && id != cu.ScopedDepartmentId!.Value).ToList();
+            if (ids.Count == 0)
+                throw new InvalidOperationException("没有可以删除的部门（不能删除自己管理范围之外的部门，也不能删除自己的管理范围根部门）");
 
             var depts = await db.Departments.Where(d => ids.Contains(d.Id)).ToListAsync();
 

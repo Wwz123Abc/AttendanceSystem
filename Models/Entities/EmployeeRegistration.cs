@@ -47,6 +47,11 @@ public class EmployeeRegistration
     [MaxLength(500)]
     public string? IdCardPhotoUrl { get; set; }
 
+    /// <summary>意向部门（可空）：从员工扫码用的那张二维码链接里带过来的（每个分公司的二维码链接不同，
+    /// 各自带自己的部门 id），标记这条登记是通过哪个分公司的二维码提交的。为空 = 通过没带部门信息的
+    /// 旧版通用链接提交（如果还有人在用旧链接/收藏的旧二维码）。</summary>
+    public int? DepartmentId { get; set; }
+
     public RegistrationStatus Status { get; set; } = RegistrationStatus.Pending;  // 处理状态
 
     public DateTime SubmittedAt { get; set; } = DateTime.Now;   // 员工提交时间
@@ -62,4 +67,7 @@ public class EmployeeRegistration
     // ── 导航属性 ──────────────────────────────────────────────────────────
     [ForeignKey("ConfirmedUserId")]
     public User? ConfirmedUser { get; set; }
+
+    [ForeignKey("DepartmentId")]
+    public Department? Department { get; set; }
 }

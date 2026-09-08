@@ -14,12 +14,15 @@ public interface IApprovalService
     /// <summary>申请人撤销申请（仅「待审批」状态可撤销）。</summary>
     Task<bool> CancelApprovalAsync(int userId, int approvalRequestId);
     /// <summary>审批记录分页查询。</summary>
-    Task<(List<ApprovalRequestDto> Items, int Total)> QueryApprovalsAsync(ApprovalQueryDto query);
+    /// <paramref name="deptIds"/> 非空时只查申请人部门在这个集合内的申请——分公司管理员查询/浏览审批记录时
+    /// 用来收窄到自己范围内，不受限管理员不传（查全公司）。
+    Task<(List<ApprovalRequestDto> Items, int Total)> QueryApprovalsAsync(ApprovalQueryDto query, HashSet<int>? deptIds = null);
     /// <summary>
     /// 审批申请详情（含各审批节点）。仅「申请人本人 / 该单审批人 / 管理员(文员)」可查看，
-    /// 其他人返回 null，避免越权查看他人申请的事由与附件。
-    /// </summary>
-    Task<ApprovalRequestDto?> GetApprovalDetailAsync(int id, int requesterUserId, bool isManager);
+    /// 其他人返回 null，避免越权查看他人申请的事由与附件。<paramref name="managerVisibleDeptIds"/> 非空时，
+    /// "管理员/文员"这条允许路径还要求申请人的部门落在这个集合内——分公司管理员不能仅凭 ManagePolicy
+    /// 身份就看到别的分公司的申请详情，必须是本人/审批人才行。</summary>
+    Task<ApprovalRequestDto?> GetApprovalDetailAsync(int id, int requesterUserId, bool isManager, HashSet<int>? managerVisibleDeptIds = null);
     /// <summary>查询待某审批人处理的申请列表。</summary>
     Task<List<ApprovalRequestDto>> GetPendingForApproverAsync(int approverUserId);
     /// <summary>

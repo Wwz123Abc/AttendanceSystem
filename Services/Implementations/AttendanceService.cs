@@ -15,12 +15,34 @@ namespace AttendanceSystem.Services.Implementations;
 /// </summary>
 public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptions> appOptions) : IAttendanceService
 {
+    private const int MaxPunchAttempts = 5;
+
     /// <summary>
-    /// 员工打卡（上班/下班）。流程：
-    /// 1) 校验是否节假日；2) 若开了定位打卡，校验距离；
-    /// 3) 写一条原始打卡流水；4) 取/建当天考勤记录并算出迟到/早退/工时/加班/状态。
+    /// 员工打卡（上班/下班）。先查后插（同一分钟内是否已经打过卡）本身有 TOCTOU 窗口：两个几乎同时
+    /// 到达的请求（比如远程打卡同一分钟内被点了两次、或者点了没反应又点了一次）都会以为"这一分钟还没打过"，
+    /// 后到的那个插入打卡流水时会撞到数据库的唯一索引，抛出 DbUpdateException 导致这次打卡直接 500。
+    /// 跟 <see cref="Implementations.ZKDeviceSyncService.ProcessAttLogAsync"/> 用同一套处理方式：外层套一层
+    /// 重试，冲突了就清空这次没保存成功的改动、重新读一遍最新数据重跑一次（第二次会看到流水已经存在，
+    /// 直接跳过插入），不是脏数据问题，最多重试 5 次。
     /// </summary>
     public async Task<PunchResponseDto> PunchAsync(int userId, PunchRequestDto request, bool skipLocationCheck = false)
+    {
+        for (var attempt = 1; attempt <= MaxPunchAttempts; attempt++)
+        {
+            try
+            {
+                return await PunchCoreAsync(userId, request, skipLocationCheck);
+            }
+            catch (DbUpdateException) when (attempt < MaxPunchAttempts)
+            {
+                db.ChangeTracker.Clear();   // 丢弃这次没保存成功的改动，下一轮重新从数据库读最新状态
+            }
+        }
+        // 理论上到不了这里：循环最后一次要么 return，要么让异常继续往上抛
+        throw new InvalidOperationException("打卡失败，请重试");
+    }
+
+    private async Task<PunchResponseDto> PunchCoreAsync(int userId, PunchRequestDto request, bool skipLocationCheck)
     {
         var now   = DateTime.Now;
         var today = DateOnly.FromDateTime(now);
@@ -128,12 +150,33 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         if (request.PunchType == PunchType.ClockIn)   // ── 上班卡 ──
         {
-            record.ClockInTime = punchTime;
-            status = CalcClockInStatus(punchTime, shift, out var lateMin);   // 算是否迟到
-            record.AttendanceStatus = status;
-            record.LateMinutes      = lateMin;
-            lateMinutes             = lateMin > 0 ? lateMin : null;
-            message = lateMin > 0 ? $"上班打卡成功，迟到 {lateMin} 分钟" : "上班打卡成功";
+            // 取当天最早一次上班打卡，跟考勤机同步（ZKDeviceSyncService）的口径保持一致，
+            // 不是无条件覆盖成最新一次——不然重复提交/网络重试，有可能把一个准点的早期时间
+            // 覆盖成偏晚的时间，凭空制造出"迟到"。
+            if (record.ClockInTime is null || punchTime < record.ClockInTime)
+            {
+                record.ClockInTime = punchTime;
+                status = CalcClockInStatus(punchTime, shift, out var lateMin);   // 算是否迟到
+                // 只在当天状态还是由打卡本身决定的（正常/迟到/早退/未打卡/旷工）时才更新——
+                // 旷工可以被真的打了上班卡这件事纠正回来（人确实来了），但请假/出差/节假日
+                // 这些由审批流程或定时任务设置的状态，不能被一次上班打卡顺手覆盖掉
+                // （比如批准了半天假、下午才打卡上班，不能把"请假"直接改成"正常"）。
+                if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.Late
+                    or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched or AttendanceStatus.Absent)
+                    record.AttendanceStatus = status;
+                // 请假/出差/节假日这几个状态当天不该有迟到分钟数——打卡流水本身照常记（审计用），
+                // 但不写回 LateMinutes，避免报表里"迟到分钟"合计混进请假日的残留数字
+                if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
+                    record.LateMinutes  = lateMin;
+                lateMinutes             = lateMin > 0 ? lateMin : null;
+                message = lateMin > 0 ? $"上班打卡成功，迟到 {lateMin} 分钟" : "上班打卡成功";
+            }
+            else
+            {
+                // 已经有更早的上班记录了，这次重复打卡不改变结果
+                status  = record.AttendanceStatus;
+                message = "上班打卡成功";
+            }
         }
         else if (request.PunchType == PunchType.MidCheck)   // ── 午间打卡 ──
         {
@@ -145,7 +188,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         {
             record.ClockOutTime = punchTime;
             status = CalcClockOutStatus(workDate, punchTime, shift, out var earlyMin);  // 算是否早退
-            record.EarlyLeaveMinutes = earlyMin;
+            // 请假/出差/节假日当天不该有早退分钟数残留，理由同上面的 LateMinutes
+            if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
+                record.EarlyLeaveMinutes = earlyMin;
             // 只在当天状态还是"正常/早退/未打卡"这种由打卡本身决定的状态时才更新——
             // "未打卡"要能被这次下班打卡覆盖掉（既然真的打了下班卡，就不再是"未打卡"了）；
             // 已经迟到的不会被这次的下班状态覆盖掉，请假/出差/节假日/旷工这些状态也不受影响。
@@ -162,7 +207,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             // 上下班卡都齐了，算实际工时（不早于应上班时间、不晚于应下班时间——早到晚走都不多算钱）。
             // 加班不再从打卡时间估算：只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
-            if (record.ClockInTime.HasValue)
+            // 请假/出差/节假日当天工时已经由审批流程/定时任务定好（通常是 0 或标准工时），不能被这里
+            // 顺手打的下班卡覆盖掉——不然会出现"既算请假又算工时"的重复计酬（打卡流水本身照常记，仅作审计）。
+            if (record.ClockInTime.HasValue
+                && record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
             {
                 var effectiveClockIn   = await ResolveEffectiveClockInAsync(record, workDate, record.ClockInTime.Value, shift);
                 var effectiveClockOut  = ClampEffectiveClockOut(workDate, punchTime, shift);
@@ -271,9 +319,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>查某部门/考勤组在一段时间内的所有人考勤记录。</summary>
-    public async Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto q)
+    public async Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto q, HashSet<int>? deptIds = null)
     {
-        var userIds = await BuildUserIdQueryAsync(q.DepartmentId, q.AttendanceGroupId);   // 先圈出这批人
+        var userIds = await BuildUserIdQueryAsync(q.DepartmentId, q.AttendanceGroupId, deptIds);   // 先圈出这批人
 
         return (await db.AttendanceRecords
             .Include(r => r.User).ThenInclude(u => u.Department)
@@ -338,11 +386,12 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 部门/考勤组这两个字段员工离职后仍然保留（停用不会清空），所以按它们筛选不受影响。
     /// </summary>
     public async Task<List<MonthlySummaryDto>> GetDeptMonthlySummariesAsync(
-        int? deptId, int? groupId, int year, int month)
+        int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null)
     {
         var idQuery = db.Users.AsQueryable();
         if (deptId.HasValue)  idQuery = idQuery.Where(u => u.DepartmentId == deptId.Value);
         if (groupId.HasValue) idQuery = idQuery.Where(u => u.AttendanceGroupId == groupId.Value);
+        if (scopeDeptIds is not null) idQuery = idQuery.Where(u => u.DepartmentId != null && scopeDeptIds.Contains(u.DepartmentId.Value));
         var userIds = await idQuery.Select(u => u.Id).ToListAsync();
 
         var dtos = (await db.MonthlyAttendanceSummaries
@@ -566,17 +615,22 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 那他这个月的汇总必须照常算出来/保持更新，不能因为人已经离职就让这个月的历史记录消失
     /// ——不然离职员工最后一个月的考勤/工时在报表里会直接对不上账，这是财务和 HR 都要用的数据。
     /// 所以处理范围 = 现在在职的人 ∪ 这个月有考勤记录的人 ∪ 这个月已经生成过汇总的人。
+    /// <paramref name="onlyUserId"/> 不为空时只重算这一个人（补卡/请假/加班/出差审批回写、
+    /// 管理员手动补卡之后调用这个，避免月初已经生成过的汇总因为后补的记录而跟日明细对不上、
+    /// 又得靠人工去点"重新生成"才能刷新）。
     /// </summary>
-    public async Task GenerateMonthlySummaryAsync(int year, int month)
+    public async Task GenerateMonthlySummaryAsync(int year, int month, int? onlyUserId = null)
     {
         var start = new DateOnly(year, month, 1);
         var end   = start.AddMonths(1).AddDays(-1);
 
-        var candidateIds = await db.Users.Where(u => u.IsActive).Select(u => u.Id)
-            .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
-            .Union(db.MonthlyAttendanceSummaries.Where(s => s.Year == year && s.Month == month).Select(s => s.UserId))
-            .Distinct()
-            .ToListAsync();
+        var candidateIds = onlyUserId.HasValue
+            ? [onlyUserId.Value]
+            : await db.Users.Where(u => u.IsActive).Select(u => u.Id)
+                .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
+                .Union(db.MonthlyAttendanceSummaries.Where(s => s.Year == year && s.Month == month).Select(s => s.UserId))
+                .Distinct()
+                .ToListAsync();
         var users = await db.Users.Where(u => candidateIds.Contains(u.Id)).ToListAsync();
 
         // 本月每个人“审批通过”的申请数（一次性批量查，避免循环里逐人查库）
@@ -600,7 +654,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 应出勤天数：从“月初”和“该员工入职日”里取较晚的一天开始算，
             // 避免月中入职的人被算成全月应出勤、导致出勤率虚低。
             var effStart = user.HireDate is { } hd && hd > start ? hd : start;
-            var expected = effStart > end ? 0 : await CountExpectedWorkdaysAsync(effStart, end, user.AttendanceGroupId);
+            var expected = effStart > end ? 0 : await CountExpectedWorkdaysAsync(effStart, end, user.AttendanceGroupId, user.Id);
 
             // 取出已有的汇总，没有就新建
             var summary = await db.MonthlyAttendanceSummaries
@@ -627,7 +681,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             decimal totalWork = 0, totalOt = 0;
             foreach (var r in records)
             {
-                if (r.ActualWorkHours <= 0 && r.ClockInTime is { } ci && r.ClockOutTime is { } co && co > ci)
+                // 请假/出差/节假日当天工时按审批口径本来就该是 0（或已经是标准工时），不能因为当天恰好
+                // 也有打卡时间就被这里的"老数据补算"顺手补算回去，变成既算请假又算工时
+                if (r.ActualWorkHours <= 0 && r.ClockInTime is { } ci && r.ClockOutTime is { } co && co > ci
+                    && r.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
                 {
                     // 老数据补算工时口径要和写入时一致：早到晚走都不多算钱，加班只认审批（这里不猜、不动 OvertimeHours）。
                     // 缺打卡的窗口直接从记录本身已经存好的 MidCheckResults 里读，不用班次现在的配置反查
@@ -671,13 +728,20 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>今日考勤看板统计（出勤/旷工/迟到/请假/未打卡人数）。</summary>
-    public async Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null)
+    public async Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null)
     {
         var today   = DateOnly.FromDateTime(DateTime.Today);
-        var userIds = await BuildUserIdQueryAsync(null, groupId);
+        var userIds = await BuildUserIdQueryAsync(null, groupId, deptIds);
         var records = await db.AttendanceRecords
             .Where(r => r.WorkDate == today && userIds.Contains(r.UserId))
             .ToListAsync();
+
+        // "没出勤"的人里，旷工/请假/节假日已经各有自己的口径和卡片了，"未打卡"这张卡只应该统计
+        // 剩下那批"今天还没来打卡、但又不属于旷工/请假/节假日"的人（比如上午还没到岗），
+        // 不然旷工当天晚上 23:55 被后台任务标记成 Absent 之后，同一个人会同时被"旷工"和"未打卡"
+        // 两张卡各数一遍，两个数字加起来会比总人数还多，看板数据对不上。
+        var accountedForCount = records.Count(r =>
+            r.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.OnLeave or AttendanceStatus.Holiday);
 
         return new AttendanceStatsDto
         {
@@ -689,7 +753,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 若按 LateMinutes>0 算会漏掉钉钉来的迟到。
             LateCount       = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late),
             OnLeaveCount    = records.Count(r => r.AttendanceStatus == AttendanceStatus.OnLeave),
-            NotPunchedCount = userIds.Count - records.Count(IsPresent),   // 总人数 - 出勤 = 没打卡
+            // 总人数 - 出勤 - 旷工/请假/节假日 = 剩下"还没打卡、原因待定"的人，不和旷工/请假重复计数
+            NotPunchedCount = userIds.Count - records.Count(IsPresent) - accountedForCount,
             LocationAbnormalCount = records.Count(r => r.LocationAbnormal)
         };
     }
@@ -701,10 +766,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 看板下钻：某统计类别对应的具体人员名单。分类口径和 <see cref="GetTodayStatsAsync"/> 完全一致
     /// （同一批 userIds、同一批 records、同样的判断条件），保证卡片上的数字和点开后名单的人数永远对得上。
     /// </summary>
-    public async Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null)
+    public async Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null)
     {
         var today   = DateOnly.FromDateTime(DateTime.Today);
-        var userIds = await BuildUserIdQueryAsync(null, groupId);
+        var userIds = await BuildUserIdQueryAsync(null, groupId, deptIds);
 
         var users = await db.Users.Include(u => u.Department)
             .Where(u => userIds.Contains(u.Id))
@@ -724,7 +789,12 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             "absent"     => records.Where(r => r.AttendanceStatus == AttendanceStatus.Absent).Select(r => r.UserId).ToList(),
             "late"       => records.Where(r => r.AttendanceStatus == AttendanceStatus.Late).Select(r => r.UserId).ToList(),
             "onleave"    => records.Where(r => r.AttendanceStatus == AttendanceStatus.OnLeave).Select(r => r.UserId).ToList(),
-            "notpunched" => userIds.Where(id => !presentIds.Contains(id)).ToList(),   // 含“完全没记录”和“有记录但没打上班卡”两种人
+            // 含"完全没记录"和"有记录但没打上班卡"两种人，但排除旷工/请假/节假日——这三类已经各有
+            // 自己的卡片，混进"未打卡"会跟"absent"下钻名单里的人重复，和 GetTodayStatsAsync 的口径保持一致
+            "notpunched" => userIds.Where(id => !presentIds.Contains(id)
+                && (!recordByUser.TryGetValue(id, out var npRec)
+                    || npRec.AttendanceStatus is not (AttendanceStatus.Absent or AttendanceStatus.OnLeave or AttendanceStatus.Holiday)))
+                .ToList(),
             "locationabnormal" => records.Where(r => r.LocationAbnormal).Select(r => r.UserId).ToList(),
             _            => []
         };
@@ -796,6 +866,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var approval = await db.ApprovalRequests.FindAsync(approvalRequestId);
         if (approval is null || approval.ApprovalStatus != ApprovalStatus.Approved) return;
 
+        // 记下这次改动实际动到了哪些"年-月"，回写完之后要把这些月份的月度汇总同步刷新一下
+        // （不然月初已经生成过的汇总，不会因为后补的记录自动更新，得靠人工点"重新生成"才会准）。
+        var touchedMonths = new HashSet<(int Year, int Month)>();
+
         // ── 补卡 ──
         if (approval.ApprovalType == ApprovalType.PunchReplenishment && approval.PunchDate.HasValue
             && approval.PunchTime.HasValue)
@@ -819,6 +893,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 补齐上下班两次卡后：重算当天实际工时（工资按工时结算，补完卡必须把工时补准），
             // 并解除“旷工/未打卡”状态（否则人有全天工时却仍被记旷工，工资和出勤对不上）。
             await RecalcWorkHoursAfterManualPunchAsync(record, approval.ApplicantUserId);
+            touchedMonths.Add((approval.PunchDate.Value.Year, approval.PunchDate.Value.Month));
         }
         // ── 加班 ──：加班时长完全以审批单为准，不从打卡时间估算；累加到当天的加班时长上
         // （同一天可能有多张已批准的加班单，所以是加，不是覆盖）
@@ -837,6 +912,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             record.OvertimeHours += approval.OvertimeDurationHours.Value;
             record.ApprovalNote   = $"加班已审批通过（{approval.RequestNo}），{approval.OvertimeDurationHours:0.##} 小时";
             record.UpdatedAt      = DateTime.Now;
+            touchedMonths.Add((workDate.Year, workDate.Month));
         }
         // ── 请假 ──
         else if (approval.ApprovalType == ApprovalType.Leave && approval.LeaveStartTime.HasValue)
@@ -863,8 +939,18 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 }
 
                 record.AttendanceStatus = AttendanceStatus.OnLeave;
+                // 如果这天之前已经打过卡、算出过工时（比如先上了半天班，下午才补批的请假），
+                // 这里要把工时清零——不然月度汇总里"请假天数"和"总工时"会同时把这天算进去，
+                // 变成这一天既按请假算了、又按实际工时重复计酬了一遍。系统目前是整天二选一的
+                // 处理方式（没有"半天请假、半天正常算工时"这种精细区分），所以整天清零是一致的。
+                record.ActualWorkHours   = 0;
+                // 迟到/早退分钟数同理清零：不然这天之前如果有打卡产生过迟到/早退分钟数，
+                // 会残留在报表的"迟到/早退分钟"合计里，跟"请假"这个状态本身对不上
+                record.LateMinutes       = 0;
+                record.EarlyLeaveMinutes = 0;
                 record.ApprovalNote     = $"请假审批通过（{approval.RequestNo}）";
                 record.UpdatedAt        = DateTime.Now;
+                touchedMonths.Add((d.Year, d.Month));
             }
         }
         // ── 出差 ──：出差期间不用打卡，逐天置为「出差」并按全勤记工时（工资按工时结算，不能漏记）
@@ -896,16 +982,26 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
                 // 有排班就用班次自己的标准工时，没排班就用默认标准工时（不用打卡也要按全勤给工时）
                 shiftsInRange.TryGetValue(d, out var shiftAssign);
-                record.AttendanceStatus = AttendanceStatus.BusinessTrip;
-                record.ActualWorkHours  = shiftAssign?.ShiftSchedule.StandardWorkHours ?? defaultHours;
-                record.OvertimeHours    = 0;   // 出差是否加班无法从审批单推断，不猜，需另外提交加班申请
+                record.AttendanceStatus  = AttendanceStatus.BusinessTrip;
+                record.ActualWorkHours   = shiftAssign?.ShiftSchedule.StandardWorkHours ?? defaultHours;
+                // 迟到/早退分钟数清零，理由同请假分支：不然出差前如果已经有过打卡产生的分钟数，会残留在报表里
+                record.LateMinutes       = 0;
+                record.EarlyLeaveMinutes = 0;
+                // OvertimeHours 不动：出差是否加班无法从审批单推断，不猜——但也不能不管三七二十一直接清零，
+                // 万一这天之前已经有另一张加班申请审批通过、累加过加班时长，这里清零会把已批准的加班顶掉。
+                // 新建的记录本来就是 0（实体默认值），不用特意再赋一次。
                 record.ApprovalNote     = $"出差审批通过（{approval.RequestNo}）"
                     + (string.IsNullOrWhiteSpace(approval.BusinessTripDestination) ? "" : $"，目的地：{approval.BusinessTripDestination}");
                 record.UpdatedAt        = DateTime.Now;
+                touchedMonths.Add((d.Year, d.Month));
             }
         }
 
         await db.SaveChangesAsync();
+
+        // 同步刷新受影响月份的月度汇总，不用再等人工点"重新生成"（GenerateMonthlySummaryAsync 本身是幂等的）
+        foreach (var (y, m) in touchedMonths)
+            await GenerateMonthlySummaryAsync(y, m, approval.ApplicantUserId);
     }
 
     /// <summary>
@@ -931,6 +1027,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         await RecalcWorkHoursAfterManualPunchAsync(record, userId);
         await db.SaveChangesAsync();
+
+        // 同步刷新这个月的月度汇总，道理和审批回写那边一样，不用等人工点"重新生成"
+        await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, userId);
     }
 
     // ── 私有计算方法（下面这些只在本服务内部使用）─────────────────────────────────
@@ -946,16 +1045,32 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         var applicant   = await db.Users.FindAsync(userId);
         var shiftAssign = await GetShiftAssignmentAsync(userId, record.WorkDate);
+        var shift       = shiftAssign?.ShiftSchedule;
+
+        // 请假/出差/节假日这几个状态当天的工时/迟到/早退都已经由审批流程定好了，不能被这次补卡
+        // 顺手重算覆盖掉（避免既算请假又算工时的重复计酬）——跟下面状态本身的保护是同一个道理
+        var isProtectedStatus = record.AttendanceStatus is
+            AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip;
 
         // 工时口径和本地打卡一致：早到晚走都不多算钱，班次配了午间必打卡窗口、当天又没有打卡落在窗口内，只算下午
-        var effectiveClockIn  = await ResolveEffectiveClockInAsync(record, record.WorkDate, ci, shiftAssign?.ShiftSchedule);
-        var effectiveClockOut = ClampEffectiveClockOut(record.WorkDate, co, shiftAssign?.ShiftSchedule);
-        record.ActualWorkHours = CalcWorkHours(effectiveClockIn, effectiveClockOut, applicant?.AttendanceGroupId);
+        var effectiveClockIn  = await ResolveEffectiveClockInAsync(record, record.WorkDate, ci, shift);
+        var effectiveClockOut = ClampEffectiveClockOut(record.WorkDate, co, shift);
+        if (!isProtectedStatus)
+            record.ActualWorkHours = CalcWorkHours(effectiveClockIn, effectiveClockOut, applicant?.AttendanceGroupId);
 
-        if (record.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.NotPunched)
-            record.AttendanceStatus = record.LateMinutes > 0       ? AttendanceStatus.Late
-                                    : record.EarlyLeaveMinutes > 0 ? AttendanceStatus.EarlyLeave
-                                    :                                AttendanceStatus.Normal;
+        // 迟到/早退分钟数和状态都要按补卡后的新时间重新算一遍，不能沿用改之前的旧值——
+        // 不然管理员把一条迟到记录的上班时间改准点了，LateMinutes 还留着旧的迟到分钟数、
+        // 状态也可能继续显示"迟到"。请假/出差/节假日这些审批流程设置的状态不受影响。
+        var clockInStatus  = CalcClockInStatus(ci, shift, out var lateMin);
+        var clockOutStatus = CalcClockOutStatus(record.WorkDate, co, shift, out var earlyMin);
+        if (!isProtectedStatus)
+        {
+            record.LateMinutes       = lateMin;
+            record.EarlyLeaveMinutes = earlyMin;
+            record.AttendanceStatus  = clockInStatus == AttendanceStatus.Late   ? AttendanceStatus.Late
+                                      : clockOutStatus == AttendanceStatus.EarlyLeave ? AttendanceStatus.EarlyLeave
+                                      : AttendanceStatus.Normal;
+        }
     }
 
     /// <summary>
@@ -1123,10 +1238,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// </summary>
     public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut, int lunchBreak, int dinnerBreak)
     {
-        var minutes = (decimal)(clockOut - clockIn).TotalMinutes;   // 在岗总分钟（夜班下班在第二天也没问题）
-        if (minutes <= 0) return 0;
-        if (minutes > 6 * 60) minutes -= lunchBreak;
-        if (minutes > 9 * 60) minutes -= dinnerBreak;
+        var rawMinutes = (decimal)(clockOut - clockIn).TotalMinutes;   // 在岗总分钟（夜班下班在第二天也没问题）
+        if (rawMinutes <= 0) return 0;
+        // 两道阈值判断都要用没扣过的原始在岗分钟数——之前第二道判断用的是已经减掉午休之后的分钟数，
+        // 导致原始在岗时长落在"9~10 小时"这个区间时（减完午休正好又跌回 9 小时以内），
+        // 晚餐时长会被漏扣，多算了工时。
+        var minutes = rawMinutes;
+        if (rawMinutes > 6 * 60) minutes -= lunchBreak;
+        if (rawMinutes > 9 * 60) minutes -= dinnerBreak;
         return Math.Max(0, Math.Round(minutes / 60, 2));
     }
 
@@ -1178,34 +1297,47 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
     /// <summary>
     /// 算一段时间内的应出勤天数（逐天判断）：
-    /// ● 调班补班日：哪怕是周末也算出勤；
-    /// ● 普通工作日：只要不是法定节假日/公司休息日，就算出勤。
+    /// ● 调班补班日：哪怕是休息日也算出勤，优先级最高；
+    /// ● 法定节假日/公司休息日：不算出勤；
+    /// ● 其它日子：按这个人当天排的班次自己配置的休息日判断（三班倒可能休二、三，不一定是标准周末）；
+    ///   没排班的日子没法知道具体休息日规则，退一步按标准周末兜底。
     /// </summary>
-    private async Task<int> CountExpectedWorkdaysAsync(DateOnly start, DateOnly end, int? groupId)
+    private async Task<int> CountExpectedWorkdaysAsync(DateOnly start, DateOnly end, int? groupId, int userId)
     {
         var holidays = await db.Holidays
             .Where(h => h.HolidayDate >= start && h.HolidayDate <= end
                      && (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId))
             .ToListAsync();
 
+        var assignments = await db.ShiftAssignments
+            .Include(a => a.ShiftSchedule)
+            .Where(a => a.UserId == userId && a.WorkDate >= start && a.WorkDate <= end)
+            .ToDictionaryAsync(a => a.WorkDate);
+
         var count = 0;
         for (var d = start; d <= end; d = d.AddDays(1))
         {
-            var isWeekend = d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
-            var holiday   = holidays.FirstOrDefault(h => h.HolidayDate == d);
-            if (holiday?.HolidayType == HolidayType.CompensatoryWorkDay) count++;        // 补班日算
-            else if (!isWeekend && holiday?.HolidayType is not HolidayType.LegalHoliday  // 工作日且非节假日算
-                                                       and not HolidayType.CompanyRestDay) count++;
+            var holiday = holidays.FirstOrDefault(h => h.HolidayDate == d);
+            if (holiday?.HolidayType == HolidayType.CompensatoryWorkDay) { count++; continue; }
+            if (holiday?.HolidayType is HolidayType.LegalHoliday or HolidayType.CompanyRestDay) continue;
+
+            var isRestDay = assignments.TryGetValue(d, out var assign)
+                ? assign.ShiftSchedule.IsRestDay(d.DayOfWeek)
+                : d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;   // 没排班，按标准周末兜底
+            if (!isRestDay) count++;
         }
         return count;
     }
 
     /// <summary>按部门/考勤组圈出在职员工的编号列表。</summary>
-    private async Task<List<int>> BuildUserIdQueryAsync(int? deptId, int? groupId)
+    private async Task<List<int>> BuildUserIdQueryAsync(int? deptId, int? groupId, HashSet<int>? deptIds = null)
     {
         var q = db.Users.Where(u => u.IsActive).AsQueryable();
         if (deptId.HasValue)  q = q.Where(u => u.DepartmentId == deptId.Value);
         if (groupId.HasValue) q = q.Where(u => u.AttendanceGroupId == groupId.Value);
+        // 分公司管理员范围过滤：deptIds 是"自己范围内的部门 id 全集"（含下级部门），跟上面 deptId 的
+        // 单值精确匹配是两码事——deptId 是页面自己选的筛选条件，deptIds 是登录者身份带来的强制范围
+        if (deptIds is not null) q = q.Where(u => u.DepartmentId != null && deptIds.Contains(u.DepartmentId.Value));
         return await q.Select(u => u.Id).ToListAsync();
     }
 

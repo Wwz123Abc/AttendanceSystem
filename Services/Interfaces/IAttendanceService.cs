@@ -21,23 +21,26 @@ public interface IAttendanceService
     Task<AttendanceRecordDto?>     GetTodayAttendanceAsync(int userId);
     /// <summary>按条件查询个人考勤记录列表。</summary>
     Task<List<AttendanceRecordDto>> GetPersonalAttendanceAsync(PersonalAttendanceQueryDto query);
-    /// <summary>按部门/考勤组查询考勤记录列表。</summary>
-    Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto query);
+    /// <summary>按部门/考勤组查询考勤记录列表。<paramref name="deptIds"/> 非空时额外收窄到这批部门内
+    /// （分公司管理员范围过滤，不受限管理员不传）。</summary>
+    Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto query, HashSet<int>? deptIds = null);
     /// <summary>获取某员工指定月份的汇总（含每日明细）。</summary>
     Task<MonthlySummaryDto?>       GetMonthlySummaryAsync(int userId, int year, int month);
     /// <summary>获取某员工指定月份的排班安排（“我的排班”页用，方便员工自己查看上班时间）。</summary>
     Task<List<MyScheduleDto>>      GetMyScheduleAsync(int userId, int year, int month);
-    /// <summary>获取部门/考勤组指定月份的汇总列表。</summary>
-    Task<List<MonthlySummaryDto>>  GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month);
-    /// <summary>生成/重算指定月份所有在职员工的考勤汇总。</summary>
-    Task                           GenerateMonthlySummaryAsync(int year, int month);
-    /// <summary>今日考勤看板统计（出勤、缺勤、迟到等）。</summary>
-    Task<AttendanceStatsDto>       GetTodayStatsAsync(int? groupId = null);
+    /// <summary>获取部门/考勤组指定月份的汇总列表。<paramref name="scopeDeptIds"/> 非空时额外收窄到这批
+    /// 部门内（分公司管理员范围过滤，不受限管理员不传）。</summary>
+    Task<List<MonthlySummaryDto>>  GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null);
+    /// <summary>生成/重算指定月份的考勤汇总；onlyUserId 不为空时只重算这一个人（审批回写/手动补卡后调用）。</summary>
+    Task                           GenerateMonthlySummaryAsync(int year, int month, int? onlyUserId = null);
+    /// <summary>今日考勤看板统计（出勤、缺勤、迟到等）。<paramref name="deptIds"/> 非空时只统计部门在这个
+    /// 集合内的员工——分公司管理员登录时用来把看板收窄到自己管理范围内，不受限管理员不传（看全公司）。</summary>
+    Task<AttendanceStatsDto>       GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null);
     /// <summary>
     /// 看板下钻：某统计类别（total/present/absent/late/onleave/notpunched）对应的具体人员名单。
     /// 分类口径与 <see cref="GetTodayStatsAsync"/> 完全一致，保证卡片数字和点开的名单条数对得上。
     /// </summary>
-    Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null);
+    Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null);
     /// <summary>判断指定日期是否为节假日（排除调班补班日）。</summary>
     Task<bool>                     IsHolidayAsync(DateOnly date, int? groupId = null);
     /// <summary>获取指定月份的假期信息列表（法定节假日/公司休息日/调班补班日），供日历页标注非工作日用。</summary>

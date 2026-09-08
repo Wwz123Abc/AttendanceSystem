@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
@@ -10,7 +11,7 @@ namespace AttendanceSystem.Controllers;
 [Authorize]
 [Route("api/[controller]")]
 [ApiController]
-public class ApprovalController(IApprovalService approvalService) : ApiControllerBase
+public class ApprovalController(IApprovalService approvalService, IDeptScopeService deptScopeService) : ApiControllerBase
 {
     /// <summary>员工提交审批申请。</summary>
     [HttpPost("submit")]
@@ -62,7 +63,12 @@ public class ApprovalController(IApprovalService approvalService) : ApiControlle
     {
         // 判断当前用户是不是管理员或文员
         bool isManager = User.IsInRole(nameof(UserRole.Admin)) || User.IsInRole(nameof(UserRole.Clerk));
-        var detail = await approvalService.GetApprovalDetailAsync(id, CurrentUserId, isManager);
+        // 只有走"管理员/文员"这条路径时才需要按范围收窄——本人/审批人这两条路径跟部门范围无关，
+        // 不受限管理员传 null 表示不收窄（看全公司）
+        var managerVisibleDeptIds = isManager
+            ? await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!)
+            : null;
+        var detail = await approvalService.GetApprovalDetailAsync(id, CurrentUserId, isManager, managerVisibleDeptIds);
         return detail is null
             ? NotFound(new { Success = false, Message = "申请不存在或无权查看" })
             : Ok(new { Success = true, Data = detail });
@@ -73,7 +79,8 @@ public class ApprovalController(IApprovalService approvalService) : ApiControlle
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> Query([FromQuery] ApprovalQueryDto query)
     {
-        var (items, total) = await approvalService.QueryApprovalsAsync(query);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var (items, total) = await approvalService.QueryApprovalsAsync(query, visibleIds);
         return Ok(new { Success = true, Data = items, Total = total });
     }
 }

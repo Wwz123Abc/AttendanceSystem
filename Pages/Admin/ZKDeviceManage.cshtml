@@ -30,13 +30,13 @@
             <table class="table table-hover mb-0">
                 <thead>
                     <tr>
-                        <th>序列号 (SN)</th><th>别名</th><th>状态</th><th>最近在线</th><th>操作</th>
+                        <th>序列号 (SN)</th><th>别名</th><th>归属部门</th><th>状态</th><th>最近在线</th><th>操作</th>
                     </tr>
                 </thead>
                 <tbody>
                     @if (!Model.Devices.Any())
                     {
-                        <tr><td colspan="5" class="empty-state"><i class="bi bi-inbox"></i>暂无设备，点右上角"添加设备"</td></tr>
+                        <tr><td colspan="6" class="empty-state"><i class="bi bi-inbox"></i>暂无设备，点右上角"添加设备"</td></tr>
                     }
                     @foreach (var d in Model.Devices)
                     {
@@ -44,6 +44,7 @@
                         <tr>
                             <td class="fw-semibold">@d.SN</td>
                             <td>@(d.Name ?? "—")</td>
+                            <td>@(d.Department?.DeptName ?? "—")</td>
                             <td>
                                 @if (d.IsActive)
                                 {
@@ -61,7 +62,7 @@
                             <td class="small text-muted">@(d.LastSeenAt?.ToString("MM-dd HH:mm:ss") ?? "从未通信")</td>
                             <td>
                                 <button type="button" class="btn btn-outline-primary btn-sm"
-                                        onclick="openEdit(@d.Id, '@d.SN', '@(d.Name ?? "")', @(d.IsActive ? "true" : "false"))">
+                                        onclick="openEdit(@d.Id, '@d.SN', '@(d.Name ?? "")', @(d.IsActive ? "true" : "false"), @(d.DepartmentId?.ToString() ?? "null"))">
                                     <i class="bi bi-pencil"></i>编辑
                                 </button>
                                 <form method="post" asp-page-handler="Delete" class="d-inline"
@@ -99,10 +100,23 @@
                         <label class="form-label">设备别名</label>
                         <input asp-for="Name" id="fName" class="form-control" maxlength="100" placeholder="如：一楼前台机" />
                     </div>
-                    <div class="form-check">
+                    <div class="form-check mb-3">
                         <input asp-for="IsActive" id="fIsActive" class="form-check-input" type="checkbox" checked />
                         <label class="form-check-label" for="fIsActive">启用（停用后该设备的请求会被拒绝）</label>
                     </div>
+                    @if (Model.CurrentUserIsUnscoped)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">归属部门</label>
+                            <select asp-for="DepartmentId" id="fDepartmentId" class="form-select">
+                                <option value="">未归类（总部共用设备）</option>
+                                @foreach (var dep in Model.AssignableDepts)
+                                { <option value="@dep.Id">@dep.DeptName</option> }
+                            </select>
+                            <div class="form-text">归属到某个部门后，那个部门的分公司管理员才能看到、管理这台设备；
+                                新建员工时也只能勾选自己范围内的设备。</div>
+                        </div>
+                    }
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
@@ -115,20 +129,26 @@
 
 @section Scripts {
 <script>
+function setDeptId(id) {
+    const el = document.getElementById('fDepartmentId');
+    if (el) el.value = id === null || id === undefined ? '' : id;
+}
 function openAdd() {
     document.getElementById('deviceModalTitle').textContent = '添加设备';
     document.getElementById('fId').value = 0;
     document.getElementById('fSN').value = '';
     document.getElementById('fName').value = '';
     document.getElementById('fIsActive').checked = true;
+    setDeptId(null);
     new bootstrap.Modal(document.getElementById('deviceModal')).show();
 }
-function openEdit(id, sn, name, isActive) {
+function openEdit(id, sn, name, isActive, deptId) {
     document.getElementById('deviceModalTitle').textContent = '编辑设备 - ' + sn;
     document.getElementById('fId').value = id;
     document.getElementById('fSN').value = sn;
     document.getElementById('fName').value = name;
     document.getElementById('fIsActive').checked = isActive;
+    setDeptId(deptId);
     new bootstrap.Modal(document.getElementById('deviceModal')).show();
 }
 </script>

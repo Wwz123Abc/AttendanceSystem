@@ -24,10 +24,7 @@ public class AccountController(IUserService userService, IOptions<AppSettingsOpt
         if (string.IsNullOrWhiteSpace(req.EmployeeNo) || string.IsNullOrWhiteSpace(req.Password))
             return BadRequest(new { Success = false, Message = "工号和密码不能为空" });
 
-        // 交给用户服务校验工号+密码。
-        // 注意：账号如果已被停用，ValidateLoginAsync 会直接抛异常而不是返回 null——
-        // 这里没有专门 catch 它，是因为 Program.cs 里配置了全局的异常兜底，
-        // 会自动把这类异常转成合适的错误提示返回给调用方，不需要每个接口都重复写一遍。
+        // 交给用户服务校验工号+密码：工号/密码错误、账号已停用，统一返回 null（不区分提示，避免账号被枚举）
         var user = await userService.ValidateLoginAsync(req.EmployeeNo, req.Password);
         if (user is null)
             return Ok(new { Success = false, Message = "工号或密码错误，请重新输入" });
@@ -48,7 +45,7 @@ public class AccountController(IUserService userService, IOptions<AppSettingsOpt
         {
             Success = true,
             Message = "登录成功",
-            Data    = new { user.Id, user.EmployeeNo, user.RealName, RoleText = user.Role.ToDisplayName() }
+            Data    = new { user.Id, user.EmployeeNo, user.RealName, RoleText = user.Role.ToDisplayName(), user.MustChangePassword }
         });
     }
 

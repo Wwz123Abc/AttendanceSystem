@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
@@ -43,6 +44,11 @@ public class RemotePunchModel(
     public string? ErrorMessage     { get; set; }
     public bool    ShowFallbackHint { get; set; }   // 人脸识别没通过时，提示可以改走补卡申请
 
+    /// <summary>人脸抓拍的 base64 字符串上限（约等于解码后 3.75MB 原始图片）——一帧摄像头截图正常情况下
+    /// 远小于这个数，这里卡一个上限只是为了在真正调用 Convert.FromBase64String 解码（会一次性分配等大小
+    /// 的内存缓冲区）之前挡掉恶意构造的超大字符串，避免有人直接绕过前端拿超大 payload 打这个接口刷内存。</summary>
+    private const int MaxCapturedPhotoDataLength = 5 * 1024 * 1024;
+
     public async Task OnGetAsync() => await LoadStateAsync();
 
     public async Task<IActionResult> OnPostAsync()
@@ -77,6 +83,8 @@ public class RemotePunchModel(
 
             if (string.IsNullOrWhiteSpace(CapturedPhotoData))
                 throw new InvalidOperationException("未能拍到人脸画面，请确认摄像头已开启后重试");
+            if (CapturedPhotoData.Length > MaxCapturedPhotoDataLength)
+                throw new InvalidOperationException("拍摄的照片数据过大，请重试");
 
             // 不用员工手选上班/下班，系统按"今天打过上班卡没有"自动判断：
             // 还没打过 → 算上班；已经打过 → 算下班（下班之后还能反复再打，PunchAsync 里下班卡
@@ -97,8 +105,7 @@ public class RemotePunchModel(
                 throw new InvalidOperationException("拍摄的照片数据不完整，请重试");
             }
 
-            var webRoot = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-            var refPath = Path.Combine(webRoot, user.FaceReferencePhotoUrl!.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            var refPath = Path.Combine(PrivateFileStorage.GetRoot(env), user.FaceReferencePhotoUrl!.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
             if (!System.IO.File.Exists(refPath))
                 throw new InvalidOperationException("参考照片文件缺失，请重新到「人脸信息」页录入");
             var refBytes = await System.IO.File.ReadAllBytesAsync(refPath);
@@ -112,8 +119,9 @@ public class RemotePunchModel(
             {
                 // AliyunFaceApiException=接口调用失败（网络/签名/服务端错误）；InvalidOperationException=
                 // 没配置 AccessKeyId/AccessKeySecret（VerifyAsync 内部 CreateClient() 抛的，不在它自己的
-                // try/catch 范围内）。两种都算"这次尝试失败"，一样要记进限流/审计表，不能漏记。
-                await LogAttemptAsync(false, ex.Message);
+                // try/catch 范围内）。这两种是"服务本身出问题"，不算员工的识别失败，不计入下面那个
+                // 限流计数器（限流本意是防止有人拿别人照片反复试，不该因为阿里云接口抽风几次就把
+                // 正常员工锁 10 分钟、还提示"识别失败次数过多"这种听起来像是员工自己的问题的话）。
                 throw new InvalidOperationException("人脸识别服务暂时不可用，请稍后重试：" + ex.Message);
             }
 
@@ -180,8 +188,7 @@ public class RemotePunchModel(
     private async Task SaveAttemptPhotoAsync(byte[] liveBytes)
     {
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
-        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-        var dir        = Path.Combine(webRoot, uploadPath, "faces", "attempts", DateTime.Today.ToString("yyyyMMdd"));
+        var dir        = Path.Combine(PrivateFileStorage.GetRoot(env), uploadPath, "faces", "attempts", DateTime.Today.ToString("yyyyMMdd"));
         Directory.CreateDirectory(dir);
         var fileName = $"{CurrentUserId}_{DateTime.Now:HHmmss}_{Guid.NewGuid():N}.jpg";
         await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), liveBytes);

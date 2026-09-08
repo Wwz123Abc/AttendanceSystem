@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
@@ -32,6 +33,33 @@ public class ZKDeviceController(
         !string.IsNullOrWhiteSpace(sn) &&
         await db.ZKDevices.AnyAsync(d => d.SN == sn && d.IsActive, ct);
 
+    // 考勤机这几个接口是纯匿名的（靠 SN 白名单校验来源，见类注释），门槛只有"知道/猜到一个白名单里的
+    // SN"——这本身就是 H2 的已知风险；这里加的不是拦截（拦截需要签名机制，设备固件支不支持还没确认），
+    // 是"看得见"：同一个不认识的 SN 在一段时间内反复来敲这几个接口，大概率不是设备正常行为（正常设备
+    // 一开机注册成功后 SN 就一直是同一个认识的），更像是在扫描/枚举 SN——用一个内存计数器跟踪，
+    // 跨过阈值报一条 Error 级别的日志，运维接了日志告警的话能第一时间看到。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Count, DateTime WindowStart)>
+        UnknownSnAttempts = new();
+    private const int UnknownSnAlertThreshold = 20;
+    private static readonly TimeSpan UnknownSnAlertWindow = TimeSpan.FromMinutes(10);
+
+    private void LogUnknownDeviceAttempt(string? sn, string endpoint)
+    {
+        var key = string.IsNullOrWhiteSpace(sn) ? "(空)" : sn;
+        logger.LogWarning("未知/未启用设备序列号尝试访问考勤机接口 {Endpoint}：SN={SN}，来源IP={RemoteIp}",
+            endpoint, key, HttpContext.Connection.RemoteIpAddress);
+
+        var now   = DateTime.Now;
+        var entry = UnknownSnAttempts.AddOrUpdate(key,
+            _ => (1, now),
+            (_, old) => now - old.WindowStart > UnknownSnAlertWindow ? (1, now) : (old.Count + 1, old.WindowStart));
+
+        if (entry.Count == UnknownSnAlertThreshold)   // 只在刚跨过阈值那一次报警，不用每次都刷屏
+            logger.LogError(
+                "告警：序列号 {SN} 在最近 {Minutes} 分钟内已有 {Count} 次未通过白名单校验的访问尝试，" +
+                "疑似在扫描/枚举设备序列号，建议核查来源 IP", key, UnknownSnAlertWindow.TotalMinutes, entry.Count);
+    }
+
     /// <summary>记录这台设备最近一次成功通信的时间，供后台页面显示在线/离线。</summary>
     private Task TouchLastSeenAsync(string sn, CancellationToken ct = default) =>
         db.ZKDevices.Where(d => d.SN == sn)
@@ -45,7 +73,7 @@ public class ZKDeviceController(
         logger.LogInformation("考勤机初始化请求：SN={SN}, options={Options}, pushver={PushVer}", SN, options, pushver);
         if (!await IsKnownDeviceAsync(SN, ct))
         {
-            logger.LogWarning("未知设备序列号尝试初始化：{SN}", SN);
+            LogUnknownDeviceAttempt(SN, nameof(Init));
             return Content("UNKNOWN DEVICE", "text/plain", Gbk);
         }
         await TouchLastSeenAsync(SN!, ct);
@@ -70,7 +98,7 @@ public class ZKDeviceController(
     {
         if (!await IsKnownDeviceAsync(SN, ct))
         {
-            logger.LogWarning("未知设备序列号尝试上传数据：{SN}", SN);
+            LogUnknownDeviceAttempt(SN, nameof(Upload));
             return Content("UNKNOWN DEVICE", "text/plain", Gbk);
         }
         await TouchLastSeenAsync(SN!, ct);
@@ -92,7 +120,13 @@ public class ZKDeviceController(
             }
             else
             {
-                logger.LogInformation("考勤机 {SN} 推送了暂不处理的数据类型：table={Table}，内容={Body}", SN, table, Gbk.GetString(bodyBytes));
+                // 不认识的 table 类型，只记长度和前 200 个字符方便排查是什么数据——不要把整个请求体
+                // （GBK 解码出来的二进制内容，可能很大、也可能全是乱码）整段打进日志，避免日志文件被灌爆，
+                // 也避免设备传来的内容原样落进日志给了可乘之机（日志注入）
+                var preview = Gbk.GetString(bodyBytes);
+                if (preview.Length > 200) preview = preview[..200] + "...(截断)";
+                logger.LogInformation("考勤机 {SN} 推送了暂不处理的数据类型：table={Table}，长度={Length}，内容预览={Body}",
+                    SN, table, bodyBytes.Length, preview);
             }
         }
         catch (DbUpdateException ex)
@@ -115,20 +149,49 @@ public class ZKDeviceController(
     /// <summary>心跳：设备定期来问"有没有要我做的事"，顺便把排队的命令带给它。
     /// 命令序号直接用数据库主键 Id（不是"这次心跳里的第几条"），这样设备在 /iclock/devicecmd 回执里
     /// 带回来的 ID 才能直接对应回具体是哪条命令。没确认过、且超过 CommandConfirmTimeoutMinutes 还没确认的
-    /// 命令会被当成"上次没送达"重新下发；单次心跳最多带 MaxCommandsPerHeartbeat 条，多的留到下次心跳再发，
-    /// 避免批量导入/批量停用时一次性命令太多让设备处理不过来。</summary>
+    /// 命令会被当成"上次没送达"重新下发，但重发次数用完了（见 MaxSendAttempts）就不会再选中；
+    /// 单次心跳最多带 MaxCommandsPerHeartbeat 条——挑选时优先给"从来没发过"的命令，其次才轮到"超时没确认、
+    /// 要重试"的命令，不然一堆发不出去还在反复重试的老命令会一直占满名额，新员工的命令永远排不上号。</summary>
     [HttpGet("/iclock/getrequest")]
     public async Task<IActionResult> Heartbeat([FromQuery] string? SN, CancellationToken ct)
     {
         if (!await IsKnownDeviceAsync(SN, ct))
+        {
+            LogUnknownDeviceAttempt(SN, nameof(Heartbeat));
             return Content("UNKNOWN DEVICE", "text/plain", Gbk);
+        }
         await TouchLastSeenAsync(SN!, ct);
 
         var retryBefore = DateTime.Now.AddMinutes(-_opt.CommandConfirmTimeoutMinutes);
-        var pending = await db.ZKDeviceCommands
-            .Where(c => c.SN == SN && !c.Confirmed && (c.SentAt == null || c.SentAt < retryBefore))
-            .OrderBy(c => c.CreatedAt)
+        var claimedAt   = DateTime.Now;   // 这次心跳"认领"命令用的时间戳，下面拿它当认领成功的凭证
+
+        var candidateIds = await db.ZKDeviceCommands
+            .Where(c => c.SN == SN && !c.Confirmed && !c.Failed && (c.SentAt == null || c.SentAt < retryBefore))
+            .OrderByDescending(c => c.SentAt == null)   // 没发过的排最前面
+            .ThenBy(c => c.CreatedAt)                   // 同一批里再按建立时间，先来后到
             .Take(_opt.MaxCommandsPerHeartbeat)
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+
+        if (candidateIds.Count == 0)
+            return Content("OK", "text/plain", Gbk);
+
+        // 原子"认领"：同一批候选命令，条件跟上面选出来时完全一致，在数据库层面一次性改 SentAt——
+        // 设备网络抖动同时开出两条心跳连接（或者上一条心跳超时后设备又重连了一次）时，两边几乎同时跑到
+        // 这里，后到的那次会发现这些命令的 SentAt 已经不满足条件了，抢不到，不会把同一条命令发给设备两次。
+        // 顺带把这次算作一次"尝试下发"：SentCount+1，如果这已经是第 MaxSendAttempts 次，直接标 Failed，
+        // 这次还是照常发出去（给它最后一次机会），但之后不会再被选中重试了。
+        await db.ZKDeviceCommands
+            .Where(c => candidateIds.Contains(c.Id) && c.SN == SN && !c.Confirmed && !c.Failed && (c.SentAt == null || c.SentAt < retryBefore))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.SentAt, claimedAt)
+                .SetProperty(c => c.SentCount, c => c.SentCount + 1)
+                .SetProperty(c => c.Failed, c => c.SentCount + 1 >= _opt.MaxSendAttempts), ct);
+
+        // 只取真被这次心跳认领到的那些（SentAt 精确等于这次的时间戳）——认领没抢到的那些不会出现在这里
+        var pending = await db.ZKDeviceCommands
+            .Where(c => candidateIds.Contains(c.Id) && c.SN == SN && c.SentAt == claimedAt)
+            .OrderBy(c => c.CreatedAt)
             .ToListAsync(ct);
 
         if (pending.Count == 0)
@@ -136,12 +199,7 @@ public class ZKDeviceController(
 
         var sb = new StringBuilder();
         foreach (var cmd in pending)
-        {
             sb.Append("C:").Append(cmd.Id).Append(':').Append(cmd.CommandText).Append("\r\n\r\n");
-            cmd.Sent   = true;
-            cmd.SentAt = DateTime.Now;
-        }
-        await db.SaveChangesAsync(ct);
 
         // 命令里可能带中文姓名（DATA UPDATE USERINFO 的 Name 字段），必须用设备协议实际用的 GBK 编码返回，
         // 用 ASCII 的话中文字节会被替换成 '?'，设备上显示的姓名就会变成一串问号
@@ -161,7 +219,10 @@ public class ZKDeviceController(
     public async Task<IActionResult> Registry([FromQuery] string? SN, CancellationToken ct)
     {
         if (!await IsKnownDeviceAsync(SN, ct))
+        {
+            LogUnknownDeviceAttempt(SN, nameof(Registry));
             return Content("UNKNOWN DEVICE", "text/plain", Gbk);
+        }
         await TouchLastSeenAsync(SN!, ct);
         return Content("RegistryCode=" + SN, "text/plain", Gbk);
     }
@@ -174,7 +235,10 @@ public class ZKDeviceController(
     public async Task<IActionResult> Push([FromQuery] string? SN, CancellationToken ct)
     {
         if (!await IsKnownDeviceAsync(SN, ct))
+        {
+            LogUnknownDeviceAttempt(SN, nameof(Push));
             return Content("UNKNOWN DEVICE", "text/plain", Gbk);
+        }
         await TouchLastSeenAsync(SN!, ct);
 
         var sb = new StringBuilder();
@@ -202,7 +266,10 @@ public class ZKDeviceController(
     public async Task<IActionResult> DeviceCmd([FromQuery] string? SN, CancellationToken ct)
     {
         if (!await IsKnownDeviceAsync(SN, ct))
+        {
+            LogUnknownDeviceAttempt(SN, nameof(DeviceCmd));
             return Content("UNKNOWN DEVICE", "text/plain", Gbk);
+        }
         await TouchLastSeenAsync(SN!, ct);
 
         var bodyBytes = await ReadBodyBytesAsync();
@@ -214,8 +281,11 @@ public class ZKDeviceController(
             var confirmedIds = ParseDeviceCmdResult(text);
             if (confirmedIds.Count > 0)
             {
+                // 一定要带上 SN 过滤：命令 Id 是全表自增、跨设备不隔离的，不加这个条件的话，
+                // 设备 A 的回执里随便报一个别的设备的命令 Id，也能把那条命令标记成"已确认"，
+                // 导致真正的目标设备（比如新员工要下发的用户信息）永远收不到这条指令、也不会重发。
                 await db.ZKDeviceCommands
-                    .Where(c => confirmedIds.Contains(c.Id))
+                    .Where(c => c.SN == SN && confirmedIds.Contains(c.Id))
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(c => c.Confirmed, true)
                         .SetProperty(c => c.ConfirmedAt, DateTime.Now), ct);
@@ -268,20 +338,29 @@ public class ZKDeviceController(
     /// PUSH/ADMS 协议的通用格式）。如果拿到完整版协议文档后发现字段顺序不一样，改这里就行，
     /// 不影响其它部分。
     /// </summary>
-    private static List<ZKAttLogRow> ParseAttLog(string text)
+    private List<ZKAttLogRow> ParseAttLog(string text)
     {
-        var rows = new List<ZKAttLogRow>();
+        var rows    = new List<ZKAttLogRow>();
+        var skipped = 0;
         foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var fields = line.TrimEnd('\r').Split('\t');
-            if (fields.Length < 2) continue;
+            if (fields.Length < 2) { skipped++; continue; }
             var pin = fields[0].Trim();
-            if (string.IsNullOrEmpty(pin)) continue;
-            if (!DateTime.TryParse(fields[1].Trim(), out var time)) continue;
+            if (string.IsNullOrEmpty(pin)) { skipped++; continue; }
+            // 用固定的区域格式解析（不依赖服务器操作系统当前设的语言/区域），否则同一份设备数据，
+            // 换一台区域设置不同的服务器部署就可能突然解析失败——设备发来的时间格式跟我们服务器
+            // 系统语言无关，不应该受它影响
+            if (!DateTime.TryParse(fields[1].Trim(), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var time)) { skipped++; continue; }
             var status = fields.Length > 2 && int.TryParse(fields[2].Trim(), out var s) ? s : 0;
             var verify = fields.Length > 3 && int.TryParse(fields[3].Trim(), out var v) ? v : 0;
             rows.Add(new ZKAttLogRow(pin, time, status, verify));
         }
+        // 畸形行以前是直接静默丢弃，排查"设备说传了但打卡没进系统"时无从下手；这里只加可见性
+        // （记一条日志），不改变原有的"跳过继续处理其它行"这个容错行为
+        if (skipped > 0)
+            logger.LogWarning("ATTLOG 解析：{Skipped} 行格式不符被跳过（共 {Total} 行）", skipped, rows.Count + skipped);
         return rows;
     }
 
@@ -313,9 +392,17 @@ public class ZKDeviceController(
 
         var photoBytes = bodyBytes[^photoSize..];   // 照片是整个请求体末尾的 size 个字节
 
+        // 存之前校验一下真的是 JPEG（看文件头魔数 FF D8 FF），不要求上层"size 字段"和"末尾截取"这套
+        // 边界计算每次都精确无误——万一算错了、截到的其实不是完整图片数据，这里能兜底发现并跳过，
+        // 而不是静默把不是图片的字节存成 .jpg 文件（固定后缀名不代表内容真的是那个格式）
+        if (photoBytes.Length < 3 || photoBytes[0] != 0xFF || photoBytes[1] != 0xD8 || photoBytes[2] != 0xFF)
+        {
+            logger.LogWarning("考勤机 {SN} 上传的考勤照片数据不是有效的 JPEG（文件头不匹配），已丢弃", sn);
+            return;
+        }
+
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
-        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-        var dir        = Path.Combine(webRoot, uploadPath, "zkdevice", DateTime.Today.ToString("yyyyMMdd"));
+        var dir        = Path.Combine(PrivateFileStorage.GetRoot(env), uploadPath, "zkdevice", DateTime.Today.ToString("yyyyMMdd"));
         Directory.CreateDirectory(dir);
         var fileName = $"{sn}_{DateTime.Now:HHmmss}_{Guid.NewGuid():N}.jpg";
         await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), photoBytes);

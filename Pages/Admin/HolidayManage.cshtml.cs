@@ -2,15 +2,19 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using AttendanceSystem.Data;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace AttendanceSystem.Pages.Admin;
 
-/// <summary>假期管理页：按年维护 法定节假日 / 公司休息日 / 调班补班日。</summary>
+/// <summary>假期管理页：按年维护 法定节假日 / 公司休息日 / 调班补班日。分公司管理员只能看到/管理
+/// "仅对自己范围内考勤组生效"的假期；不挂考勤组的全公司通用假期只有总部管理员能新增/删除，
+/// 但所有人都能看到（跟考勤组管理页"关联部门在自己范围内"的口径一致）。</summary>
 [Authorize(Policy = "ManagePolicy")]
-public class HolidayManageModel(AttendanceDbContext db) : PageModel
+public class HolidayManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService) : PageModel
 {
     public List<Holiday>         Holidays    { get; set; } = [];   // 当年的假期列表
     public List<AttendanceGroup> Groups      { get; set; } = [];   // 考勤组（用于“仅对某组生效”）
@@ -37,6 +41,17 @@ public class HolidayManageModel(AttendanceDbContext db) : PageModel
     {
         try
         {
+            var cu = HttpContext.GetCurrentUser()!;
+            // 受限管理员不能新增"全公司通用"的假期（不挂考勤组），只能给自己范围内的考勤组加假期——
+            // 全公司通用假期只有总部管理员能动
+            if (cu.IsScoped)
+            {
+                if (!GroupId.HasValue)
+                    throw new InvalidOperationException("请选择考勤组（不能新增全公司通用假期）");
+                if (!await IsGroupWritableAsync(cu, GroupId.Value))
+                    throw new InvalidOperationException("无权给该考勤组设置假期");
+            }
+
             // 先判断原始值是否为空，再 Trim：字段留空提交时模型绑定会把它转成 null，
             // 直接 Trim() 会抛空引用异常（虽然外层有 catch 兜底，但会显示成一句读不懂的技术错误）
             if (string.IsNullOrWhiteSpace(HolidayName))
@@ -74,8 +89,17 @@ public class HolidayManageModel(AttendanceDbContext db) : PageModel
     /// <summary>点“删除”：删掉一个假期。</summary>
     public async Task<IActionResult> OnPostDeleteAsync(int id)
     {
+        var cu = HttpContext.GetCurrentUser()!;
         var h = await db.Holidays.FindAsync(id);
-        if (h != null) { db.Holidays.Remove(h); await db.SaveChangesAsync(); }
+        if (h != null)
+        {
+            var allowed = h.AttendanceGroupId.HasValue
+                ? await IsGroupWritableAsync(cu, h.AttendanceGroupId.Value)
+                : !cu.IsScoped;   // 全公司通用假期只有总部管理员能删
+            if (!allowed) { ErrorMessage = "无权删除该假期"; await LoadAsync(); return Page(); }
+
+            db.Holidays.Remove(h); await db.SaveChangesAsync();
+        }
         SuccessMessage = "已删除";
         await LoadAsync();
         return Page();
@@ -84,11 +108,45 @@ public class HolidayManageModel(AttendanceDbContext db) : PageModel
     /// <summary>加载当年假期 + 考勤组下拉数据（OnGet/增删后都会调）。</summary>
     private async Task LoadAsync()
     {
-        Holidays = await db.Holidays
-            .Include(h => h.AttendanceGroup)
-            .Where(h => h.HolidayDate.Year == Year)
-            .OrderBy(h => h.HolidayDate)
-            .ToListAsync();
-        Groups = await db.AttendanceGroups.Where(g => g.IsActive).OrderBy(g => g.GroupName).ToListAsync();
+        var cu = HttpContext.GetCurrentUser()!;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+
+        var query = db.Holidays.Include(h => h.AttendanceGroup).ThenInclude(g => g!.Departments)
+            .Where(h => h.HolidayDate.Year == Year);
+        var all = await query.OrderBy(h => h.HolidayDate).ToListAsync();
+        Holidays = visibleIds is null
+            ? all
+            : all.Where(h => h.AttendanceGroupId is null
+                || h.AttendanceGroup!.Departments.Count == 0
+                || h.AttendanceGroup.Departments.Any(d => visibleIds.Contains(d.Id))).ToList();
+
+        var groups = await db.AttendanceGroups.Include(g => g.Departments)
+            .Where(g => g.IsActive).OrderBy(g => g.GroupName).ToListAsync();
+        Groups = visibleIds is null
+            ? groups
+            : groups.Where(g => g.Departments.Count == 0 || g.Departments.Any(d => visibleIds.Contains(d.Id))).ToList();
+    }
+
+    /// <summary>某个考勤组是否在当前登录者的管理范围内（口径跟 GroupManage 页一致）。</summary>
+    private async Task<bool> IsGroupInScopeAsync(CurrentUser cu, int groupId)
+    {
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return true;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        return deptIds.Any(id => visibleIds!.Contains(id));
+    }
+
+    /// <summary>某个考勤组是否允许当前登录者"写"（给这个组新增/删除假期）：不受限一律可以；受限管理员
+    /// 只能写"关联部门都在自己范围内"的组——完全没关联部门的全局/共享考勤组（可能有多个分公司在用）
+    /// 只有总部管理员能写，避免分公司管理员改动了别的分公司也在用的共用假期配置。</summary>
+    private async Task<bool> IsGroupWritableAsync(CurrentUser cu, int groupId)
+    {
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return false;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        // 必须是"关联部门都在自己范围内"才能写（All，不是 Any）——否则跨司共用组会变成双方受限管理员都能改
+        return deptIds.All(id => visibleIds!.Contains(id));
     }
 }

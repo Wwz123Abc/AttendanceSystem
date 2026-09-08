@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Services.Interfaces;
 
@@ -7,7 +8,7 @@ namespace AttendanceSystem.Pages.Approval;
 
 /// <summary>待我审批页：显示待办列表和详情，处理通过/驳回。需审批权限。</summary>
 [Authorize(Policy = "ApprovePolicy")]
-public class PendingApprovalModel(IApprovalService approvalService) : AppPageModel
+public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeService deptScopeService) : AppPageModel
 {
     public List<ApprovalRequestDto> PendingItems  { get; set; } = [];   // 待我审批的列表
     public List<ApprovalRequestDto> HandledItems  { get; set; } = [];   // 我已经审批过的记录
@@ -30,7 +31,10 @@ public class PendingApprovalModel(IApprovalService approvalService) : AppPageMod
         {
             bool isManager = User.IsInRole(nameof(AttendanceSystem.Models.Enums.UserRole.Admin))
                           || User.IsInRole(nameof(AttendanceSystem.Models.Enums.UserRole.Clerk));
-            CurrentDetail = await approvalService.GetApprovalDetailAsync(detailId.Value, CurrentUserId, isManager);
+            var managerVisibleDeptIds = isManager
+                ? await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!)
+                : null;
+            CurrentDetail = await approvalService.GetApprovalDetailAsync(detailId.Value, CurrentUserId, isManager, managerVisibleDeptIds);
         }
     }
 

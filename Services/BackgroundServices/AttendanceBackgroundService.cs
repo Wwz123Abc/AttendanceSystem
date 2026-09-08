@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
@@ -13,11 +14,12 @@ namespace AttendanceSystem.Services.BackgroundServices;
 
 /// <summary>
 /// 考勤后台定时任务（每分钟检查一次）：
-/// ● 每天 23:58：把当天没打卡的在职员工标记为旷工/未打卡；
-/// ● 每月 1 日 00:10：生成上一个月的考勤汇总（比月初留几分钟缓冲，给设备重传/网络延迟一点时间，
-///   免得月末最后几分钟的打卡因为还没到账就被漏算进汇总）；
+/// ● 每天 23:55-23:59：把当天没打卡的在职员工标记为旷工/未打卡；
+/// ● 每月 1-3 日：生成上一个月的考勤汇总（1 号 00:10 之后是首选时间点，留几分钟缓冲给设备重传/网络延迟；
+///   如果 1 号那次因为异常/重启被错过，2、3 号任意时间都会自动补跑一次，不用等人工点"重新生成"）；
 /// ● 每天 03:00：清理考勤机相关的过期数据（已确认的命令记录、过期的考勤照片）。
-/// 用「上次执行日期」做记号，保证同一时间窗内只执行一次。
+/// 用「上次执行日期」做记号，保证同一时间窗内只执行一次；这个记号只在对应任务真正跑成功之后才会更新，
+/// 半途异常不会被误记成"已完成"，下一分钟还会重试。
 /// </summary>
 public class AttendanceBackgroundService(
     IServiceScopeFactory scopeFactory,
@@ -38,26 +40,34 @@ public class AttendanceBackgroundService(
             {
                 var now = DateTime.Now;
 
-                // 到 23:58 且今天还没标记过 → 标记旷工
-                if (now.Hour == 23 && now.Minute >= 58 && _lastAbsentDate.Date < now.Date)
+                // 到 23:55-23:59 且今天还没标记过 → 标记旷工。窗口从原来的 23:58-23:59（2 分钟）
+                // 放宽到 5 分钟，给一次任务内部瞬时失败（比如数据库短暂抖动）留出重试机会——
+                // 下面 _lastAbsentDate 的更新挪到执行成功之后，异常会被外层 catch 记录但不会
+                // 把这天误标记成"已处理"，同一晚窗口内下一分钟还会自动重试。
+                if (now.Hour == 23 && now.Minute >= 55 && _lastAbsentDate.Date < now.Date)
                 {
-                    _lastAbsentDate = now;
                     await MarkAbsentAsync();
+                    _lastAbsentDate = now;
                 }
 
-                // 每月 1 日 00:10 且这个月还没生成过 → 生成上个月汇总
-                if (now.Day == 1 && now.Hour == 0 && now.Minute >= 10 && _lastSummaryDate.Date < now.Date)
+                // 每月 1 号 00:10 之后是首选执行时间点（留几分钟缓冲，给设备重传/网络延迟一点时间，
+                // 免得月末最后几分钟的打卡因为还没到账就被漏算进汇总）；如果这次因为异常/重启被错过，
+                // 2、3 号任意时间都会自动补跑——GenerateMonthlySummaryAsync 本身是幂等的（重新算一遍
+                // 只是覆盖同一份汇总，不会重复插入或误发通知），补跑不会有副作用。
+                var isSummaryFirstWindow = now.Day == 1 && now.Hour == 0 && now.Minute >= 10;
+                var isSummaryCatchUp     = now.Day is 2 or 3;
+                if ((isSummaryFirstWindow || isSummaryCatchUp) && _lastSummaryDate.Date < new DateTime(now.Year, now.Month, 1))
                 {
-                    _lastSummaryDate = now;
                     var prev = now.AddMonths(-1);   // 上个月
                     await GenerateSummaryAsync(prev.Year, prev.Month);
+                    _lastSummaryDate = now;
                 }
 
                 // 每天 03:00 且今天还没清理过 → 清理考勤机过期数据
                 if (now.Hour == 3 && _lastCleanupDate.Date < now.Date)
                 {
-                    _lastCleanupDate = now;
                     await CleanupZKDeviceDataAsync();
+                    _lastCleanupDate = now;
                 }
             }
             catch (Exception ex)
@@ -113,6 +123,9 @@ public class AttendanceBackgroundService(
 
         foreach (var user in users)
         {
+            // 没办入职（没填入职日期、或入职日期还没到）的人不处理——跟 AttendanceService.PunchAsync
+            // 里"没办入职不让打卡"的判断保持一致，不然还没入职的人会被莫名其妙标记旷工、还收到提醒。
+            if (user.HireDate is null || user.HireDate.Value > today) continue;
             if (IsRestDay(user.AttendanceGroupId)) continue;                          // 休息日不处理
             var isCompDay = IsCompensatoryWorkday(user.AttendanceGroupId);
             if (isWeekend && !isCompDay) continue;                                    // 普通周末不处理
@@ -242,6 +255,9 @@ public class AttendanceBackgroundService(
     /// 清理考勤机 + 远程打卡相关的过期数据，避免相关表/目录一直只增不删：
     /// ① 已经收到设备确认（Confirmed=true）超过 RetentionDays 天的考勤机命令记录——确认过的命令不会再被
     ///    重新下发，留着只是历史记录，没有查询价值；
+    /// ①-b 超过 RetentionDays 天、还是没确认的命令——不管是重试次数用完被标记 Failed 的，还是纯粹一直没等到
+    ///    设备确认的，堆着不清也没有意义（Failed 的已经不会再下发，没 Failed 的也已经很旧了），一并清掉，
+    ///    避免命令表随时间无限膨胀；
     /// ② 超过 RetentionDays 天的考勤照片（ATTPHOTO）和远程打卡现场照片——目前都是只写不读的留痕数据，
     ///    放着只会一直占磁盘；
     /// ③ 超过 RetentionDays 天的人脸识别尝试记录（FaceVerifyAttempt）——只在限流查询里用到最近几分钟内的，
@@ -256,8 +272,12 @@ public class AttendanceBackgroundService(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
 
-        var deletedCommands = await db.ZKDeviceCommands
+        var deletedConfirmedCommands = await db.ZKDeviceCommands
             .Where(c => c.Confirmed && c.ConfirmedAt != null && c.ConfirmedAt < cutoff)
+            .ExecuteDeleteAsync();
+
+        var deletedStaleUnconfirmedCommands = await db.ZKDeviceCommands
+            .Where(c => !c.Confirmed && c.CreatedAt < cutoff)
             .ExecuteDeleteAsync();
 
         var deletedAttempts = await db.FaceVerifyAttempts
@@ -268,12 +288,12 @@ public class AttendanceBackgroundService(
         var deletedFacePhotoDirs = CleanupOldDateDirs(scope, Path.Combine("faces", "attempts"), cutoff);
 
         logger.LogInformation(
-            "考勤机/远程打卡数据清理完成：删除已确认命令 {CmdCount} 条，删除人脸尝试记录 {AttemptCount} 条，" +
-            "删除考勤照片目录 {ZkDirCount} 个，删除远程打卡照片目录 {FaceDirCount} 个",
-            deletedCommands, deletedAttempts, deletedZkPhotoDirs, deletedFacePhotoDirs);
+            "考勤机/远程打卡数据清理完成：删除已确认命令 {CmdCount} 条，删除长期未确认命令 {StaleCmdCount} 条，" +
+            "删除人脸尝试记录 {AttemptCount} 条，删除考勤照片目录 {ZkDirCount} 个，删除远程打卡照片目录 {FaceDirCount} 个",
+            deletedConfirmedCommands, deletedStaleUnconfirmedCommands, deletedAttempts, deletedZkPhotoDirs, deletedFacePhotoDirs);
     }
 
-    /// <summary>删掉 wwwroot/{UploadPath}/{subPath} 下文件夹名能解析成日期、且早于 cutoff 的整个目录
+    /// <summary>删掉 PrivateUploads/{UploadPath}/{subPath} 下文件夹名能解析成日期、且早于 cutoff 的整个目录
     /// （目录名格式是 yyyyMMdd，按文件夹名判断即可，不用挨个读文件的创建时间）。</summary>
     private static int CleanupOldDateDirs(IServiceScope scope, string subPath, DateTime cutoff)
     {
@@ -281,8 +301,7 @@ public class AttendanceBackgroundService(
         var appOptions = scope.ServiceProvider.GetRequiredService<IOptions<AppSettingsOptions>>().Value;
 
         var uploadPath = appOptions.UploadPath.Trim('/', '\\');
-        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-        var root       = Path.Combine(webRoot, uploadPath, subPath);
+        var root       = Path.Combine(PrivateFileStorage.GetRoot(env), uploadPath, subPath);
         if (!Directory.Exists(root)) return 0;
 
         var deleted = 0;

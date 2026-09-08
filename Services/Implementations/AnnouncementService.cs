@@ -64,16 +64,48 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         return announcement;
     }
 
-    public async Task<bool> WithdrawAsync(int operatorUserId, bool isManager, int announcementId)
+    public async Task<bool> WithdrawAsync(int operatorUserId, bool isManager, int announcementId, HashSet<int>? managerVisibleDeptIds = null)
     {
         var a = await db.Announcements.FindAsync(announcementId);
         if (a is null) return false;
-        if (!isManager && a.PublisherUserId != operatorUserId) return false;   // 不是自己发的、又不是管理员/文员，不能撤
+        // 自己发的公告，本人一定能撤；否则要是管理员/文员，且这条公告的发布范围落在自己管理范围内——
+        // 原来只判断了 isManager，任何一个分公司管理员都能撤别的分公司（甚至总部"全公司"）的公告，
+        // 撤下后从所有分公司公告栏消失，且没有恢复入口
+        var allowed = a.PublisherUserId == operatorUserId
+            || (isManager && await IsAnnouncementInScopeAsync(a, managerVisibleDeptIds));
+        if (!allowed) return false;
 
         a.IsActive  = false;
         a.UpdatedAt = DateTime.Now;
         await db.SaveChangesAsync();
         return true;
+    }
+
+    /// <summary>这条公告的发布范围是否落在调用者的管理范围内——用于撤下/查已读名单这类"按公告 id 操作"
+    /// 的二次校验。<paramref name="visibleDeptIds"/> 为 null 表示总部超级管理员，不受限。</summary>
+    private async Task<bool> IsAnnouncementInScopeAsync(Announcement a, HashSet<int>? visibleDeptIds)
+    {
+        if (visibleDeptIds is null) return true;
+        switch (a.ScopeType)
+        {
+            case AnnouncementScopeType.All:
+                return false;   // 全公司范围的公告只有总部能撤/查已读名单
+            case AnnouncementScopeType.Department:
+                return a.ScopeId.HasValue && visibleDeptIds.Contains(a.ScopeId.Value);
+            case AnnouncementScopeType.AttendanceGroup:
+                if (!a.ScopeId.HasValue) return false;
+                var groupDeptIds = await db.Departments.Where(d => d.AttendanceGroupId == a.ScopeId.Value)
+                    .Select(d => d.Id).ToListAsync();
+                // 关联部门必须都在自己范围内（All，不是 Any）——跟考勤组本身的写权限口径一致，
+                // 不然跨司共用组发的公告，两边分公司管理员都能撤
+                return groupDeptIds.Count > 0 && groupDeptIds.All(visibleDeptIds.Contains);
+            case AnnouncementScopeType.DirectReports:
+                var publisherDeptId = await db.Users.Where(u => u.Id == a.PublisherUserId)
+                    .Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
+                return publisherDeptId.HasValue && visibleDeptIds.Contains(publisherDeptId.Value);
+            default:
+                return false;
+        }
     }
 
     public async Task<List<AnnouncementBoardItemDto>> GetBoardForUserAsync(int userId)
@@ -139,11 +171,13 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         }).ToList();
     }
 
-    public async Task<List<AnnouncementReadDetailDto>?> GetReadDetailAsync(int operatorUserId, bool isManager, int announcementId)
+    public async Task<List<AnnouncementReadDetailDto>?> GetReadDetailAsync(int operatorUserId, bool isManager, int announcementId, HashSet<int>? managerVisibleDeptIds = null)
     {
         var a = await db.Announcements.FindAsync(announcementId);
         if (a is null) return null;
-        if (!isManager && a.PublisherUserId != operatorUserId) return null;   // 不是自己发的、又不是管理员/文员，不能查
+        var allowed = a.PublisherUserId == operatorUserId
+            || (isManager && await IsAnnouncementInScopeAsync(a, managerVisibleDeptIds));
+        if (!allowed) return null;   // 不是自己发的、又管不到这条公告的范围，不能查已读名单
 
         return await db.AnnouncementReads
             .Include(r => r.User)

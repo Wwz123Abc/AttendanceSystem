@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Services.Interfaces;
 
@@ -12,9 +13,10 @@ namespace AttendanceSystem.Pages.Report;
 /// <summary>
 /// 月度报表页：页面上直接按"导出模板汇总表"同一套列结构（含每日打卡格子）展示考勤数据，
 /// 可以自选统计的起止日期、按公司/部门筛选范围、按姓名或工号搜索，并能导出模板格式 Excel/个人明细。需管理员/文员。
+/// 分公司管理员只能看到/导出自己范围内的部门数据。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class MonthlyReportModel(IAttendanceService attendanceService, AttendanceDbContext db) : PageModel
+public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScopeService deptScopeService, AttendanceDbContext db) : PageModel
 {
     // Excel 文件的类型标识
     private const string XlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -64,7 +66,8 @@ public class MonthlyReportModel(IAttendanceService attendanceService, Attendance
         if (End < Start) (Start, End) = (End, Start);            // 万一日期选反了，自动交换纠正，不直接报错卡住整页
         if (End.DayNumber - Start.DayNumber > 366) End = Start.AddDays(366);  // 防止选了个离谱的超长区间，撑爆页面
 
-        SelectedDeptIds = deptIds ?? [];
+        var cu = HttpContext.GetCurrentUser()!;
+        SelectedDeptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(cu, deptIds) ?? [];
         Keyword         = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
         PageIndex       = p < 1 ? 1 : p;
 
@@ -94,8 +97,11 @@ public class MonthlyReportModel(IAttendanceService attendanceService, Attendance
     /// </summary>
     private async Task LoadDeptTreeAsync()
     {
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
         var depts = await db.Departments.Where(d => d.IsActive)
             .OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
+        if (visibleIds is not null)
+            depts = depts.Where(d => visibleIds.Contains(d.Id)).ToList();   // 受限管理员看不到范围外的部门
         var byId     = depts.ToDictionary(d => d.Id);
         var byParent = depts.Where(d => d.ParentId.HasValue)
             .GroupBy(d => d.ParentId!.Value).ToDictionary(g => g.Key, g => g.ToList());
@@ -143,6 +149,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, Attendance
         if (end < start) return BadRequest("结束日期不能早于开始日期");
         if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
 
+        deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetCurrentUser()!, deptIds);
         var result = await attendanceService.GenerateTemplateReportAsync(start.Value, end.Value, deptIds);
         var bytes  = ExcelExportHelper.ExportTemplateReport(result);
         return File(bytes, XlsxContentType, $"月度汇总_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
@@ -158,19 +165,28 @@ public class MonthlyReportModel(IAttendanceService attendanceService, Attendance
         if (end < start) return BadRequest("结束日期不能早于开始日期");
         if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
 
+        deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetCurrentUser()!, deptIds);
         var records = await attendanceService.GetClockTimeSheetAsync(start.Value, end.Value, deptIds);
         var bytes   = ExcelExportHelper.ExportClockTimeSheet(records, start.Value, end.Value);
         return File(bytes, XlsxContentType, $"打卡时间表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
 
-    /// <summary>点某人“导出明细”时执行。</summary>
+    /// <summary>点某人”导出明细”时执行。</summary>
     public async Task<IActionResult> OnGetExportDetailAsync(int userId, int year, int month)
     {
         var rangeError = ValidateYearMonth(year, month);
         if (rangeError != null) return BadRequest(rangeError);
 
-        await attendanceService.GenerateMonthlySummaryAsync(year, month);
-        var all    = await attendanceService.GetDeptMonthlySummariesAsync(null, null, year, month);
+        // 先校验目标员工在不在自己范围内，再决定要不要重算——原来是不分青红皂白把全公司所有人的月度汇总
+        // 都重算一遍（哪怕只是导出一个人的明细），会越权覆盖别的分公司、甚至总部手工调整过的汇总数据；
+        // 现在只重算这一个人自己的（GenerateMonthlySummaryAsync 的 onlyUserId 参数本来就是为这种场景设计的）
+        var targetDeptId = await db.Users.Where(u => u.Id == userId).Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
+        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, targetDeptId))
+            return NotFound();
+
+        await attendanceService.GenerateMonthlySummaryAsync(year, month, userId);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var all    = await attendanceService.GetDeptMonthlySummariesAsync(null, null, year, month, visibleIds);
         var target = all.FirstOrDefault(s => s.UserId == userId);   // 找这个人的汇总
         if (target is null) return NotFound();
 

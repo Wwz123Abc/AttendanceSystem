@@ -91,7 +91,7 @@ else
                         <input type="hidden" asp-for="CapturedPhotoData" id="capturedPhotoData" />
 
                         <div class="d-flex justify-content-center mt-3">
-                            <button type="button" class="btn btn-primary btn-lg px-5" onclick="submitPunch()">
+                            <button type="button" id="punchBtn" class="btn btn-primary btn-lg px-5" onclick="submitPunch()">
                                 <i class="bi bi-fingerprint me-2"></i>打卡
                             </button>
                         </div>
@@ -264,6 +264,11 @@ function submitPunch() {
         alert('摄像头还没准备好，请稍候再试，或刷新页面重新授权摄像头权限');
         return;
     }
+    // 防连点：提交后立即禁用按钮，避免网络慢时手快连点两下，同时打出两个请求——
+    // 每个都会真的调一次收费的阿里云接口，白白多花钱，也会在识别记录里留下容易看着困惑的重复条目
+    const btn = document.getElementById('punchBtn');
+    if (btn.disabled) return;
+    btn.disabled = true;
     document.getElementById('capturedPhotoData').value = captureFrame();
     document.getElementById('punchForm').submit();
 }

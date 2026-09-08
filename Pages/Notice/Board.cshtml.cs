@@ -16,8 +16,9 @@ public class BoardModel(IAnnouncementService announcementService) : AppPageModel
         Items = await announcementService.GetBoardForUserAsync(CurrentUserId);
     }
 
-    /// <summary>点开某条公告详情时，前端 AJAX（GET，跟页面里其它几处 ?handler= 的写法一致）调这个接口顺手标记已读。</summary>
-    public async Task<IActionResult> OnGetMarkReadAsync(int id)
+    /// <summary>点开某条公告详情时，前端 AJAX 调这个接口顺手标记已读。会改数据库，用 POST（Razor Pages
+    /// 自动校验防伪令牌），不用页面里其它几处只读查询用的 GET ?handler= 写法。</summary>
+    public async Task<IActionResult> OnPostMarkReadAsync(int id)
     {
         await announcementService.MarkReadAsync(CurrentUserId, id);
         return new OkResult();

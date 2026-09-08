@@ -2,6 +2,7 @@ bin/
 obj/
 publish/
 publish.tar.gz
+publish-*.tar.gz
 .vs/
 logs/
 wwwroot/uploads/

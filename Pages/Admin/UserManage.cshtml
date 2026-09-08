@@ -234,7 +234,9 @@
                                                         emergencyContactName = u.EmergencyContactName ?? "",
                                                         emergencyContactPhone = u.EmergencyContactPhone ?? "",
                                                         idCardPhotoUrl = u.IdCardPhotoUrl ?? "",
-                                                        allowRemotePunch = u.AllowRemotePunch
+                                                        allowRemotePunch = u.AllowRemotePunch,
+                                                        deviceIds = Model.UserDeviceIdsByUser.GetValueOrDefault(u.Id, new()),
+                                                        scopedDeptId = u.ScopedDepartmentId
                                                     }))">编辑</button>
                                             @if (u.Status == EmployeeStatus.Active)
                                             {
@@ -304,16 +306,35 @@
             <div class="card h-100">
                 <div class="card-header"><i class="bi bi-qr-code me-1 text-primary"></i>登记二维码</div>
                 <div class="card-body text-center">
-                    <img src="?handler=Qr" alt="登记二维码" class="border rounded p-2"
-                         style="width:200px;height:200px" />
-                    <div class="input-group input-group-sm mt-3">
-                        <input type="text" class="form-control" id="regLinkInput" readonly
-                               value="@Model.RegistrationUrl" />
-                        <button class="btn btn-outline-secondary" type="button" onclick="copyRegLink()">
-                            <i class="bi bi-clipboard me-1"></i>复制链接
-                        </button>
-                    </div>
-                    <div class="form-text mt-2 text-start">把二维码打印出来贴在前台，或把链接发给新员工；员工扫码/打开后自己填姓名、手机号、身份证号提交，提交后会出现在右侧"待确认"列表里。</div>
+                    @{ var qrCompanies = Model.DeptTree.Where(n => n.Depth == 0).ToList(); }
+                    @if (qrCompanies.Count == 0)
+                    {
+                        <div class="text-muted small">还没有可用的分公司节点，请先在"部门管理"里建好部门</div>
+                    }
+                    else
+                    {
+                        @if (qrCompanies.Count > 1)
+                        {
+                            <select id="qrDeptSelect" class="form-select form-select-sm mb-3" onchange="switchQrDept(this.value)">
+                                @foreach (var c in qrCompanies)
+                                { <option value="@c.Id">@c.Name</option> }
+                            </select>
+                        }
+                        else
+                        {
+                            <div class="fw-semibold mb-2">@qrCompanies[0].Name</div>
+                        }
+                        <img id="regQrImg" src="?handler=Qr&deptId=@qrCompanies[0].Id" alt="登记二维码" class="border rounded p-2"
+                             style="width:200px;height:200px" />
+                        <div class="input-group input-group-sm mt-3">
+                            <input type="text" class="form-control" id="regLinkInput" readonly
+                                   value="@Model.RegistrationUrl(qrCompanies[0].Id)" />
+                            <button class="btn btn-outline-secondary" type="button" onclick="copyRegLink()">
+                                <i class="bi bi-clipboard me-1"></i>复制链接
+                            </button>
+                        </div>
+                        <div class="form-text mt-2 text-start">每个分公司的二维码/链接都不一样，扫这个码登记的人会自动归到对应分公司，管理员确认时不用再手动选一遍。把二维码打印出来贴在对应分公司的前台，或把链接发给新员工；员工扫码/打开后自己填姓名、手机号、身份证号提交，提交后会出现在右侧"待确认"列表里。</div>
+                    }
                 </div>
             </div>
         </div>
@@ -327,12 +348,12 @@
                     <div class="table-responsive">
                         <table class="table table-hover mb-0 align-middle">
                             <thead>
-                                <tr><th>姓名</th><th>手机号</th><th>身份证号</th><th>提交时间</th><th style="width:200px">操作</th></tr>
+                                <tr><th>姓名</th><th>手机号</th><th>身份证号</th><th>意向分公司</th><th>提交时间</th><th style="width:200px">操作</th></tr>
                             </thead>
                             <tbody>
                                 @if (!Model.PendingRegistrations.Any())
                                 {
-                                    <tr><td colspan="5" class="empty-state"><i class="bi bi-inbox"></i>暂无待确认的登记</td></tr>
+                                    <tr><td colspan="6" class="empty-state"><i class="bi bi-inbox"></i>暂无待确认的登记</td></tr>
                                 }
                                 @foreach (var r in Model.PendingRegistrations)
                                 {
@@ -340,6 +361,7 @@
                                         <td>@r.RealName</td>
                                         <td class="small">@r.Phone</td>
                                         <td class="small">@r.IdNumber</td>
+                                        <td class="small">@(r.DeptName ?? "（旧版通用链接，未指定）")</td>
                                         <td class="small">@r.SubmittedAtText</td>
                                         <td>
                                             <div class="d-flex flex-nowrap gap-1">
@@ -350,7 +372,8 @@
                                                             homeAddress = r.HomeAddress ?? "",
                                                             emergencyContactName = r.EmergencyContactName ?? "",
                                                             emergencyContactPhone = r.EmergencyContactPhone ?? "",
-                                                            idCardPhotoUrl = r.IdCardPhotoUrl ?? ""
+                                                            idCardPhotoUrl = r.IdCardPhotoUrl ?? "",
+                                                            deptId = r.DepartmentId
                                                         }))">确认录入</button>
                                                 <button class="btn btn-outline-danger btn-sm"
                                                         onclick="openRejectReg(@r.Id, @System.Text.Json.JsonSerializer.Serialize(r.RealName))">驳回</button>
@@ -400,8 +423,8 @@
                         </div>
                         <div class="col-md-6" id="pwdRow">
                             <label class="form-label">初始密码</label>
-                            <input class="form-control bg-light" value="123456（系统统一设置）" disabled />
-                            <div class="form-text">新员工初始密码统一为 <b>123456</b>，员工登录后可自行修改。</div>
+                            <input class="form-control bg-light" value="统一为 123456" disabled />
+                            <div class="form-text">新员工的初始密码统一为 123456，首次登录后会强制要求本人修改成自己的密码。</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">角色</label>
@@ -492,6 +515,37 @@
                                 <label class="form-check-label" for="fAllowRemotePunch">允许远程打卡（手机定位+人脸识别，给出差/到不了考勤机的员工用）</label>
                             </div>
                         </div>
+                        <div class="col-md-12">
+                            <label class="form-label">推送到哪些考勤机</label>
+                            <div class="border rounded p-2" style="max-height:150px;overflow-y:auto" id="fDeviceIdsBox">
+                                @if (Model.AssignableDevices.Count == 0)
+                                {
+                                    <span class="text-muted small">暂无可选设备（还没有归属到你管理范围内的考勤机）</span>
+                                }
+                                @foreach (var dev in Model.AssignableDevices)
+                                {
+                                    <div class="form-check device-row" data-dept-id="@(dev.DepartmentId?.ToString() ?? "")">
+                                        <input class="form-check-input device-checkbox" type="checkbox" name="DeviceIds" value="@dev.Id" id="fDevice_@dev.Id" />
+                                        <label class="form-check-label" for="fDevice_@dev.Id">@(dev.Name ?? dev.SN)（@dev.SN）</label>
+                                    </div>
+                                }
+                                <div id="fDeviceIdsEmptyHint" class="text-muted small" style="display:none">该部门暂无可选设备（还没有归属到这个分公司的考勤机）</div>
+                            </div>
+                            <div class="form-text">只有勾选过的考勤机才会收到这个人的工号/人脸信息；选定部门后会自动只显示该分公司的设备（没归属具体部门的设备全公司通用，一直显示）。</div>
+                        </div>
+                        @if (Model.CurrentUserIsUnscoped)
+                        {
+                            <div class="col-md-6">
+                                <label class="form-label">管理范围</label>
+                                <select asp-for="ScopedDeptId" class="form-select" id="fScopedDeptId">
+                                    <option value="">不受限（总部超级管理员，能看/管全公司）</option>
+                                    @foreach (var d in Model.DeptTree.Where(x => x.IsActive))
+                                    { <option value="@d.Id">@(new string('　', d.Depth))@d.Name</option> }
+                                </select>
+                                <div class="form-text">只对角色是"管理员/文员"的账号有意义：选了某个部门，这个人登录后就只能看/管这个部门
+                                    （含下级）范围内的数据，看不到其他分公司——这个字段只有你（不受限的总部管理员）能设置。</div>
+                            </div>
+                        }
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -585,14 +639,20 @@ function setSuperId(id, fallbackLabel) {
 
 function renderSuperResults(list) {
     const box = document.getElementById('fSuperIdResults');
-    if (list.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
-    box.innerHTML = list.map(s =>
-        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-id="${s.id}">${s.label}</button>`
-    ).join('');
-    box.style.display = 'block';
-    box.querySelectorAll('[data-id]').forEach(btn => {
-        btn.addEventListener('click', () => { setSuperId(btn.dataset.id); box.style.display = 'none'; });
+    box.innerHTML = '';
+    if (list.length === 0) { box.style.display = 'none'; return; }
+    // 姓名是员工资料里的自由文本，没有限制字符——用 textContent 而不是拼 HTML 字符串塞进 innerHTML，
+    // 就算姓名里被人写了 <script> 之类的内容，也只会被当成纯文本显示出来，不会被当成标签解析执行
+    list.forEach(s => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'list-group-item list-group-item-action py-1 px-2 small';
+        btn.dataset.id = s.id;
+        btn.textContent = s.label;
+        btn.addEventListener('click', () => { setSuperId(s.id); box.style.display = 'none'; });
+        box.appendChild(btn);
     });
+    box.style.display = 'block';
 }
 
 document.getElementById('fSuperIdSearch').addEventListener('input', function () {
@@ -632,7 +692,55 @@ async function fillEmployeeNoForDept(deptId) {
 document.getElementById('fDeptId').addEventListener('change', function () {
     fillEmployeeNoForDept(this.value);
     suggestSupervisorForDept(this.value);
+    autoFillScopedDept();
+    filterDevicesForDept(this.value);
 });
+
+// ── "推送到哪些考勤机"自动按选中的部门过滤：选定部门后，只显示这个分公司的设备，不用管理员
+// 自己在一长串全范围设备里去找、也不会误勾到别的分公司的设备。考勤机通常注册在"分公司"这一级
+// （部门树里比较靠上的节点），选中的部门可能就是分公司本身，也可能是分公司下面的具体小组/团队，
+// 都要能匹配到那台设备——判断方法是"设备归属部门是不是选中部门的祖先（含自己）"，用左侧已经
+// 渲染好的部门树 DOM（data-id/data-parent）沿着往上走就能查到，不用再单独发请求。
+// 没归属具体部门的设备（data-dept-id 为空）当成全公司通用设备，任何部门下都显示。
+function deptAncestorIds(deptId) {
+    const ids = new Set();
+    let cur = String(deptId || '');
+    for (let i = 0; i < 50 && cur; i++) {
+        ids.add(cur);
+        const node = document.querySelector(`.dept-node[data-id="${cur}"]`);
+        cur = node ? (node.getAttribute('data-parent') || '') : '';
+    }
+    return ids;
+}
+function filterDevicesForDept(deptId) {
+    const ancestors = deptAncestorIds(deptId);
+    let anyVisible = false;
+    document.querySelectorAll('#fDeviceIdsBox .device-row').forEach(row => {
+        const devDept = row.getAttribute('data-dept-id');
+        const visible = !deptId || !devDept || ancestors.has(devDept);
+        row.style.display = visible ? '' : 'none';
+        if (!visible) row.querySelector('.device-checkbox').checked = false;   // 隐藏的行强制取消勾选，避免看不见但仍提交
+        if (visible) anyVisible = true;
+    });
+    const emptyHint = document.getElementById('fDeviceIdsEmptyHint');
+    if (emptyHint) emptyHint.style.display = (deptId && !anyVisible) ? '' : 'none';
+}
+
+// ── 管理范围默认跟着"部门"走：这两个字段本来就经常设成同一个值（详见 CanAccessDeptAsync/
+// ValidateScopeForSaveAsync 的口径说明），分开填一步很容易漏掉后者，导致新账号意外变成
+// "不受限的总部超级管理员"。只在角色是"管理员/文员"、且用户本次打开弹窗后还没手动改过
+// "管理范围"下拉框时才自动带出；一旦手动改过（哪怕改回和部门一样的值），就不再覆盖，
+// 尊重管理员的显式选择。
+let scopedDeptTouched = false;
+document.getElementById('fScopedDeptId')?.addEventListener('change', () => { scopedDeptTouched = true; });
+function autoFillScopedDept() {
+    const scopedEl = document.getElementById('fScopedDeptId');
+    if (!scopedEl || scopedDeptTouched) return;
+    const role = document.getElementById('fRole').value;
+    if (role !== 'Admin' && role !== 'Clerk') return;
+    scopedEl.value = document.getElementById('fDeptId').value;
+}
+document.getElementById('fRole').addEventListener('change', autoFillScopedDept);
 
 // ── 直属上级自动带出：选定部门后，按"该部门下角色=主管的在职员工"自动预选直属上级 ──
 // 唯一匹配才自动选中；0 个或多个匹配都不自动选，改成提示文案，交给管理员手动选择。
@@ -708,8 +816,20 @@ function doBatch(handler, confirmMsg) {
     f.submit();
 }
 
+// 勾选/清空"推送到哪些考勤机"多选框
+function setDeviceIds(ids) {
+    const idSet = new Set((ids || []).map(String));
+    document.querySelectorAll('.device-checkbox').forEach(cb => cb.checked = idSet.has(cb.value));
+}
+// 设置"管理范围"下拉框（不受限管理员才会渲染这个下拉框，普通管理员看不到，直接跳过）
+function setScopedDeptId(id) {
+    const el = document.getElementById('fScopedDeptId');
+    if (el) el.value = id || '';
+}
+
 // 新增
 function openAdd() {
+    scopedDeptTouched = false;   // 重新打开弹窗，允许管理范围再次跟着部门/角色自动带默认值
     document.getElementById('userModalTitle').textContent = '新增员工';
     document.getElementById('userForm').action = '?handler=Create';
     document.getElementById('userSubmitBtn').textContent = '创建';
@@ -726,6 +846,9 @@ function openAdd() {
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
     setSuperId('');
+    setDeviceIds([]);
+    filterDevicesForDept(document.getElementById('fDeptId').value);
+    setScopedDeptId(null);
     document.getElementById('fPhone').required = true;             // 新建必须填手机号
     document.getElementById('fPhoneReq').style.display = '';
     document.getElementById('fSuperIdSearch').required = true;     // 新建必须选直属上级
@@ -745,6 +868,13 @@ function copyRegLink() {
     navigator.clipboard.writeText(input.value).then(() => alert('链接已复制')).catch(() => document.execCommand('copy'));
 }
 
+// 切换"登记二维码"卡片显示的分公司：换一下图片和链接的 deptId 参数即可，不用整页刷新
+const REG_BASE_URL = '@Model.RegistrationUrl(null)';
+function switchQrDept(deptId) {
+    document.getElementById('regQrImg').src   = '?handler=Qr&deptId=' + deptId;
+    document.getElementById('regLinkInput').value = REG_BASE_URL + '?deptId=' + deptId;
+}
+
 // 打开"驳回登记"弹窗
 function openRejectReg(id, name) {
     document.getElementById('rejRegId').value = id;
@@ -756,6 +886,7 @@ function openRejectReg(id, name) {
 // 点"确认录入"：复用"新增员工"弹窗，把员工扫码填的姓名/手机号/身份证号预填进去，
 // 管理员只需要再补上工号、部门、考勤组等信息即可
 function openConfirm(data) {
+    scopedDeptTouched = false;   // 重新打开弹窗，允许管理范围再次跟着部门/角色自动带默认值
     document.getElementById('userModalTitle').textContent = '确认录入 - ' + data.realName;
     document.getElementById('userForm').action = '?handler=Create';
     document.getElementById('userSubmitBtn').textContent = '确认并创建账号';
@@ -782,9 +913,14 @@ function openConfirm(data) {
     }
     document.getElementById('fAllowRemotePunch').checked = false;   // 新建员工默认不开远程打卡
     document.getElementById('fRole').value       = 'Employee';
-    document.getElementById('fDeptId').value     = SELECTED_DEPT !== null ? SELECTED_DEPT : '';
+    // 优先用登记本身带的意向部门（扫的哪个分公司的码就是哪个）；没有的话（旧版通用链接提交的）
+    // 才退回到当前左侧筛选树选中的部门，跟原来的兜底逻辑一致
+    document.getElementById('fDeptId').value     = data.deptId != null ? data.deptId : (SELECTED_DEPT !== null ? SELECTED_DEPT : '');
     document.getElementById('fGroupId').value    = '';
     setSuperId('');
+    setDeviceIds([]);
+    filterDevicesForDept(document.getElementById('fDeptId').value);
+    setScopedDeptId(null);
     document.getElementById('fPhone').required   = true;
     document.getElementById('fPhoneReq').style.display = '';
     document.getElementById('fSuperIdSearch').required = true;
@@ -807,6 +943,7 @@ function openResetPwd(id, name) {
 
 // 编辑
 function openEdit(data) {
+    scopedDeptTouched = false;   // 重新打开弹窗，允许管理范围再次跟着部门/角色自动带默认值
     autoFillEmployeeNo = false;   // 编辑老员工，工号已经定了，切换部门不应该跟着自动改工号
     document.getElementById('userModalTitle').textContent = '编辑员工 - ' + data.realName;
     document.getElementById('userForm').action = '?handler=Update';
@@ -820,6 +957,9 @@ function openEdit(data) {
     document.getElementById('fDeptId').value     = data.deptId || '';
     document.getElementById('fGroupId').value    = data.groupId || '';
     setSuperId(data.superId || '');
+    setDeviceIds(data.deviceIds);
+    filterDevicesForDept(data.deptId || '');
+    setScopedDeptId(data.scopedDeptId);
     document.getElementById('fPosition').value   = data.position;
     document.getElementById('fPhone').value      = data.phone;
     document.getElementById('fPhone').required   = false;          // 编辑老员工不强制补填手机号

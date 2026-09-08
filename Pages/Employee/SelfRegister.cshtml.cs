@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Options;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
@@ -28,6 +29,10 @@ public class SelfRegisterModel(
     [BindProperty] public string? EmergencyContactPhone   { get; set; }
     [BindProperty] public IFormFile? IdCardPhoto          { get; set; }
 
+    /// <summary>意向部门 id：每个分公司的二维码链接自带各自的 deptId，随表单一起提交回来，
+    /// 确保"扫哪个分公司的码，登记就归到哪个分公司"，不用员工自己填、也填不错。</summary>
+    [BindProperty(SupportsGet = true)] public int? DeptId { get; set; }
+
     /// <summary>岗位下拉框的固定选项，和服务端校验共用同一份，页面和后台不会对不上。</summary>
     public string[] PositionOptions => IEmployeeRegistrationService.AllowedPositions;
 
@@ -45,10 +50,13 @@ public class SelfRegisterModel(
         {
             if (IdCardPhoto is null || IdCardPhoto.Length == 0)
                 throw new InvalidOperationException("请上传身份证照片");
-            // 手机号留空提交时模型绑定会把它转成 null；这里先兜底检查一下，
-            // 否则下面存照片要用手机号建目录，Phone.Trim() 会先于 SubmitAsync 里更完整的格式校验抛出空引用异常
-            if (string.IsNullOrWhiteSpace(Phone))
-                throw new InvalidOperationException("请填写手机号");
+            // 手机号会被直接拼进身份证照片的存储目录名（见 SaveIdCardPhotoAsync），这一步在
+            // SubmitAsync 做完整格式校验之前就先跑了；这个页面未登录也能提交，如果这里只兜底判个"非空"，
+            // 填个 "../../xxx" 之类的值就能越出预期目录建文件夹/写文件（匿名可达的路径穿越写面）。
+            // 所以这里要在真正用 Phone 建目录之前，把 SubmitAsync 里那套手机号格式校验提前搬过来一份，
+            // 校验通过后 Phone 只可能是纯 11 位数字，天然不含任何路径分隔符/穿越字符。
+            if (string.IsNullOrWhiteSpace(Phone) || !System.Text.RegularExpressions.Regex.IsMatch(Phone.Trim(), @"^1[3-9]\d{9}$"))
+                throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
             var photoUrl = await SaveIdCardPhotoAsync();
             await registrationService.SubmitAsync(new SubmitRegistrationDto
             {
@@ -60,7 +68,8 @@ public class SelfRegisterModel(
                 HomeAddress           = HomeAddress,
                 EmergencyContactName  = EmergencyContactName,
                 EmergencyContactPhone = EmergencyContactPhone,
-                IdCardPhotoUrl        = photoUrl
+                IdCardPhotoUrl        = photoUrl,
+                DepartmentId          = DeptId
             });
             Done = true;
         }
@@ -86,8 +95,7 @@ public class SelfRegisterModel(
             throw new InvalidOperationException("身份证照片只支持 jpg / png / webp 格式");
 
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
-        var webRoot    = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
-        var dir        = Path.Combine(webRoot, uploadPath, "idcards", "registrations", Phone.Trim());
+        var dir        = Path.Combine(PrivateFileStorage.GetRoot(env), uploadPath, "idcards", "registrations", Phone.Trim());
         Directory.CreateDirectory(dir);
 
         var fileName = $"{Guid.NewGuid():N}{ext}";   // 用随机名，避免重名覆盖

@@ -38,6 +38,7 @@ public class AttendanceDbContext : DbContext
     public DbSet<ZKDeviceCommand>           ZKDeviceCommands           => Set<ZKDeviceCommand>();
     public DbSet<ZKDevice>                  ZKDevices                  => Set<ZKDevice>();
     public DbSet<FaceVerifyAttempt>         FaceVerifyAttempts         => Set<FaceVerifyAttempt>();
+    public DbSet<UserZKDevice>              UserZKDevices              => Set<UserZKDevice>();
 
     // 这个方法在“建立数据库模型”时被调用，用来配置表名、关系、索引、唯一约束等。
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -89,6 +90,14 @@ public class AttendanceDbContext : DbContext
              .WithMany(g => g.Users)
              .HasForeignKey(u => u.AttendanceGroupId)
              .OnDelete(DeleteBehavior.SetNull);
+
+            // 范围限定部门用 Restrict（不允许直接删除还被某个管理员当作管理范围的部门）——
+            // 如果改成 SetNull，删部门会让这个管理员"意外"变成不受限的总部超级管理员，
+            // 静默扩大权限比拒绝删除危险得多，必须让操作者先手动把这个人重新指定到别的部门再删。
+            e.HasOne(u => u.ScopedDepartment)
+             .WithMany()
+             .HasForeignKey(u => u.ScopedDepartmentId)
+             .OnDelete(DeleteBehavior.Restrict);
         });
 
         // ── Department：部门的父子关系（上级部门删除时把子部门的 ParentId 置空）；
@@ -110,6 +119,10 @@ public class AttendanceDbContext : DbContext
         modelBuilder.Entity<AttendanceRecord>(e =>
         {
             e.HasIndex(r => new { r.UserId, r.WorkDate }).IsUnique();   // (员工,日期) 唯一
+            // 单独给 WorkDate 建个索引：上面那个复合唯一索引是"先按 UserId 再按 WorkDate"排序的，
+            // 查不带 UserId、只按 WorkDate 过滤的场景（每天旷工标记、看板今日统计、月度汇总等到处都是
+            // "WHERE WorkDate = 今天"）用不上它，数据量大了之后每次都是全表扫描；单列索引让这类查询走索引。
+            e.HasIndex(r => r.WorkDate);
 
             e.HasOne(r => r.User)
              .WithMany(u => u.AttendanceRecords)
@@ -212,6 +225,11 @@ public class AttendanceDbContext : DbContext
              .WithMany()
              .HasForeignKey(r => r.ConfirmedUserId)
              .OnDelete(DeleteBehavior.SetNull);
+
+            e.HasOne(r => r.Department)
+             .WithMany()
+             .HasForeignKey(r => r.DepartmentId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── Notification：员工删了，其通知一起删 ──
@@ -248,16 +266,39 @@ public class AttendanceDbContext : DbContext
              .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // ── ZKDevice：序列号唯一，不允许两条设备记录共用一个 SN ──
+        // ── ZKDevice：序列号唯一，不允许两条设备记录共用一个 SN；归属部门被删 → 设备退回"未归类"，
+        //    不连带删设备（只有总部超级管理员还能管未归类设备，不算安全绕过）──
         modelBuilder.Entity<ZKDevice>(e =>
         {
             e.HasIndex(d => d.SN).IsUnique();
+
+            e.HasOne(d => d.Department)
+             .WithMany()
+             .HasForeignKey(d => d.DepartmentId)
+             .OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── ZKDeviceCommand：按(SN,是否已确认)建索引，匹配心跳时"这台设备还有哪些命令没确认"的查询 ──
         modelBuilder.Entity<ZKDeviceCommand>(e =>
         {
             e.HasIndex(c => new { c.SN, c.Confirmed });
+        });
+
+        // ── UserZKDevice：员工-考勤机指定分配关系，同一个人同一台设备不能重复分配；
+        //    员工或设备被删，关联的分配记录一起清掉 ──
+        modelBuilder.Entity<UserZKDevice>(e =>
+        {
+            e.HasIndex(m => new { m.UserId, m.ZKDeviceId }).IsUnique();
+
+            e.HasOne(m => m.User)
+             .WithMany(u => u.UserZKDevices)
+             .HasForeignKey(m => m.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne(m => m.ZKDevice)
+             .WithMany(d => d.UserZKDevices)
+             .HasForeignKey(m => m.ZKDeviceId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── FaceVerifyAttempt：按(员工,时间)建索引，匹配远程打卡限流查询"这个人最近失败了几次" ──
