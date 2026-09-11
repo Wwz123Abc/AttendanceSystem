@@ -21,6 +21,12 @@ public class FaceVerifyAttempt
     [MaxLength(300)]
     public string? FailReason { get; set; }
 
+    /// <summary>非空表示这条是"被成本闸门拦截"的记录（间隔未到 / 今日次数上限），不是真的调用过阿里云接口——
+    /// Success 这种行恒为 false，但跟"真失败"（FailReason 非空）是两回事，统计失败限流/今日次数时要排除掉，
+    /// 免得"被拦一次"反而变成"算一次失败"、更容易触发别的限制。</summary>
+    [MaxLength(50)]
+    public string? BlockedReason { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 
     [ForeignKey("UserId")]

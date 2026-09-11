@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using AttendanceSystem.Data;
@@ -216,6 +217,14 @@ static async Task SeedAdminAsync(AttendanceDbContext db)
     await db.SaveChangesAsync();
     Log.Information("已创建默认管理员账号：admin / Admin@123");
 }
+
+// 生产环境前面挂了 nginx 反向代理终结 HTTPS，nginx 转发给本程序的是 http://127.0.0.1:5080，
+// 不加这个的话 Request.Scheme 永远只会看到 nginx 转发用的 "http"，不知道用户实际访问的是 https——
+// 扫码登记二维码等地方拼的 URL 会一直生成 http:// 开头的链接，跟现在网站已经是 HTTPS-only 对不上。
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+});
 
 app.UseSerilogRequestLogging();   // 记录每个请求的日志
 

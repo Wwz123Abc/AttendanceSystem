@@ -181,7 +181,7 @@ public static class ExcelExportHelper
 
         var dayCount  = result.Dates.Count;
         var fixedCols = 6;                       // 姓名/考勤组/部门/工号/职位/合同公司
-        var tailCols  = 18;                       // 出勤天数..节假日加班（含夜班次数/夜班总工时）
+        var tailCols  = 19;                       // 出勤天数..节假日加班（含夜班次数/夜班总工时/正班工时）
         var totalCols = fixedCols + dayCount + tailCols;
 
         // 第 0 行：大标题（统计日期区间）
@@ -204,7 +204,7 @@ public static class ExcelExportHelper
         if (dayCount > 1) sheet.AddMergedRegion(new CellRangeAddress(2, 2, fixedCols, fixedCols + dayCount - 1));
         string[] tailHeaders =
         [
-            "出勤天数", "休息天数", "总工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
+            "出勤天数", "休息天数", "总工时", "正班工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长", "夜班次数", "夜班总工时",
             "加班总时长", "工作日加班", "休息日加班", "节假日加班"
         ];
@@ -254,6 +254,7 @@ public static class ExcelExportHelper
             SetCell(xRow, c++, row.ActualWorkdays, baseStyle);
             SetCellIfNonZero(xRow, c++, row.RestDays, baseStyle);
             SetCell(xRow, c++, (double)row.TotalWorkHours, baseStyle);
+            SetCell(xRow, c++, (double)row.RegularWorkHours, baseStyle);
             SetCellIfNonZero(xRow, c++, row.LateMinutes, orangeOrRed(row.LateMinutes));
             SetCellIfNonZero(xRow, c++, row.EarlyLeaveCount, orangeOrRed(row.EarlyLeaveCount));
             SetCellIfNonZero(xRow, c++, row.LateCount, orangeOrRed(row.LateCount));

@@ -21,7 +21,7 @@
     string NI(int v)     => v == 0 ? "" : v.ToString();
     string ND(decimal v) => v == 0 ? "" : v.ToString("0.##");
 
-    var totalCols = 6 + Model.Dates.Count + 19;   // 固定列 + 每日格子 + 尾部统计列(18，含夜班总工时) + 操作列(1)，空数据行合并单元格用
+    var totalCols = 6 + Model.Dates.Count + 20;   // 固定列 + 每日格子 + 尾部统计列(19，含夜班总工时/正班工时) + 操作列(1)，空数据行合并单元格用
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -130,6 +130,7 @@
                         <th rowspan="2">出勤天数</th>
                         <th rowspan="2">休息天数</th>
                         <th rowspan="2">总工时</th>
+                        <th rowspan="2">正班工时</th>
                         <th rowspan="2">迟到时长</th>
                         <th rowspan="2">早退次数</th>
                         <th rowspan="2">迟到次数</th>
@@ -179,6 +180,7 @@
                             <td class="text-center">@row.ActualWorkdays</td>
                             <td class="text-center">@NI(row.RestDays)</td>
                             <td class="text-center">@row.TotalWorkHours.ToString("0.##")</td>
+                            <td class="text-center">@row.RegularWorkHours.ToString("0.##")</td>
                             <td class="text-center @(row.LateMinutes > 0 ? "text-warning" : "")">@NI(row.LateMinutes)</td>
                             <td class="text-center @(row.EarlyLeaveCount > 0 ? "text-warning" : "")">@NI(row.EarlyLeaveCount)</td>
                             <td class="text-center @(row.LateCount > 0 ? "text-warning" : "")">@NI(row.LateCount)</td>

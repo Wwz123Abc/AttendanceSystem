@@ -15,6 +15,7 @@ public class PunchRequestDto
     public PunchType PunchType  { get; set; }   // 上班还是下班
     public double?   Latitude   { get; set; }   // 当前位置纬度（定位打卡用）
     public double?   Longitude  { get; set; }   // 当前位置经度
+    public double?   Accuracy   { get; set; }   // 浏览器定位精度半径（米），用于定位校验时的误差容错
     public string?   Address    { get; set; }   // 位置文字地址
     public string?   DeviceInfo { get; set; }   // 设备信息
 }
@@ -167,7 +168,12 @@ public class TemplateReportRowDto
 
     public int     ActualWorkdays  { get; set; }   // 出勤天数
     public int     RestDays        { get; set; }   // 休息天数（周末/法定节假日/公司休息日，不含调班补班日）
-    public decimal TotalWorkHours  { get; set; }   // 工作时长（合计，保留小数，不取整——和每日格子的取整规则不同）
+
+    /// <summary>工作时长（合计）＝ 正班工时 + 加班总时长，按小时算钱用这个数字。</summary>
+    public decimal TotalWorkHours  { get; set; }
+    /// <summary>正班工时（不含加班）：跟每日打卡格子、"考勤机/打卡/审批回写"那套算法算出来的是同一个数字，
+    /// 只是这里单独拆出来展示，方便区分"正常上班的时长"和"另外走加班申请批的时长"。</summary>
+    public decimal RegularWorkHours { get; set; }
 
     public int LateMinutes         { get; set; }   // 迟到时长（分钟，合计）
     public int EarlyLeaveCount     { get; set; }   // 早退次数

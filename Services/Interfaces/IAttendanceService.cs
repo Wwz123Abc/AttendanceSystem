@@ -15,8 +15,10 @@ public interface IAttendanceService
     /// <summary>
     /// 校验一个经纬度是否落在指定考勤组配置的允许打卡地点范围内（考勤组没开"定位打卡"/没配置地点则直接算通过）。
     /// 远程打卡在调用付费的人脸识别接口之前会先调这个，人不在允许的地点里就直接拒绝，不浪费识别调用。
+    /// accuracyMeters 是浏览器定位返回的精度半径（GPS 信号差时可能到几十上百米），传了的话，
+    /// 判断时会把这部分误差算进去，避免"人明明在范围内，只是手机定位飘了一点就被拒"。
     /// </summary>
-    Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude);
+    Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude, double? accuracyMeters = null);
     /// <summary>获取某员工今日考勤记录。</summary>
     Task<AttendanceRecordDto?>     GetTodayAttendanceAsync(int userId);
     /// <summary>按条件查询个人考勤记录列表。</summary>

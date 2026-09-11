@@ -92,7 +92,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (!skipLocationCheck)
         {
             var (locationValid, locationMessage) =
-                await ValidateLocationAsync(user.AttendanceGroupId, request.Latitude, request.Longitude);
+                await ValidateLocationAsync(user.AttendanceGroupId, request.Latitude, request.Longitude, request.Accuracy);
             if (!locationValid)
                 return new PunchResponseDto { Success = false, Message = locationMessage! };
         }
@@ -233,13 +233,18 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         };
     }
 
+    /// <summary>手机 GPS 精度差的时候最多给多少米的容错——不能无限相信浏览器报上来的精度值
+    /// （报的精度本身也可能不准，或者干脆被伪造），超过这个数就按这个数封顶，不能让"定位精度"
+    /// 变成想让打卡通过多远都能通过的口子。</summary>
+    private const double MaxLocationAccuracyToleranceMeters = 100;
+
     /// <summary>
     /// 校验一个经纬度是否落在指定考勤组配置的允许打卡地点范围内。考勤组没开"定位打卡"、或没配置任何
     /// 地点，直接算通过（跟 PunchAsync 里原来的定位校验是同一套判断，抽出来给远程打卡单独调用）。
     /// 远程打卡会在真正调用（付费的）阿里云人脸识别接口之前，先调这个方法确认人在允许的地点里，
     /// 不在范围内就直接拒绝，不用白白浪费一次人脸识别调用。
     /// </summary>
-    public async Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude)
+    public async Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude, double? accuracyMeters = null)
     {
         if (!attendanceGroupId.HasValue) return (true, null);   // 没分配考勤组，没有地点可比对，不限制
 
@@ -264,7 +269,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             .First();
 
         if (nearest.Distance > nearest.RadiusMeters)
-            return (false, $"打卡位置超出有效范围（距最近的「{nearest.LocationName ?? "打卡点"}」{nearest.Distance:F0} 米，限 {nearest.RadiusMeters} 米内）");
+        {
+            // 手机定位本身就是个"大概位置 ± 精度半径"的圆，人明明在范围里、但 GPS 飘了几十米导致
+            // 算出来的点刚好落在圈外，这种情况不该被硬拒——只要把精度误差算进去后能够到范围内就放行。
+            var tolerance = Math.Min(accuracyMeters ?? 0, MaxLocationAccuracyToleranceMeters);
+            if (tolerance > 0 && nearest.Distance - tolerance <= nearest.RadiusMeters)
+                return (true, null);
+
+            var accuracyHint = accuracyMeters.HasValue ? $"，当前定位精度 ±{accuracyMeters:F0} 米" : "";
+            return (false, $"打卡位置超出有效范围（距最近的「{nearest.LocationName ?? "打卡点"}」{nearest.Distance:F0} 米，限 {nearest.RadiusMeters} 米内{accuracyHint}）");
+        }
 
         return (true, null);
     }
@@ -568,7 +582,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 各项工时在上面累加时就已经按"半小时"取整过了，这里直接赋值（合计只会是整数或 x.5）
             row.ActualWorkdays          = actualDays;
             row.RestDays                = restDays;
-            row.TotalWorkHours          = totalWork;
+            row.RegularWorkHours        = totalWork;              // 正班工时：不含加班，口径不变
+            row.TotalWorkHours          = totalWork + totalOtHours;  // 工作时长合计：正班 + 加班
             row.LateMinutes             = lateMin;
             row.EarlyLeaveMinutes       = earlyMin;
             row.LateCount               = lateCnt;

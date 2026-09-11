@@ -29,6 +29,16 @@ public class UserService(
     /// 等于账号可被枚举）。</summary>
     public async Task<User?> ValidateLoginAsync(string employeeNo, string password)
     {
+        // 手机浏览器/输入法很容易在工号或密码前后带出一个看不见的空格（比如中文输入法候选栏
+        // 确认数字候选词后自动补一个空格），密码框本身还是打码的，用户自己根本发现不了。
+        // 生产上已经实测抓到过一批账号反复"密码错误"锁定——查了他们的密码哈希，用真正的初始密码
+        // "123456"（不带任何空格）重新算一遍，是能对上的，问题就出在这多出来的空格上。这里统一先
+        // trim 掉再校验，跟建号/重置密码那边"最终存的密码"本来就不带空格的口径对齐。
+        // 另一个同类的手机输入法坑：中文输入法有时会切到全角模式，打出来的"123456"其实是"１２３４５６"
+        // 这种全角数字，打码的密码框里肉眼完全看不出来，但对计算机是完全不同的字符——这里一并转成半角。
+        employeeNo = NormalizeFullWidthDigits(employeeNo.Trim());
+        password   = NormalizeFullWidthDigits(password.Trim());
+
         // 故意不在查询里过滤“在职”，好让下面能对"停用账号"单独记一条日志（对外仍然统一按失败处理）
         var user = await db.Users
             .Include(u => u.Department)
@@ -163,6 +173,12 @@ public class UserService(
     /// <summary>员工自己改密码（要先验证原密码）。</summary>
     public async Task<bool> ChangePasswordAsync(int userId, string oldPassword, string newPassword)
     {
+        // 跟登录同样的道理：先 trim 掉输入法/浏览器可能带出来的首尾空格、把全角数字转成半角，
+        // 不然一旦真存进一个带空格/全角字符的新密码，员工自己根本没法发现（密码框打码），
+        // 下次登录不管怎么输都对不上，只能再找管理员重置
+        oldPassword = NormalizeFullWidthDigits(oldPassword.Trim());
+        newPassword = NormalizeFullWidthDigits(newPassword.Trim());
+
         var user = await db.Users.FindAsync(userId);
         if (user is null || !VerifyPassword(oldPassword, user.PasswordHash))   // 原密码不对就拒绝
             return false;
@@ -561,6 +577,18 @@ public class UserService(
     // ── 密码工具 ──────────────────────────────────────────────────────────────
     // 哈希 = 一种“不可逆加密”：能把密码算成一串乱码存起来，但没法从乱码反推回原密码。
     // 盐(salt) = 一段随机料，混进密码再哈希，让相同密码也产生不同结果，防止被批量破解。
+
+    /// <summary>把字符串里的全角数字（Ｕ+ＦＦ１０～Ｕ+ＦＦ１９，即"０"～"９"）转成对应的半角数字（"0"～"9"），
+    /// 其它字符原样保留。中文输入法偶尔会切到全角模式，打出来的数字肉眼很难跟半角区分开（尤其在打码的
+    /// 密码框里），但对系统来说是完全不同的字符，登录/改密码校验前统一转一遍，避免因为这个对不上。</summary>
+    private static string NormalizeFullWidthDigits(string s)
+    {
+        var chars = s.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+            if (chars[i] is >= '０' and <= '９')   // "０"(FF10) ~ "９"(FF19)，比对应半角数字大 0xFEE0
+                chars[i] = (char)(chars[i] - 0xFEE0);
+        return new string(chars);
+    }
 
     /// <summary>
     /// 把明文密码变成可安全存储的哈希字符串。

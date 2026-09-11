@@ -88,6 +88,7 @@ else
                     <form method="post" id="punchForm">
                         <input type="hidden" asp-for="Latitude" id="lat" />
                         <input type="hidden" asp-for="Longitude" id="lng" />
+                        <input type="hidden" asp-for="Accuracy" id="accuracy" />
                         <input type="hidden" asp-for="CapturedPhotoData" id="capturedPhotoData" />
 
                         <div class="d-flex justify-content-center mt-3">
@@ -181,22 +182,43 @@ function updateTime() {
 updateTime();
 setInterval(updateTime, 1000);
 
-// 远程打卡的定位是必填项——这里没有围栏可跳过，拿不到定位就没法提交
+// 远程打卡的定位是必填项——这里没有围栏可跳过，拿不到定位就没法提交。
+// 手机第一次定位经常是靠基站/WiFi 粗略估出来的，精度差（几十上百米很常见），过几秒 GPS
+// 信号锁定后会越来越准——所以不再是"拿到第一个结果就完事"，而是持续监听一小段时间，
+// 一直取精度最好的一次，直到精度已经很好（≤20米）或者等够了 10 秒才停下来。
+let bestPosition = null;
+let locationWatchId = null;
+const LOCATION_GOOD_ENOUGH_METERS = 20;
+const LOCATION_MAX_WAIT_MS = 10000;
+
+function applyLocation(pos) {
+    bestPosition = pos;
+    const lat = pos.coords.latitude.toFixed(6);
+    const lng = pos.coords.longitude.toFixed(6);
+    document.getElementById('lat').value = lat;
+    document.getElementById('lng').value = lng;
+    document.getElementById('accuracy').value = pos.coords.accuracy;
+    const info = document.getElementById('locationInfo');
+    if (info) {
+        info.classList.remove('d-none');
+        document.getElementById('locationText').textContent =
+            `${lat}, ${lng}（精度 ±${Math.round(pos.coords.accuracy)}m）`;
+    }
+}
+
 if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
+    locationWatchId = navigator.geolocation.watchPosition(
         pos => {
-            const lat = pos.coords.latitude.toFixed(6);
-            const lng = pos.coords.longitude.toFixed(6);
-            document.getElementById('lat').value = lat;
-            document.getElementById('lng').value = lng;
-            const info = document.getElementById('locationInfo');
-            if (info) {
-                info.classList.remove('d-none');
-                document.getElementById('locationText').textContent =
-                    `${lat}, ${lng}（精度 ±${Math.round(pos.coords.accuracy)}m）`;
+            if (!bestPosition || pos.coords.accuracy < bestPosition.coords.accuracy) {
+                applyLocation(pos);
+            }
+            if (pos.coords.accuracy <= LOCATION_GOOD_ENOUGH_METERS && locationWatchId !== null) {
+                navigator.geolocation.clearWatch(locationWatchId);
+                locationWatchId = null;
             }
         },
         err => {
+            if (bestPosition) return;   // 已经有一次能用的定位了，后续报错（比如信号暂时丢失）不用管
             const alertBox = document.getElementById('locationAlert');
             const status = document.getElementById('locationStatus');
             if (alertBox && status) {
@@ -206,6 +228,12 @@ if (navigator.geolocation) {
         },
         { timeout: 8000, maximumAge: 0, enableHighAccuracy: true }
     );
+    setTimeout(() => {
+        if (locationWatchId !== null) {
+            navigator.geolocation.clearWatch(locationWatchId);
+            locationWatchId = null;
+        }
+    }, LOCATION_MAX_WAIT_MS);
 } else {
     const alertBox = document.getElementById('locationAlert');
     const status = document.getElementById('locationStatus');
