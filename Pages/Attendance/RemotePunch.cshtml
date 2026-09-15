@@ -10,6 +10,12 @@
     <span class="text-muted small">@DateTime.Today.ToString("yyyy年MM月dd日 dddd")</span>
 </div>
 
+<div id="wechatWarning" class="alert alert-danger d-none">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    检测到你是在微信内置浏览器里打开的——微信对摄像头、定位这两个权限限制比较多，在微信里直接操作大概率会失败。
+    请点右上角"<strong>···</strong>"，选择"<strong>在浏览器打开</strong>"（或"在 Safari 中打开"），再重新打卡。
+</div>
+
 <div class="alert alert-info">
     <i class="bi bi-info-circle me-2"></i>给出差、到不了考勤机的情况用：手机定位 + 现场人脸照片，识别通过才能打卡。正常在公司请用考勤机刷脸。
 </div>
@@ -182,14 +188,24 @@ function updateTime() {
 updateTime();
 setInterval(updateTime, 1000);
 
+// 微信内置浏览器对摄像头/定位这两个标准网页接口限制比较多（不是走微信官方 JS-SDK 认证过的网页，
+// getUserMedia/navigator.geolocation 经常直接拿不到权限），提前提示引导用户切到系统浏览器，
+// 不然用户会看不懂"定位/摄像头失败"到底是哪里的问题，白白重试好几次。
+if (/MicroMessenger/i.test(navigator.userAgent)) {
+    const wechatWarning = document.getElementById('wechatWarning');
+    if (wechatWarning) wechatWarning.classList.remove('d-none');
+}
+
 // 远程打卡的定位是必填项——这里没有围栏可跳过，拿不到定位就没法提交。
 // 手机第一次定位经常是靠基站/WiFi 粗略估出来的，精度差（几十上百米很常见），过几秒 GPS
 // 信号锁定后会越来越准——所以不再是"拿到第一个结果就完事"，而是持续监听一小段时间，
-// 一直取精度最好的一次，直到精度已经很好（≤20米）或者等够了 10 秒才停下来。
+// 一直取精度最好的一次，直到精度已经很好（≤20米）或者等够了 20 秒才停下来。
+// 20 秒（原来 10 秒）是为了照顾厂房/车间这类钢结构建筑内 GPS 信号弱、锁定慢的场景，
+// 给手机多一点时间搜星，减少"其实过几秒能定位到，但等待时间不够被判定失败"的情况。
 let bestPosition = null;
 let locationWatchId = null;
 const LOCATION_GOOD_ENOUGH_METERS = 20;
-const LOCATION_MAX_WAIT_MS = 10000;
+const LOCATION_MAX_WAIT_MS = 20000;
 
 function applyLocation(pos) {
     bestPosition = pos;
@@ -204,6 +220,10 @@ function applyLocation(pos) {
         document.getElementById('locationText').textContent =
             `${lat}, ${lng}（精度 ±${Math.round(pos.coords.accuracy)}m）`;
     }
+    // 定位成功了，之前（比如信号一开始弱、隔了几秒才锁定）弹出来的失败提示要跟着收起，
+    // 不然明明已经定位成功了，页面上还挂着一条"未能获取位置"的红字，容易让人误以为定位没成功
+    const alertBox = document.getElementById('locationAlert');
+    if (alertBox) alertBox.classList.add('d-none');
 }
 
 if (navigator.geolocation) {
@@ -226,7 +246,7 @@ if (navigator.geolocation) {
                 alertBox.classList.remove('d-none');
             }
         },
-        { timeout: 8000, maximumAge: 0, enableHighAccuracy: true }
+        { timeout: 15000, maximumAge: 0, enableHighAccuracy: true }
     );
     setTimeout(() => {
         if (locationWatchId !== null) {

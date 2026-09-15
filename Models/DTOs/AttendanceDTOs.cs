@@ -102,6 +102,7 @@ public class AttendanceRecordDto
     public int     EarlyLeaveMinutes { get; set; }   // 早退分钟
     public decimal ActualWorkHours   { get; set; }   // 实际工时
     public decimal OvertimeHours     { get; set; }   // 加班工时
+    public decimal LeaveHours        { get; set; }   // 请假工时
     public bool    IsHoliday         { get; set; }   // 是否节假日（说明：目前系统里没有任何地方会把这个值设成 true，取值始终是 false，等于暂时没在用）
     public string? ApprovalNote      { get; set; }   // 审批说明
 

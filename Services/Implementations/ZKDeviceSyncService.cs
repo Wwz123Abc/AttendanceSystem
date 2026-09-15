@@ -147,6 +147,10 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             }
 
             shiftByUserDate.TryGetValue((uid, workDate), out var shift);
+            groupIdByUser.TryGetValue(uid, out var punchGroupId);
+            // 今天是不是这个员工的休息日：休息日没有"应上班/应下班时间"可比，不该判迟到/早退，
+            // 跟本地打卡（AttendanceService.PunchCoreAsync）同一套规则
+            var isRestDay = await AttendanceService.IsNonCompRestDayAsync(db, workDate, shift, punchGroupId);
 
             // 不少机型没有签到/签退按键（或员工不会用），设备上报的 Status 不可靠，改成不看 Status、
             // 按班次配置自动判断：当天第一次算上班；之后如果落在班次配置的"午间必打卡"窗口内，算午间
@@ -180,7 +184,7 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             if (type == PunchType.ClockIn && (record.ClockInTime is null || r.Time < record.ClockInTime))
             {
                 record.ClockInTime = r.Time;
-                var status = AttendanceService.CalcClockInStatus(r.Time, shift, out var lateMin);
+                var status = AttendanceService.CalcClockInStatus(r.Time, shift, isRestDay, out var lateMin);
                 // 旷工可以被真的打了上班卡这件事纠正回来（不管是不是迟到，只要打了卡就不算旷工了），
                 // 但请假/出差/节假日这些由审批流程或定时任务设置的状态，不能被这里的上班打卡同步顺手覆盖掉。
                 // 之前只在"迟到"时才更新状态，导致旷工的人如果准点打卡（不迟到）反而不会被纠正回来，
@@ -204,7 +208,7 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                 // 状态也会永远卡在"未打卡"改不回来。请假/出差/节假日/旷工/迟到这些由审批流程、
                 // 定时任务或上班打卡设置的状态，优先级更高，不能被这里的下班打卡同步顺手覆盖掉。
                 record.ClockOutTime = r.Time;
-                var status = AttendanceService.CalcClockOutStatus(workDate, r.Time, shift, out var earlyMin);
+                var status = AttendanceService.CalcClockOutStatus(workDate, r.Time, shift, isRestDay, out var earlyMin);
                 // 请假/出差/节假日当天不写回早退分钟数，理由同上面 ClockIn 分支的 LateMinutes
                 if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
                     record.EarlyLeaveMinutes = earlyMin;
@@ -244,6 +248,7 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             // 走的是同一套算法，不然同样"漏打午间卡"这件事，考勤机同步和本地打卡算出来的工时会对不上；
             // 命中情况也要写回 record.MidCheckResults，不然"我的记录"页看不到午间打卡的命中详情。
             var missedWindowEnds = new List<DateTime>();
+            DateTime? secondHalfAbsentBoundary = null;
             var windows = shift?.ParseMidCheckWindows() ?? [];
             if (shift is not null && windows.Count > 0)
             {
@@ -261,11 +266,20 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                 record.MidCheckResults = midCheckResults.FormatMidCheckResults();
                 missedWindowEnds = midCheckResults.Where(m => !m.IsSatisfied)
                     .Select(m => AttendanceService.ResolveShiftTime(workDate, m.WindowEnd, shift)).ToList();
+                secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, midCheckResults);
             }
 
-            var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
-            var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift);
-            record.ActualWorkHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut, lunch, dinner);
+            // 休息日自己打卡、又没有批准的加班申请，不算工时——跟本地打卡（ComputeDailyWorkHoursAsync）同一套规则
+            if (record.OvertimeHours <= 0 && await AttendanceService.IsNonCompRestDayAsync(db, workDate, shift, groupId))
+            {
+                record.ActualWorkHours = 0;
+            }
+            else
+            {
+                var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
+                var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift, secondHalfAbsentBoundary);
+                record.ActualWorkHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut, lunch, dinner);
+            }
         }
 
         await db.SaveChangesAsync(ct);

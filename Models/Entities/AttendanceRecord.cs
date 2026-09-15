@@ -96,6 +96,14 @@ public class AttendanceRecord
     public decimal OvertimeHours { get; set; } = 0;
 
     /// <summary>
+    /// 请假时长（小时）：请假审批通过后按当天落在请假区间内的那一段时长算（用跟工时一样的
+    /// 「超 6/9 小时扣一次午休/晚餐」公式，口径和 ActualWorkHours 一致），只是纯展示/统计用，
+    /// 不会加回 ActualWorkHours——请假当天工时照常按"整天二选一"清零，见
+    /// AttendanceService.UpdateAttendanceAfterApprovalAsync 的请假分支。
+    /// </summary>
+    public decimal LeaveHours { get; set; } = 0;
+
+    /// <summary>
     /// 是否节假日。
     /// 注意：这是一个"目前没有真正被用起来"的字段——翻遍全部代码，没有任何地方会把它设成 true，
     /// 所以它的值永远是 false。节假日目前是通过 Holiday 表 + IAttendanceService.IsHolidayAsync 来判断的，

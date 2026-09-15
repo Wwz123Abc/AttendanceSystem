@@ -47,7 +47,10 @@ public class ShiftSchedule
     /// 午间必打卡窗口列表（如上午茶歇 10:00-10:10、午休 12:00-13:00，可以配多段）：留空表示这个班次不要求。
     /// 不同班次时间段不一样，由管理员在班次管理页按这个班次自己的时间段设置（下午班/晚班配各自中段的时间）。
     /// 每一段独立判定：段内只要有任意一次打卡（不分上/下班类型）就算满足这一段；哪一段缺了，
-    /// 工时就从"缺打卡的那几段里结束时间最晚的一段"算起（见 AttendanceService.ClampEffectiveClockIn）。
+    /// 工时就从"缺打卡的那几段里结束时间最晚的一段"算起（见 AttendanceService.ClampEffectiveClockIn）；
+    /// 时间最晚的那一段（通常是配的最后一段，如午休结束）如果没打上，从这段结束时间起到下班这段时间
+    /// 也不计入工时，相当于下半个班次不算出勤（不影响 AttendanceStatus，不算旷工、不发通知——
+    /// 见 AttendanceService.ResolveSecondHalfAbsentBoundary）。
     /// 存成"开始-结束"用逗号分隔的字符串（如 "10:00-10:10,12:00-13:00"），用
     /// <see cref="ShiftScheduleExtensions.ParseMidCheckWindows"/> 解析。
     /// </summary>
