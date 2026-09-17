@@ -27,27 +27,43 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 起止时间颠倒/缺关键字段这种非法申请，之前能照常建单、审批通过，只是回写考勤时
         // 因为区间是"负的"循环一次都不会跑，单子显示"已通过"但考勤记录完全没变化，
         // 相当于一次静默失败，很难排查。这里在建单之前先按类型把该有的字段和先后顺序卡一遍。
+        // 申请原因/出差目的地长度上限——跟页面上的限制保持一致，这里是权威兜底（直接调接口能绕开页面）
+        if (string.IsNullOrWhiteSpace(dto.Reason))
+            throw new InvalidOperationException("请填写申请原因");
+        if (dto.Reason.Trim().Length > 1000)
+            throw new InvalidOperationException("申请理由不能超过 1000 个字");
+        if (!string.IsNullOrWhiteSpace(dto.BusinessTripDestination) && dto.BusinessTripDestination.Trim().Length > 200)
+            throw new InvalidOperationException("出差目的地不能超过 200 个字");
+
         switch (dto.ApprovalType)
         {
             case ApprovalType.PunchReplenishment:
                 if (dto.PunchDate is null || dto.PunchType is null || dto.PunchTime is null)
                     throw new InvalidOperationException("请填写完整的补卡日期、类型和时间");
+                if (dto.PunchDate.Value > DateOnly.FromDateTime(DateTime.Today))
+                    throw new InvalidOperationException("补卡日期不能晚于今天");
                 break;
             case ApprovalType.Leave:
                 if (dto.LeaveStartTime is null || dto.LeaveEndTime is null)
                     throw new InvalidOperationException("请填写请假的起止时间");
+                if (dto.LeaveStartTime < DateTime.Now.AddHours(-24))
+                    throw new InvalidOperationException("请假开始时间最早只能选到现在往前推24小时以内");
                 if (dto.LeaveEndTime <= dto.LeaveStartTime)
                     throw new InvalidOperationException("请假结束时间必须晚于开始时间");
                 break;
             case ApprovalType.Overtime:
                 if (dto.OvertimeStartTime is null || dto.OvertimeEndTime is null)
                     throw new InvalidOperationException("请填写加班的起止时间");
+                if (DateOnly.FromDateTime(dto.OvertimeStartTime.Value) != DateOnly.FromDateTime(DateTime.Today))
+                    throw new InvalidOperationException("加班申请必须是当天的加班，请在当天24点前提交当日申请");
                 if (dto.OvertimeEndTime <= dto.OvertimeStartTime)
                     throw new InvalidOperationException("加班结束时间必须晚于开始时间");
                 break;
             case ApprovalType.BusinessTrip:
                 if (dto.BusinessTripStartTime is null || dto.BusinessTripEndTime is null)
                     throw new InvalidOperationException("请填写出差的起止时间");
+                if (dto.BusinessTripStartTime < DateTime.Now)
+                    throw new InvalidOperationException("出差开始时间不能早于现在");
                 if (dto.BusinessTripEndTime < dto.BusinessTripStartTime)
                     throw new InvalidOperationException("出差结束时间不能早于开始时间");
                 break;
@@ -148,11 +164,15 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             s.ApprovalStatus    == ApprovalStatus.Pending);
         if (earlierPending) return false;   // 前一级还没审，当前这级不能先审
 
+        // 从抢占节点、判断整单状态到回写考勤，整个过程放进一个事务：万一半路失败，或者跟申请人
+        // 几乎同一时刻点的"撤销"（CancelApprovalAsync）撞车，要么全部生效、要么全部回滚，
+        // 不会出现节点状态、整单状态、考勤数据三者中只改了一部分的半成品结果。
+        await using var transaction = await db.Database.BeginTransactionAsync();
+
         // 原子"认领"这个节点：条件里带 ApprovalStatus == Pending，只有还是待审批状态才能抢到。
-        // 抢不到（返回 0 行）说明这个节点已经被处理过了——要么是两次几乎同时的点击/请求撞上了
+        // 抢不到（返回 0 行）说明这个节点已经被处理过了——两次几乎同时的点击/请求撞上了
         // （不加这一步的话，两边都会通过上面的检查、都真的把后面的审批逻辑跑一遍，比如加班时长
-        // 被累加两次），要么是申请人在处理的同时把整张单撤销了（撤销时会把 Pending 节点一并作废，
-        // 见 CancelApprovalAsync）。这里用 ExecuteUpdateAsync 直接在数据库层面做条件更新，
+        // 被累加两次）。这里用 ExecuteUpdateAsync 直接在数据库层面做条件更新，
         // 不经过内存里的 change tracker，天然是原子的，不会有"先查后改"之间的竞态窗口。
         var claimed = await db.ApprovalSteps
             .Where(s => s.Id == step.Id && s.ApprovalStatus == ApprovalStatus.Pending)
@@ -160,14 +180,13 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 .SetProperty(x => x.ApprovalStatus, dto.IsApproved ? ApprovalStatus.Approved : ApprovalStatus.Rejected)
                 .SetProperty(x => x.Comment, dto.Comment)
                 .SetProperty(x => x.HandledAt, DateTime.Now));
-        if (claimed == 0) return false;
+        if (claimed == 0) { await transaction.RollbackAsync(); return false; }
 
         var request = step.ApprovalRequest;
+        ApprovalStep? nextStep = null;
 
         if (!dto.IsApproved)
         {
-            request.ApprovalStatus = ApprovalStatus.Rejected;   // 只要有人驳回，整单驳回
-
             // 后面还没轮到的环节直接作废，避免它们一直挂在别人的“待我审批”里
             var laterSteps = await db.ApprovalSteps
                 .Where(s => s.ApprovalRequestId == dto.ApprovalRequestId
@@ -179,29 +198,39 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         else
         {
             // 找当前节点之后还在等待的下一节点
-            var nextStep = await db.ApprovalSteps
+            nextStep = await db.ApprovalSteps
                 .Where(s => s.ApprovalRequestId == dto.ApprovalRequestId
                          && s.StepOrder > step.StepOrder
                          && s.ApprovalStatus == ApprovalStatus.Pending)
                 .OrderBy(s => s.StepOrder)
                 .FirstOrDefaultAsync();
-
-            if (nextStep is null)
-            {
-                // 没有下一节点了 → 整单通过，并回写考勤（补卡补时间/请假置请假）
-                request.ApprovalStatus = ApprovalStatus.Approved;
-                await attendanceService.UpdateAttendanceAfterApprovalAsync(request.Id);
-            }
-            else
-            {
-                // 还有下一节点 → 状态改“审批中”，通知下一个审批人
-                request.ApprovalStatus = ApprovalStatus.InProgress;
-                await NotifyNextApproverAsync(request, nextStep);
-            }
         }
 
-        request.UpdatedAt = DateTime.Now;
-        await db.SaveChangesAsync();
+        var newRequestStatus = !dto.IsApproved ? ApprovalStatus.Rejected
+            : nextStep is null ? ApprovalStatus.Approved : ApprovalStatus.InProgress;
+
+        // 整单状态也做成"抢占式"更新：只有整单目前还没被撤销（仍是待审批/审批中）才允许改——
+        // 跟申请人几乎同一时刻点的"撤销"撞车时，谁先提交生效，另一边这里会发现整单已经不是
+        // 自己以为的状态，抢占失败，整个事务连同上面刚抢到的节点状态一起回滚，不会出现
+        // "显示已撤销、但考勤已经按通过回写"这种结果不一致的情况。
+        var requestClaimed = await db.ApprovalRequests
+            .Where(a => a.Id == request.Id
+                     && (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress))
+            .ExecuteUpdateAsync(a => a
+                .SetProperty(x => x.ApprovalStatus, newRequestStatus)
+                .SetProperty(x => x.UpdatedAt, DateTime.Now));
+        if (requestClaimed == 0) { await transaction.RollbackAsync(); return false; }
+        request.ApprovalStatus = newRequestStatus;   // 同步内存对象，后面回写考勤/通知要用
+
+        await db.SaveChangesAsync();   // 落盘"驳回时后续节点作废"这几条改动
+
+        if (dto.IsApproved && nextStep is null)
+            await attendanceService.UpdateAttendanceAfterApprovalAsync(request.Id);   // 整单通过，回写考勤
+
+        await transaction.CommitAsync();
+
+        if (dto.IsApproved && nextStep is not null)
+            await NotifyNextApproverAsync(request, nextStep);   // 还有下一级，通知下一个审批人
         await NotifyApplicantAsync(request);   // 通知申请人结果
         return true;
     }
@@ -209,22 +238,23 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     /// <summary>申请人撤销自己的申请（只有“待审批”状态能撤）。</summary>
     public async Task<bool> CancelApprovalAsync(int userId, int approvalRequestId)
     {
-        var request = await db.ApprovalRequests
-            .FirstOrDefaultAsync(a => a.Id == approvalRequestId && a.ApplicantUserId == userId);
-        if (request is null || request.ApprovalStatus != ApprovalStatus.Pending)
-            return false;
-        request.ApprovalStatus = ApprovalStatus.Cancelled;
-        request.UpdatedAt      = DateTime.Now;
+        // 跟 HandleApprovalAsync 用同一套"抢占式"条件更新：只有整单现在确实还是 Pending 才能撤，
+        // 直接在数据库层面做条件更新，不会有"先查到还是 Pending、还没来得及写就被审批人抢先处理掉"
+        // 这种先查后写之间的竞态窗口。
+        var claimed = await db.ApprovalRequests
+            .Where(a => a.Id == approvalRequestId && a.ApplicantUserId == userId && a.ApprovalStatus == ApprovalStatus.Pending)
+            .ExecuteUpdateAsync(a => a
+                .SetProperty(x => x.ApprovalStatus, ApprovalStatus.Cancelled)
+                .SetProperty(x => x.UpdatedAt, DateTime.Now));
+        if (claimed == 0) return false;
 
         // 还没处理的审批节点要一并作废，不然撤销形同虚设：审批人那边这个节点还显示"待审批"，
-        // 真去点了"通过"的话，HandleApprovalAsync 会把整单状态又改回"已通过"、还会触发考勤回写，
-        // 相当于一张已经撤销的申请被"复活"生效了。
-        var pendingSteps = await db.ApprovalSteps
+        // 真去点了"通过"的话，HandleApprovalAsync 会发现整单已经不是 Pending/InProgress、
+        // 抢占失败并回滚，不会出现一张已经撤销的申请被"复活"生效的情况。
+        await db.ApprovalSteps
             .Where(s => s.ApprovalRequestId == approvalRequestId && s.ApprovalStatus == ApprovalStatus.Pending)
-            .ToListAsync();
-        foreach (var s in pendingSteps) s.ApprovalStatus = ApprovalStatus.Cancelled;
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.ApprovalStatus, ApprovalStatus.Cancelled));
 
-        await db.SaveChangesAsync();
         return true;
     }
 

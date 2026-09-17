@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
@@ -12,8 +13,10 @@ namespace AttendanceSystem.Pages.Employee;
 /// <summary>
 /// 新员工扫码登记页（未登录可访问）：填姓名/手机号/身份证号/岗位/劳务公司/住址/紧急联系人，
 /// 并可上传身份证照片，提交后进"待确认"，需要等管理员在"员工管理"页审核补全信息才会正式建号。
+/// 按 IP 限流：匿名接口没有账号锁定这道保护，防止被刷传大量登记照片占满存储。
 /// </summary>
 [AllowAnonymous]
+[EnableRateLimiting("SelfRegisterPolicy")]
 public class SelfRegisterModel(
     IEmployeeRegistrationService registrationService,
     IWebHostEnvironment env,                    // 用来定位 wwwroot 目录存身份证照片
@@ -94,6 +97,15 @@ public class SelfRegisterModel(
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
             throw new InvalidOperationException("身份证照片只支持 jpg / png / webp 格式");
 
+        // 只看扩展名不够——匿名提交的这个接口可以随便把任意文件改成 .jpg 后缀上传。这里额外看一眼
+        // 文件头（魔数），确认内容真的是对应的图片格式，跟考勤机上传照片（ZKDeviceController）
+        // 已经在做的同一道校验保持一致。
+        var header = new byte[12];
+        await using (var headerStream = IdCardPhoto.OpenReadStream())
+            await headerStream.ReadExactlyAsync(header.AsMemory(0, (int)Math.Min(12, IdCardPhoto.Length)));
+        if (!IsValidImageHeader(ext, header))
+            throw new InvalidOperationException("身份证照片文件内容与格式不符，请重新选择图片文件");
+
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
         var dir        = Path.Combine(PrivateFileStorage.GetRoot(env), uploadPath, "idcards", "registrations", Phone.Trim());
         Directory.CreateDirectory(dir);
@@ -105,4 +117,16 @@ public class SelfRegisterModel(
 
         return $"/{uploadPath}/idcards/registrations/{Phone.Trim()}/{fileName}";
     }
+
+    /// <summary>按文件头魔数校验内容是不是真的是对应格式的图片：JPEG=FF D8 FF；PNG=89 50 4E 47 0D 0A 1A 0A；
+    /// WEBP=开头 "RIFF"、第 8-11 字节 "WEBP"。</summary>
+    private static bool IsValidImageHeader(string ext, byte[] header) => ext switch
+    {
+        ".jpg" or ".jpeg" => header.Length >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF,
+        ".png" => header.Length >= 8 && header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47
+                                      && header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A,
+        ".webp" => header.Length >= 12 && header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F'
+                                        && header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P',
+        _ => false
+    };
 }

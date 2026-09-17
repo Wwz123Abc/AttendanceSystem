@@ -635,13 +635,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 管理员手动补卡之后调用这个，避免月初已经生成过的汇总因为后补的记录而跟日明细对不上、
     /// 又得靠人工去点"重新生成"才能刷新）。
     /// </summary>
-    public async Task GenerateMonthlySummaryAsync(int year, int month, int? onlyUserId = null)
+    public async Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null)
     {
         var start = new DateOnly(year, month, 1);
         var end   = start.AddMonths(1).AddDays(-1);
 
-        var candidateIds = onlyUserId.HasValue
-            ? [onlyUserId.Value]
+        var candidateIds = onlyUserIds is { Count: > 0 }
+            ? onlyUserIds.Distinct().ToList()
             : await db.Users.Where(u => u.IsActive).Select(u => u.Id)
                 .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
                 .Union(db.MonthlyAttendanceSummaries.Where(s => s.Year == year && s.Month == month).Select(s => s.UserId))
@@ -660,40 +660,59 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 .ToListAsync())
             .ToDictionary(x => x.UserId, x => x.Count);
 
+        // 下面几张表按"这批人 + 这个月"一次性整批查出来，循环里直接从内存字典取——原来是每个人
+        // 各自查一遍数据库（考勤记录、排班、所在考勤组），几百号人一次全量重算就是几百组重复查询，
+        // 数据量小的假期表更是每人都重复查一遍同一个月的数据，现在全部改成先批量查、后内存过滤。
+        var recordsByUser = (await db.AttendanceRecords
+                .Where(r => candidateIds.Contains(r.UserId) && r.WorkDate >= start && r.WorkDate <= end)
+                .ToListAsync())
+            .GroupBy(r => r.UserId).ToDictionary(g => g.Key, g => g.ToList());
+
+        var shiftsByUser = (await db.ShiftAssignments
+                .Include(a => a.ShiftSchedule)
+                .Where(a => candidateIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end)
+                .ToListAsync())
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(a => a.WorkDate, a => a.ShiftSchedule));
+
+        // 假期表数据量本来就很小（一个月内的节假日/调休条目），不用按人过滤，下面按各自的考勤组现场筛选，
+        // 和原来 CountExpectedWorkdaysAsync 里"按 groupId 过滤"的效果完全一致
+        var holidaysInRange = await db.Holidays
+            .Where(h => h.HolidayDate >= start && h.HolidayDate <= end)
+            .ToListAsync();
+
+        var groupIds   = users.Where(u => u.AttendanceGroupId.HasValue).Select(u => u.AttendanceGroupId!.Value).Distinct().ToList();
+        var groupsById = await db.AttendanceGroups.Where(g => groupIds.Contains(g.Id)).ToDictionaryAsync(g => g.Id);
+
+        var existingSummaries = await db.MonthlyAttendanceSummaries
+            .Where(s => candidateIds.Contains(s.UserId) && s.Year == year && s.Month == month)
+            .ToDictionaryAsync(s => s.UserId);
+
         foreach (var user in users)
         {
-            // 取这个人这个月的每日记录
-            var records = await db.AttendanceRecords
-                .Where(r => r.UserId == user.Id && r.WorkDate >= start && r.WorkDate <= end)
-                .ToListAsync();
+            var records     = recordsByUser.GetValueOrDefault(user.Id, []);
+            var shiftByDate = shiftsByUser.GetValueOrDefault(user.Id) ?? new Dictionary<DateOnly, ShiftSchedule>();
 
             // 应出勤天数：从“月初”和“该员工入职日”里取较晚的一天开始算，
             // 避免月中入职的人被算成全月应出勤、导致出勤率虚低。
             var effStart = user.HireDate is { } hd && hd > start ? hd : start;
-            var expected = effStart > end ? 0 : await CountExpectedWorkdaysAsync(effStart, end, user.AttendanceGroupId, user.Id);
+            var expected = effStart > end ? 0 : CountExpectedWorkdays(effStart, end, user.AttendanceGroupId, holidaysInRange, shiftByDate);
 
             // 取出已有的汇总，没有就新建
-            var summary = await db.MonthlyAttendanceSummaries
-                .FirstOrDefaultAsync(s => s.UserId == user.Id && s.Year == year && s.Month == month);
-
-            if (summary is null)
+            if (!existingSummaries.TryGetValue(user.Id, out var summary))
             {
                 summary = new MonthlyAttendanceSummary { UserId = user.Id, Year = year, Month = month };
                 db.MonthlyAttendanceSummaries.Add(summary);
+                existingSummaries[user.Id] = summary;
             }
 
             // 工时/加班：正常情况下每条记录的 ActualWorkHours 在写入时（本地打卡/钉钉同步/补卡审批）就已经算好了，
             // 这里直接求和即可。仅对「历史遗留、写入时还没补算过」的记录（ActualWorkHours 仍是 0 但有上下班时间）
             // 现场补算，并且顺手写回记录本身——这样老数据只要被打开一次月度报表就能自愈，
             // 不会出现「日明细显示 0、月合计却不是 0」这种对不上的情况。
-            var group  = user.AttendanceGroupId.HasValue ? await db.AttendanceGroups.FindAsync(user.AttendanceGroupId.Value) : null;
+            var group  = user.AttendanceGroupId.HasValue ? groupsById.GetValueOrDefault(user.AttendanceGroupId.Value) : null;
             var lunch  = group?.LunchBreakMinutes  ?? 60;
             var dinner = group?.DinnerBreakMinutes ?? 30;
-            var shiftByDate = (await db.ShiftAssignments
-                    .Include(a => a.ShiftSchedule)
-                    .Where(a => a.UserId == user.Id && a.WorkDate >= start && a.WorkDate <= end)
-                    .ToListAsync())
-                .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
             decimal totalWork = 0, totalOt = 0;
             foreach (var r in records)
             {
@@ -946,7 +965,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             var punchDt = approval.PunchDate.Value.ToDateTime(approval.PunchTime.Value);
             if (approval.PunchType == PunchType.ClockIn) record.ClockInTime  = punchDt;   // 补上班卡
             else                                          record.ClockOutTime = punchDt;   // 补下班卡
-            record.ApprovalNote = $"补卡已审批通过（{approval.RequestNo}）";
+            AppendApprovalNote(record, $"补卡已审批通过（{approval.RequestNo}）");
             record.UpdatedAt    = DateTime.Now;
 
             // 补齐上下班两次卡后：重算当天实际工时（工资按工时结算，补完卡必须把工时补准），
@@ -1072,8 +1091,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 // OvertimeHours 不动：出差是否加班无法从审批单推断，不猜——但也不能不管三七二十一直接清零，
                 // 万一这天之前已经有另一张加班申请审批通过、累加过加班时长，这里清零会把已批准的加班顶掉。
                 // 新建的记录本来就是 0（实体默认值），不用特意再赋一次。
-                record.ApprovalNote     = $"出差审批通过（{approval.RequestNo}）"
-                    + (string.IsNullOrWhiteSpace(approval.BusinessTripDestination) ? "" : $"，目的地：{approval.BusinessTripDestination}");
+                AppendApprovalNote(record, $"出差审批通过（{approval.RequestNo}）"
+                    + (string.IsNullOrWhiteSpace(approval.BusinessTripDestination) ? "" : $"，目的地：{approval.BusinessTripDestination}"));
                 record.UpdatedAt        = DateTime.Now;
                 touchedMonths.Add((d.Year, d.Month));
             }
@@ -1083,7 +1102,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         // 同步刷新受影响月份的月度汇总，不用再等人工点"重新生成"（GenerateMonthlySummaryAsync 本身是幂等的）
         foreach (var (y, m) in touchedMonths)
-            await GenerateMonthlySummaryAsync(y, m, approval.ApplicantUserId);
+            await GenerateMonthlySummaryAsync(y, m, [approval.ApplicantUserId]);
     }
 
     /// <summary>
@@ -1111,7 +1130,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         await db.SaveChangesAsync();
 
         // 同步刷新这个月的月度汇总，道理和审批回写那边一样，不用等人工点"重新生成"
-        await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, userId);
+        await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
     }
 
     // ── 私有计算方法（下面这些只在本服务内部使用）─────────────────────────────────
@@ -1361,26 +1380,36 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     public static DateTime? ResolveSecondHalfAbsentBoundary(DateOnly workDate, ShiftSchedule? shift, List<MidCheckWindowResult> results)
     {
         if (shift is null || results.Count == 0) return null;
-        var lastWindow = results.OrderBy(r => r.WindowEnd).Last();
+        var lastWindow = results[ResolveLastWindowIndex(results)];
         return lastWindow.IsSatisfied ? null : ResolveShiftTime(workDate, lastWindow.WindowStart, shift);
     }
 
     /// <summary>
     /// 算"漏打的、且不是最后一段"窗口的结束时间，供 <see cref="ClampEffectiveClockIn"/> 顺延有效
-    /// 上班时间用。★ 必须排除最后一段（按结束时间最晚算，跟 <see cref="ResolveSecondHalfAbsentBoundary"/>
-    /// 用的是同一个"最后一段"）——那一段漏打的后果已经单独由 ResolveSecondHalfAbsentBoundary 处理
-    /// （下半个班次直接不算工时）。之前这里没排除，导致班次只配了一段午间窗口（这一段自然也是
-    /// "最后一段"）时，漏打这一段会同时触发"上班时间顺延到这段结束"和"下班时间收窄到这段结束"
-    /// 两条规则，两边都收缩到同一个点，直接把一整天的工时清零——本意只是"下半个班次不算"，
-    /// 结果变成"整天不算"，是个真实的工时计算 bug（发现于 2026-09-17 数据核查）。
+    /// 上班时间用。★ 必须排除最后一段（跟 <see cref="ResolveSecondHalfAbsentBoundary"/> 用
+    /// <see cref="ResolveLastWindowIndex"/> 选出的是同一段）——那一段漏打的后果已经单独由
+    /// ResolveSecondHalfAbsentBoundary 处理（下半个班次直接不算工时）。之前这里没排除，导致班次
+    /// 只配了一段午间窗口（这一段自然也是"最后一段"）时，漏打这一段会同时触发"上班时间顺延到这段
+    /// 结束"和"下班时间收窄到这段结束"两条规则，两边都收缩到同一个点，直接把一整天的工时清零——
+    /// 本意只是"下半个班次不算"，结果变成"整天不算"，是个真实的工时计算 bug（发现于 2026-09-17 数据核查）。
     /// </summary>
     public static List<DateTime> ResolveMissedNonLastWindowEnds(DateOnly workDate, ShiftSchedule shift, List<MidCheckWindowResult> results)
     {
         if (results.Count == 0) return [];
-        var lastWindowEnd = results.Max(r => r.WindowEnd);
-        return results.Where(r => !r.IsSatisfied && r.WindowEnd != lastWindowEnd)
+        var lastIndex = ResolveLastWindowIndex(results);
+        return results.Where((r, i) => i != lastIndex && !r.IsSatisfied)
             .Select(r => ResolveShiftTime(workDate, r.WindowEnd, shift)).ToList();
     }
+
+    /// <summary>挑出"最后一段"窗口在列表里的下标：按结束时间最晚排序，若有多段结束时间刚好相同
+    /// （班次配置本身少见但没禁止的情况），再按开始时间最晚的排在最后——两个方法都调这一个，
+    /// 保证永远认定同一段是"最后一段"。原来两处各自用不同规则挑"最后一段"（这里按 WindowEnd 值
+    /// 相等直接排除所有并列的，上面按 OrderBy(...).Last() 只挑一个），结束时间恰好撞在一起时，
+    /// 会导致其中一段漏打的窗口两个函数都不处理、也不影响任何计算，等于被悄悄漏掉。</summary>
+    private static int ResolveLastWindowIndex(List<MidCheckWindowResult> results) =>
+        Enumerable.Range(0, results.Count)
+            .OrderBy(i => results[i].WindowEnd).ThenBy(i => results[i].WindowStart)
+            .Last();
 
     /// <summary>
     /// 把工时数规范成"半小时"为最小单位：不足半小时的零头舍去（1.2→1.0，1.7→1.5，1.5 不变）。
@@ -1458,27 +1487,22 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// ● 法定节假日/公司休息日：不算出勤；
     /// ● 其它日子：按这个人当天排的班次自己配置的休息日判断（三班倒可能休二、三，不一定是标准周末）；
     ///   没排班的日子没法知道具体休息日规则，退一步按标准周末兜底。
+    /// 纯内存计算，不查库——holidaysInRange（未按考勤组过滤的这段时间全部假期）和 shiftByDate
+    /// （这个人这段时间的排班字典）由调用方（<see cref="GenerateMonthlySummaryAsync"/>）批量查好传进来，
+    /// 避免月度汇总重算几百号人时，这里每人各自重复查一遍同一张假期表和排班表。
     /// </summary>
-    private async Task<int> CountExpectedWorkdaysAsync(DateOnly start, DateOnly end, int? groupId, int userId)
+    private static int CountExpectedWorkdays(DateOnly start, DateOnly end, int? groupId,
+        List<Holiday> holidaysInRange, Dictionary<DateOnly, ShiftSchedule> shiftByDate)
     {
-        var holidays = await db.Holidays
-            .Where(h => h.HolidayDate >= start && h.HolidayDate <= end
-                     && (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId))
-            .ToListAsync();
-
-        var assignments = await db.ShiftAssignments
-            .Include(a => a.ShiftSchedule)
-            .Where(a => a.UserId == userId && a.WorkDate >= start && a.WorkDate <= end)
-            .ToDictionaryAsync(a => a.WorkDate);
-
         var count = 0;
         for (var d = start; d <= end; d = d.AddDays(1))
         {
-            var holiday = holidays.FirstOrDefault(h => h.HolidayDate == d);
+            var holiday = holidaysInRange.FirstOrDefault(h => h.HolidayDate == d
+                && (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
             if (holiday?.HolidayType == HolidayType.CompensatoryWorkDay) { count++; continue; }
             if (holiday?.HolidayType is HolidayType.LegalHoliday or HolidayType.CompanyRestDay) continue;
 
-            var isRestDay = IsShiftWeeklyRestDay(d, assignments.TryGetValue(d, out var assign) ? assign.ShiftSchedule : null);
+            var isRestDay = IsShiftWeeklyRestDay(d, shiftByDate.TryGetValue(d, out var shift) ? shift : null);
             if (!isRestDay) count++;
         }
         return count;

@@ -7,8 +7,8 @@
     <RootNamespace>AttendanceSystem</RootNamespace>
     <AssemblyName>AttendanceSystem</AssemblyName>
     <LangVersion>latest</LangVersion>
-    <!-- 嵌套的 AppBoxCore.EFCore 是独立项目，不应被本项目当成源码编译进来 -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);AppBoxCore.EFCore\**</DefaultItemExcludes>
+    <!-- 嵌套的 AppBoxCore.EFCore、AttendanceSystem.Tests 都是独立项目，不应被本项目当成源码编译进来 -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);AppBoxCore.EFCore\**;AttendanceSystem.Tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

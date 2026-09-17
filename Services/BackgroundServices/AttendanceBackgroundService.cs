@@ -192,15 +192,16 @@ public class AttendanceBackgroundService(
             }
         }
 
-        // 昨天是不是有夜班（跨天班次）打了上班卡、一直没打下班卡的记录——昨天这个时间点检查时，
-        // 因为"人可能还在上班、要到今天凌晨才下班"特意跳过了（见上面 IsCrossDay 那个 continue）。
-        // 现在已经过了整整一天，如果还是没有下班卡，说明是真的漏打了（忘记打卡/离职/设备故障），
+        // 昨天及更早，是不是有夜班（跨天班次）打了上班卡、一直没打下班卡的记录——检查当天因为
+        // "人可能还在上班、要到第二天凌晨才下班"特意跳过了（见上面 IsCrossDay 那个 continue）。
+        // 现在已经过了至少一整天，如果还是没有下班卡，说明是真的漏打了（忘记打卡/离职/设备故障），
         // 需要在这里补上标记——不然这条记录会永远停在"已上班未下班"，旷工/未打卡看板永远看不到、
         // 也永远收不到提醒（因为后续每天的检查只看"今天"的记录，不会再回头看这条）。
-        var yesterday        = today.AddDays(-1);
-        var activeUserIds    = users.Select(u => u.Id).ToHashSet();   // 复用上面已查好的"当前在职员工"名单
-        var yesterdayOpenRecords = (await db.AttendanceRecords
-            .Where(r => r.WorkDate == yesterday && r.ClockInTime != null && r.ClockOutTime == null
+        // 用 "< today" 而不是只查 "== 昨天"：服务如果连续停机/宕机跨越了两个以上的午夜，早于昨天的
+        // 未闭合记录不会因为只被检查漏过一次就从此再也追不上，这里会把它们都一起补标。
+        var activeUserIds = users.Select(u => u.Id).ToHashSet();   // 复用上面已查好的"当前在职员工"名单
+        var openRecords = (await db.AttendanceRecords
+            .Where(r => r.WorkDate < today && r.ClockInTime != null && r.ClockOutTime == null
                      && r.AttendanceStatus != AttendanceStatus.NotPunched
                      && r.AttendanceStatus != AttendanceStatus.OnLeave
                      && r.AttendanceStatus != AttendanceStatus.Holiday
@@ -208,20 +209,21 @@ public class AttendanceBackgroundService(
             .ToListAsync())
             .Where(r => activeUserIds.Contains(r.UserId))   // 已离职/停用的人不再标记、不再发提醒
             .ToList();
-        if (yesterdayOpenRecords.Count > 0)
+        if (openRecords.Count > 0)
         {
-            var openUserIds = yesterdayOpenRecords.Select(r => r.UserId).ToList();
-            var yesterdayAssignByUser = (await db.ShiftAssignments
+            var openUserIds = openRecords.Select(r => r.UserId).Distinct().ToList();
+            var openDates   = openRecords.Select(r => r.WorkDate).Distinct().ToList();
+            var assignByUserDate = (await db.ShiftAssignments
                     .Include(a => a.ShiftSchedule)
-                    .Where(a => a.WorkDate == yesterday && openUserIds.Contains(a.UserId))
+                    .Where(a => openUserIds.Contains(a.UserId) && openDates.Contains(a.WorkDate))
                     .ToListAsync())
-                .GroupBy(a => a.UserId).ToDictionary(g => g.Key, g => g.First());
+                .ToDictionary(a => (a.UserId, a.WorkDate));
 
-            foreach (var record in yesterdayOpenRecords)
+            foreach (var record in openRecords)
             {
-                // 只处理"昨天排的确实是跨天班次"这种情况——普通白班漏打下班卡当天就已经处理过了，
-                // 不会走到这里；这里只是给夜班这一类"故意延后一天再判定"的情况兜底。
-                if (!yesterdayAssignByUser.TryGetValue(record.UserId, out var assign) || !assign.ShiftSchedule.IsCrossDay)
+                // 只处理"当天排的确实是跨天班次"这种情况——普通白班漏打下班卡当天就已经处理过了，
+                // 不会走到这里；这里只是给夜班这一类"故意延后再判定"的情况兜底。
+                if (!assignByUserDate.TryGetValue((record.UserId, record.WorkDate), out var assign) || !assign.ShiftSchedule.IsCrossDay)
                     continue;
 
                 record.AttendanceStatus = AttendanceStatus.NotPunched;
@@ -230,7 +232,7 @@ public class AttendanceBackgroundService(
                 {
                     UserId           = record.UserId,
                     Title            = "下班未打卡提醒",
-                    Content          = $"您 {yesterday:MM/dd} 的夜班一直未打下班卡，如有异议请提交补卡申请",
+                    Content          = $"您 {record.WorkDate:MM/dd} 的夜班一直未打下班卡，如有异议请提交补卡申请",
                     NotificationType = "PunchReminder",
                     CreatedAt        = DateTime.Now
                 });

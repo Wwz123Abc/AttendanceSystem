@@ -33,8 +33,9 @@ public interface IAttendanceService
     /// <summary>获取部门/考勤组指定月份的汇总列表。<paramref name="scopeDeptIds"/> 非空时额外收窄到这批
     /// 部门内（分公司管理员范围过滤，不受限管理员不传）。</summary>
     Task<List<MonthlySummaryDto>>  GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null);
-    /// <summary>生成/重算指定月份的考勤汇总；onlyUserId 不为空时只重算这一个人（审批回写/手动补卡后调用）。</summary>
-    Task                           GenerateMonthlySummaryAsync(int year, int month, int? onlyUserId = null);
+    /// <summary>生成/重算指定月份的考勤汇总；onlyUserIds 不为空时只重算这批人（审批回写/手动补卡/分公司管理员
+    /// 批量重算范围内员工时用，一次调用批量处理，避免调用方自己逐人循环调用导致的重复查库）。</summary>
+    Task                           GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null);
     /// <summary>今日考勤看板统计（出勤、缺勤、迟到等）。<paramref name="deptIds"/> 非空时只统计部门在这个
     /// 集合内的员工——分公司管理员登录时用来把看板收窄到自己管理范围内，不受限管理员不传（看全公司）。</summary>
     Task<AttendanceStatsDto>       GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null);

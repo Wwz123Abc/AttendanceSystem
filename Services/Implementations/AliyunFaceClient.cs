@@ -96,7 +96,10 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
         {
             RecordFailureAndLogIfBreakerJustOpened("活体检测");
             logger.LogWarning(ex, "活体检测接口调用失败");
-            throw new AliyunFaceApiException("活体检测接口调用失败：" + ex.Message);
+            // 不把 ex.Message 拼进抛给上层/最终展示给员工的提示里——那是阿里云 SDK 原始的报错文本，
+            // 可能带内部域名/请求 ID 等技术细节，不该让普通员工看到；完整异常已经记进上面的日志，
+            // 需要排查时看日志就够了。
+            throw new AliyunFaceApiException("活体检测接口调用失败，请稍后重试");
         }
 
         if (!isLive)
@@ -137,7 +140,7 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
         {
             RecordFailureAndLogIfBreakerJustOpened("人脸比对");
             logger.LogWarning(ex, "人脸比对接口调用失败");
-            throw new AliyunFaceApiException("人脸比对接口调用失败：" + ex.Message);
+            throw new AliyunFaceApiException("人脸比对接口调用失败，请稍后重试");
         }
 
         var isMatch = confidence >= _opt.MatchThreshold;
@@ -221,7 +224,7 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
         {
             RecordFailureAndLogIfBreakerJustOpened("人脸检测");
             logger.LogWarning(ex, "人脸检测接口调用失败");
-            throw new AliyunFaceApiException("人脸检测接口调用失败：" + ex.Message);
+            throw new AliyunFaceApiException("人脸检测接口调用失败，请稍后重试");
         }
     }
 

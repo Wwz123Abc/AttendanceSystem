@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Enums;
@@ -12,8 +13,10 @@ using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages;
 
-/// <summary>登录页：校验工号/密码，成功后写 Cookie 并按角色跳到对应首页。[AllowAnonymous]=不用登录也能访问。</summary>
+/// <summary>登录页：校验工号/密码，成功后写 Cookie 并按角色跳到对应首页。[AllowAnonymous]=不用登录也能访问。
+/// 按 IP 限流：防止对大量不同工号做密码喷洒（跟按工号的失败锁定是两道独立防线）。</summary>
 [AllowAnonymous]
+[EnableRateLimiting("LoginPolicy")]
 public class LoginModel(IUserService userService, IOptions<AppSettingsOptions> appOptions) : PageModel
 {
     // [BindProperty]=这几个字段会自动接住页面表单提交上来的值

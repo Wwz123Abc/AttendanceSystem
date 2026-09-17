@@ -70,8 +70,9 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
             var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
             var userIds = await db.Users.Where(u => u.DepartmentId != null && visibleIds!.Contains(u.DepartmentId.Value))
                 .Select(u => u.Id).ToListAsync();
-            foreach (var uid in userIds)
-                await attendanceService.GenerateMonthlySummaryAsync(year, month, uid);
+            // 一次调用把这批人整批传进去（原来是逐人循环调用，等于一遍遍重复批量查同一个月的
+            // 考勤记录/排班/假期表，人数一多这个接口会明显变慢）
+            await attendanceService.GenerateMonthlySummaryAsync(year, month, userIds);
         }
         return Ok(new { Success = true, Message = $"{year}年{month}月考勤汇总已生成" });
     }

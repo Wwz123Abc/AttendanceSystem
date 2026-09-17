@@ -1,6 +1,8 @@
 using System.Security.Claims;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using AttendanceSystem.Data;
@@ -60,14 +62,13 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 
         // 登录票据 Cookie：显式声明（跟 ASP.NET Core 默认值一致，只是不留给"没配置"的模糊状态）。
         // HttpOnly=true：JS 读不到票据，挡 XSS 窃取会话；SameSite=Lax：跨站的 POST/AJAX 请求不会带上
-        // 这个 Cookie，是 CSRF 的第一道防线。SecurePolicy 暂时维持 SameAsRequest（HTTP 下也能登录）——
-        // 还没确认正式服 adt.colibri.com.cn:15080 前面是否有反向代理终结 HTTPS；等确认清楚整条链路
-        // 全程走 HTTPS 后，应该把这里改成 CookieSecurePolicy.Always（票据只在 HTTPS 下才会被发送，
-        // 防中间人窃取），并加 app.UseForwardedHeaders() + app.UseHttpsRedirection()，不要在没搞清楚
-        // 部署拓扑之前就贸然强制，否则反向代理配置不对会直接把所有人挡在登录页外面。
+        // 这个 Cookie，是 CSRF 的第一道防线。SecurePolicy=Always：票据只在 HTTPS 下才会被发送，防中间人
+        // 窃取——整条链路（nginx 反向代理 15080/443 端口终结 HTTPS，转发时带 X-Forwarded-Proto，
+        // 下面 app.UseForwardedHeaders() 会据此还原 Request.IsHttps）现在已经确认全程走 HTTPS，
+        // 可以从 SameAsRequest 收紧成 Always 了。
         options.Cookie.HttpOnly     = true;
         options.Cookie.SameSite     = SameSiteMode.Lax;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
 
         // 网页请求没登录/无权限 → 跳转登录页（默认行为）；
         // 但 /api 接口请求不能跳转，否则调用方拿到的是 302 重定向而不是 401/403，
@@ -126,7 +127,16 @@ builder.Services.Configure<ZKDeviceOptions>(
 builder.Services.AddScoped<IZKDeviceSyncService, ZKDeviceSyncService>();
 
 // ── 网页(Razor Pages) + 接口(Web API)──────────────────────────────────────────
-builder.Services.AddRazorPages();
+builder.Services.AddRazorPages(options =>
+{
+    // 全局兜底：默认要求登录才能访问任何页面，而不是"没标注就是能匿名访问"——现在每个页面
+    // 都已经手动加了正确的 [Authorize]/[AllowAnonymous] 标注，这里只是加一道安全网，防止以后
+    // 新增页面时漏加标注，从"忘写即裸奔"变成"忘写也仍然要求登录"。
+    options.Conventions.AuthorizeFolder("/");
+    options.Conventions.AllowAnonymousToPage("/Login");
+    options.Conventions.AllowAnonymousToPage("/Logout");
+    options.Conventions.AllowAnonymousToPage("/Employee/SelfRegister");
+});
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
     {
@@ -152,6 +162,27 @@ builder.Services.AddHostedService<AttendanceBackgroundService>();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
 {
     o.MultipartBodyLengthLimit = 50 * 1024 * 1024;
+});
+
+// ── 按 IP 的请求限流：登录、匿名自助登记这两个入口没有账号锁定之外的保护，
+// 一个 IP 可以对着大量不同工号做密码喷洒、或者匿名反复刷传登记照片占存储——这里按来源 IP 兜底限速
+// （跟按工号锁定是两道独立的防线，互不影响，也不影响正常用户偶尔手滑多点几次）────────────────────
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = (ctx, _) =>
+    {
+        ctx.HttpContext.Response.ContentType = "text/plain; charset=utf-8";
+        return new ValueTask(ctx.HttpContext.Response.WriteAsync("请求过于频繁，请稍后再试"));
+    };
+
+    options.AddPolicy("LoginPolicy", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+
+    options.AddPolicy("SelfRegisterPolicy", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 // ── 以上是“注册阶段”，下面 Build 之后进入“运行阶段”────────────────────────────────
@@ -279,6 +310,7 @@ app.Use(async (context, next) =>
 
 app.UseStaticFiles();                          // 静态文件(css/js/图片)
 app.UseRouting();                              // 路由（决定请求交给谁处理）
+app.UseRateLimiter();                          // 按 IP 限流（必须在 UseRouting 之后，这样才能按匹配到的 endpoint 找到对应策略）
 app.UseSession();                              // 会话
 app.UseAuthentication();                       // 认证（你是谁）
 app.UseAuthorization();                        // 授权（你有没有权限）

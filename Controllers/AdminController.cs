@@ -353,6 +353,10 @@ public class AdminController(
     public async Task<IActionResult> CreateShift([FromBody] CreateShiftRequest req)
     {
         if (!await IsGroupWritableAsync(req.AttendanceGroupId)) return Forbid();
+        // 非跨天班次，下班时间必须晚于上班时间——不然会配出一个 08:00~08:00 甚至反过来的班次，
+        // 后面算迟到/早退/工时全部会跟着算错，但当时不会报任何错，很难排查
+        if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
+            return BadRequest(new { Success = false, Message = "非跨天班次的下班时间必须晚于上班时间" });
         var shift = new ShiftSchedule
         {
             AttendanceGroupId          = req.AttendanceGroupId,
@@ -387,6 +391,8 @@ public class AdminController(
         var shift = await db.ShiftSchedules.FindAsync(id);
         if (shift is null) return NotFound();
         if (!await IsGroupWritableAsync(shift.AttendanceGroupId)) return Forbid();
+        if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
+            return BadRequest(new { Success = false, Message = "非跨天班次的下班时间必须晚于上班时间" });
 
         shift.ShiftName                  = req.ShiftName;
         shift.ShiftType                  = req.ShiftType;
@@ -449,6 +455,10 @@ public class AdminController(
             if (!holiday.AttendanceGroupId.HasValue) return Forbid();   // 受限管理员不能建全公司通用假期
             if (!await IsGroupWritableAsync(holiday.AttendanceGroupId.Value)) return Forbid();
         }
+        // 同一天、同一个考勤组范围（或都是全公司通用）不能重复配置，不然假期列表里会出现看起来
+        // 一模一样、又没法区分该删哪条的重复项
+        if (await db.Holidays.AnyAsync(h => h.HolidayDate == holiday.HolidayDate && h.AttendanceGroupId == holiday.AttendanceGroupId))
+            return BadRequest(new { Success = false, Message = "这一天已经配置过假期，不能重复添加" });
         holiday.CreatedAt = DateTime.Now;
         db.Holidays.Add(holiday);
         await db.SaveChangesAsync();

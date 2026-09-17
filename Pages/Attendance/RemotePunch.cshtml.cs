@@ -85,9 +85,14 @@ public class RemotePunchModel(
             // （夜班跨天很常见）不该被当成"重复打卡"拦下来。
             var todayBeforePunch = await attendanceService.GetTodayAttendanceAsync(CurrentUserId);
             var today = DateOnly.FromDateTime(DateTime.Today);
-            var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
+            // 夜班跨天打卡：GetTodayAttendanceAsync 在"今天"还没有记录、但"昨天"排的是跨天班次且还没
+            // 打下班卡时，会续上昨天那条记录（WorkDate 仍是昨天）——这里判断"离下班时间够不够近"也要
+            // 用同一个 workDate 去查排班，不然凌晨查"今天"的排班表查不到（跨天班次记在昨天），
+            // 会被当成"没排班"直接判定成下班，跟考勤机同步那边刚修过的是同一个 bug。
+            var workDate = todayBeforePunch?.WorkDate ?? today;
+            var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;
             var type = todayBeforePunch?.ClockInTime is null ? PunchType.ClockIn
-                : AttendanceService.IsEligibleClockOutCandidate(DateTime.Now, today, todayShift) ? PunchType.ClockOut
+                : AttendanceService.IsEligibleClockOutCandidate(DateTime.Now, workDate, todayShift) ? PunchType.ClockOut
                 : PunchType.MidCheck;
 
             // 成本闸门：跟上面的失败限流是两回事（那个防冒充，这个控成本/防刷）——挡"手快连点"
@@ -181,7 +186,9 @@ public class RemotePunchModel(
                 // 不然只能靠员工截图报错，服务器这边完全查不到发生过什么。
                 logger.LogWarning(ex, "远程打卡人脸识别服务调用失败，UserId={UserId}", CurrentUserId);
                 ShowFallbackHint = true;   // 服务本身出问题时，也该给员工"改走补卡申请"的出口，不只是识别没通过才给
-                throw new InvalidOperationException("人脸识别服务暂时不可用，请稍后重试：" + ex.Message);
+                // 不拼接 ex.Message：AliyunFaceApiException/InvalidOperationException 本身已经是给用户看的
+                // 中文提示，完整异常详情已经记进上面的日志，不需要在页面上再展示一遍原始报错文本。
+                throw new InvalidOperationException("人脸识别服务暂时不可用，请稍后重试");
             }
 
             await LogAttemptAsync(result.IsMatch, result.IsMatch ? null : result.FailReason);

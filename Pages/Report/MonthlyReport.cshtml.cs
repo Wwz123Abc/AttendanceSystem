@@ -184,10 +184,9 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, targetDeptId))
             return NotFound();
 
-        await attendanceService.GenerateMonthlySummaryAsync(year, month, userId);
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
-        var all    = await attendanceService.GetDeptMonthlySummariesAsync(null, null, year, month, visibleIds);
-        var target = all.FirstOrDefault(s => s.UserId == userId);   // 找这个人的汇总
+        await attendanceService.GenerateMonthlySummaryAsync(year, month, [userId]);
+        // 只需要这一个人的汇总，直接按人查，不用把全公司当月的汇总都加载出来再从内存里挑一条
+        var target = await attendanceService.GetMonthlySummaryAsync(userId, year, month);
         if (target is null) return NotFound();
 
         // 补上这个人的每日明细（汇总列表里默认不带明细）
