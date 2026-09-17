@@ -185,8 +185,8 @@ document.querySelectorAll('.read-detail-btn').forEach(btn => {
                 ? '<tr><td colspan="3" class="text-muted small">没有受众</td></tr>'
                 : list.map(x => `
                     <tr>
-                        <td>${x.realName}</td>
-                        <td class="small text-muted">${x.employeeNo}</td>
+                        <td>${escapeHtml(x.realName)}</td>
+                        <td class="small text-muted">${escapeHtml(x.employeeNo)}</td>
                         <td class="small ${x.readAt ? 'text-success' : 'text-danger'}">${x.readAtText}</td>
                     </tr>`).join('');
         } catch (e) {
@@ -194,5 +194,13 @@ document.querySelectorAll('.read-detail-btn').forEach(btn => {
         }
     });
 });
+
+// 姓名是员工自助登记时自己填的自由文本，不能直接拼进 HTML（存储型 XSS 风险），
+// 这里转义成安全文本；工号一般是系统生成的固定格式，顺手一起转义，成本为零
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s ?? '';
+    return d.innerHTML;
+}
 </script>
 }

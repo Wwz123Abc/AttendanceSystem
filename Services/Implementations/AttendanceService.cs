@@ -1012,10 +1012,17 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 .ToDictionaryAsync(r => r.WorkDate);
 
             // 算每天请假时长要用到考勤组的午休/晚餐扣时（跟 LeaveDurationHours 提交时用的同一套算法），
-            // 只查一次，下面循环里每天复用。
+            // 以及这天排的班次的标准工时（没排班就用公司默认标准工时）给 ComputeLeaveHoursForDay 封顶用，
+            // 都只查一次，下面循环里每天复用。
             var applicant = await db.Users.FindAsync(approval.ApplicantUserId);
             var leaveGroup = applicant?.AttendanceGroupId.HasValue == true
                 ? await db.AttendanceGroups.FindAsync(applicant.AttendanceGroupId.Value) : null;
+            var leaveShiftsInRange = (await db.ShiftAssignments
+                    .Include(a => a.ShiftSchedule)
+                    .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= sd && a.WorkDate <= ed)
+                    .ToListAsync())
+                .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
+            var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
 
             for (var d = sd; d <= ed; d = d.AddDays(1))   // 请假区间内每一天
             {
@@ -1040,14 +1047,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 record.EarlyLeaveMinutes = 0;
                 // 请假时长只算落在"这一天"里的那一段——跨天请假的第一天/最后一天可能不是整天
                 // （比如 09-09 14:00 请假到 09-11 12:00，09-09 当天只算 14:00~24:00 这一段），
-                // 拿当天 0 点~24 点跟请假区间取交集，再用跟工时一样的公式扣午休/晚餐。
-                var dayStart = d.ToDateTime(TimeOnly.MinValue);
-                var dayEnd   = d.AddDays(1).ToDateTime(TimeOnly.MinValue);
-                var segStart = approval.LeaveStartTime.Value > dayStart ? approval.LeaveStartTime.Value : dayStart;
-                var segEnd   = leaveEnd < dayEnd ? leaveEnd : dayEnd;
-                record.LeaveHours = segEnd > segStart
-                    ? ComputeWorkHours(segStart, segEnd, leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30)
-                    : 0;
+                // 用 ComputeLeaveHoursForDay 取交集再扣午休/晚餐，并封顶在这天的标准工时。
+                var dailyCap = leaveShiftsInRange.TryGetValue(d, out var leaveShift)
+                    ? leaveShift.StandardWorkHours : defaultDailyHours;
+                record.LeaveHours = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd,
+                    leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30, dailyCap);
                 // 备注带上这一天的请假时长，跟加班审批的备注格式一致（"加班已审批通过（单号），9 小时"）
                 AppendApprovalNote(record, $"请假审批通过（{approval.RequestNo}），{record.LeaveHours:0.##} 小时");
                 record.UpdatedAt        = DateTime.Now;
@@ -1121,9 +1125,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         if (clockIn.HasValue)  record.ClockInTime  = clockIn.Value;
         if (clockOut.HasValue) record.ClockOutTime = clockOut.Value;
-        // 备注里带上操作人姓名，留下痕迹，方便"手动补卡"页面下方的操作记录列表追溯是谁改的
+        // 备注里带上操作人姓名，留下痕迹，方便"手动补卡"页面下方的操作记录列表追溯是谁改的。
+        // 用 AppendApprovalNote 追加而不是直接覆盖——这天如果之前已经有请假/加班/出差审批通过的备注，
+        // 手动补卡不该把那条记录抹掉，不然事后没法还原这天到底发生过什么（2026-09-17 代码审查发现）
         var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员手动补卡" : $"管理员手动补卡（操作人：{operatorName}）";
-        record.ApprovalNote = string.IsNullOrWhiteSpace(remark) ? opText : $"{opText}：{remark.Trim()}";
+        AppendApprovalNote(record, string.IsNullOrWhiteSpace(remark) ? opText : $"{opText}：{remark.Trim()}");
         record.UpdatedAt    = DateTime.Now;
 
         await RecalcWorkHoursAfterManualPunchAsync(record, userId);
@@ -1433,6 +1439,27 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (rawMinutes > 6 * 60) minutes -= lunchBreak;
         if (rawMinutes > 9 * 60) minutes -= dinnerBreak;
         return Math.Max(0, Math.Round(minutes / 60, 2));
+    }
+
+    /// <summary>
+    /// 算请假区间落在某一天里的时长（小时），供提交申请时的预估总时长、审批通过后逐日回写共用
+    /// （★ 全系统唯一口径，两处必须调同一个函数才不会算出两个不一样的数字）。
+    /// 跟真实工时公式一样扣午休/晚餐，但封顶在 <paramref name="dailyCapHours"/>（这天排的班次的标准
+    /// 工时，没排班传公司默认标准工时）——不能直接把"这一天和请假区间的交集"套用工时公式：那个公式
+    /// 是给真实上下班打卡时间设计的，套在跨天请假的"整天"区间上，会把一整晚的睡眠时间也当成
+    /// "在岗时长"一起扣两道餐时，算出一天 22.5 小时这种荒谬数字（发现于 2026-09-17 代码审查）。
+    /// 用标准工时封顶后，请一整天假最多算一天的标准工时，符合"请假时长"这个数字本来的业务含义。
+    /// </summary>
+    public static decimal ComputeLeaveHoursForDay(
+        DateOnly day, DateTime leaveStart, DateTime leaveEnd, int lunchBreak, int dinnerBreak, decimal dailyCapHours)
+    {
+        var dayStart = day.ToDateTime(TimeOnly.MinValue);
+        var dayEnd   = day.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var segStart = leaveStart > dayStart ? leaveStart : dayStart;
+        var segEnd   = leaveEnd   < dayEnd   ? leaveEnd   : dayEnd;
+        if (segEnd <= segStart) return 0;
+        var raw = ComputeWorkHours(segStart, segEnd, lunchBreak, dinnerBreak);
+        return Math.Min(raw, dailyCapHours);
     }
 
     /// <summary>

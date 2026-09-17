@@ -139,8 +139,14 @@ public class ZKDeviceController(
         }
         catch (Exception ex)
         {
-            // 其它异常（比如数据格式解析失败）重传也没用，还是回 "OK" 避免设备陷入无意义的死循环重传
-            logger.LogError(ex, "处理考勤机 {SN} 推送的数据失败（table={Table}）", SN, table);
+            // 之前这里回的是 "OK"（理由是"数据格式解析失败之类的错误，重传也没用"）——但这个 catch
+            // 不止兜得住格式解析失败，还兜住了预加载阶段的数据库故障、请求被取消/超时等一切没被
+            // DbUpdateException 单独捕获的异常。这些情况重传往往是有意义的（下次数据库恢复了、
+            // 网络恢复了就能成功），回 "OK" 会让设备以为传成功了、不再重传，这批打卡数据就永久丢失了，
+            // 只在服务器日志里留一条记录、没人主动去翻的话完全发现不了。改成和 DbUpdateException 一样
+            // 回 "ERROR"：真正的格式解析失败重传也只是徒增几条重复的失败日志，成本远低于静默丢数据。
+            logger.LogError(ex, "处理考勤机 {SN} 推送的数据失败（table={Table}），已回 ERROR 让设备下次重传", SN, table);
+            return Content("ERROR", "text/plain", Gbk);
         }
 
         return Content("OK", "text/plain", Gbk);

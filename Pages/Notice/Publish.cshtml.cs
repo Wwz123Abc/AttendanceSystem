@@ -95,7 +95,12 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
                         var groupDeptIds = await db.Departments.Where(d => d.AttendanceGroupId == ScopeId.Value)
                             .Select(d => d.Id).ToListAsync();
                         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
-                        var allowed = groupDeptIds.Count == 0 || groupDeptIds.Any(id => visibleIds!.Contains(id));
+                        // 关联部门必须都在自己范围内才能发（All，不是 Any）——跟撤下/查已读名单
+                        // （AnnouncementService.IsAnnouncementInScopeAsync）用同一套口径。原来这里用 Any，
+                        // 受限管理员能向"跨司共用的考勤组"发公告（把消息广播给别的分公司员工），但发出去以后
+                        // All 口径的撤下/查已读又挡住了自己，变成"能广播、却撤不回、也查不到谁看了"
+                        // （2026-09-17 代码审查发现）
+                        var allowed = groupDeptIds.Count == 0 || groupDeptIds.All(id => visibleIds!.Contains(id));
                         if (!allowed) throw new InvalidOperationException("无权向该考勤组发布公告");
                     }
                 }

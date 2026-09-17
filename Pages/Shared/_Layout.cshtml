@@ -537,16 +537,26 @@
                 return;
             }
 
-            // 把每条通知拼成一小块 HTML（标题+时间+内容），点击后调用 readNotif 标记已读
+            // 把每条通知拼成一小块 HTML（标题+时间+内容），点击后调用 readNotif 标记已读。
+            // 标题/内容可能来自公告正文或员工自助登记时自己填的姓名，都是用户能控制的自由文本，
+            // 不能直接拼进 HTML（会被当成"存储型 XSS"利用），下面用 escapeHtml 转义成安全文本
             list.innerHTML = data.items.map(n => `
                 <div class="notif-item unread" onclick="readNotif(${n.id}, '${n.notificationType}', ${n.relatedId})">
                     <div class="d-flex justify-content-between">
-                        <div class="notif-title">${n.title}</div>
+                        <div class="notif-title">${escapeHtml(n.title)}</div>
                         <div class="notif-time">${n.createdAt}</div>
                     </div>
-                    <div class="notif-content">${n.content}</div>
+                    <div class="notif-content">${escapeHtml(n.content)}</div>
                 </div>`).join('');
         } catch (e) { console.error(e); }
+    }
+
+    // 把用户能控制的自由文本（公告标题/正文、自助登记姓名等）转义成安全文本再拼进 HTML，
+    // 防止里面刚好含有 <script> 之类的内容被浏览器当成真正的代码执行（"存储型 XSS"）
+    function escapeHtml(s) {
+        const d = document.createElement('div');
+        d.textContent = s ?? '';
+        return d.innerHTML;
     }
 
     // 点某一条通知：先告诉后台"这条我看过了"（标记已读），

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using System.Security.Claims;
 using AttendanceSystem.Helpers;
@@ -17,8 +18,10 @@ namespace AttendanceSystem.Controllers;
 [ApiController]
 public class AccountController(IUserService userService, IOptions<AppSettingsOptions> appOptions) : ApiControllerBase
 {
-    /// <summary>登录：工号 + 密码。</summary>
+    /// <summary>登录：工号 + 密码。按 IP 限流——Program.cs 里的 LoginPolicy 只挂在 /Login 这个 Razor Page
+    /// 上，直接调这个接口能绕开去，等于密码喷洒防线形同虚设，这里补上同一个策略。</summary>
     [HttpPost("login")]
+    [EnableRateLimiting("LoginPolicy")]
     public async Task<IActionResult> Login([FromBody] LoginRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.EmployeeNo) || string.IsNullOrWhiteSpace(req.Password))

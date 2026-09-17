@@ -179,6 +179,11 @@ public class UserService(
         oldPassword = NormalizeFullWidthDigits(oldPassword.Trim());
         newPassword = NormalizeFullWidthDigits(newPassword.Trim());
 
+        // 新密码长度校验：页面上已经卡了"不少于 6 位"，但直接调这个方法（比如走 API）能绕开页面校验，
+        // 这里补上权威兜底，不然能设出 1 位密码
+        if (newPassword.Length < 6)
+            throw new InvalidOperationException("新密码不能少于 6 位");
+
         var user = await db.Users.FindAsync(userId);
         if (user is null || !VerifyPassword(oldPassword, user.PasswordHash))   // 原密码不对就拒绝
             return false;

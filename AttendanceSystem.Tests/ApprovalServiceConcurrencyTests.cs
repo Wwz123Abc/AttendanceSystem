@@ -2,9 +2,11 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Implementations;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace AttendanceSystem.Tests;
@@ -26,6 +28,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
     private const int ApplicantId = 1;
     private const int ApproverId  = 2;
     private const int Approver2Id = 3;
+    private static readonly IOptions<AppSettingsOptions> AppOptions = Options.Create(new AppSettingsOptions());
 
     public ApprovalServiceConcurrencyTests()
     {
@@ -95,7 +98,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
         var requestId = SeedSingleStepRequest();
         using var db = CreateContext();
         var fake = new FakeAttendanceService();
-        var svc = new ApprovalService(db, fake);
+        var svc = new ApprovalService(db, fake, AppOptions);
 
         var ok = await svc.HandleApprovalAsync(ApproverId, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
 
@@ -118,14 +121,14 @@ public class ApprovalServiceConcurrencyTests : IDisposable
 
         using (var db1 = CreateContext())
         {
-            var svc1 = new ApprovalService(db1, fake);
+            var svc1 = new ApprovalService(db1, fake, AppOptions);
             var first = await svc1.HandleApprovalAsync(ApproverId, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
             Assert.True(first);
         }
 
         using (var db2 = CreateContext())
         {
-            var svc2 = new ApprovalService(db2, fake);
+            var svc2 = new ApprovalService(db2, fake, AppOptions);
             var second = await svc2.HandleApprovalAsync(ApproverId, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
             Assert.False(second);
         }
@@ -156,7 +159,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
 
         var fake = new FakeAttendanceService();
         using var handleDb = CreateContext();
-        var svc = new ApprovalService(handleDb, fake);
+        var svc = new ApprovalService(handleDb, fake, AppOptions);
         var ok = await svc.HandleApprovalAsync(ApproverId, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
 
         Assert.False(ok);
@@ -174,7 +177,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
     {
         var requestId = SeedSingleStepRequest();
         using var db = CreateContext();
-        var svc = new ApprovalService(db, new FakeAttendanceService());
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
 
         var ok = await svc.CancelApprovalAsync(ApplicantId, requestId);
         Assert.True(ok);
@@ -198,7 +201,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
         }
 
         using var cancelDb = CreateContext();
-        var svc = new ApprovalService(cancelDb, new FakeAttendanceService());
+        var svc = new ApprovalService(cancelDb, new FakeAttendanceService(), AppOptions);
         var ok = await svc.CancelApprovalAsync(ApplicantId, requestId);
 
         Assert.False(ok);
@@ -209,7 +212,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
     {
         var requestId = SeedTwoStepRequest();
         using var db = CreateContext();
-        var svc = new ApprovalService(db, new FakeAttendanceService());
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
 
         // 第二级审批人想直接审，但第一级还是 Pending，不该被允许（禁止越级）
         var ok = await svc.HandleApprovalAsync(Approver2Id, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
@@ -224,7 +227,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
 
         using (var db1 = CreateContext())
         {
-            var svc1 = new ApprovalService(db1, fake);
+            var svc1 = new ApprovalService(db1, fake, AppOptions);
             var ok1 = await svc1.HandleApprovalAsync(ApproverId, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
             Assert.True(ok1);
         }
@@ -238,7 +241,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
 
         using (var db2 = CreateContext())
         {
-            var svc2 = new ApprovalService(db2, fake);
+            var svc2 = new ApprovalService(db2, fake, AppOptions);
             var ok2 = await svc2.HandleApprovalAsync(Approver2Id, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
             Assert.True(ok2);
         }
@@ -255,7 +258,7 @@ public class ApprovalServiceConcurrencyTests : IDisposable
         var requestId = SeedTwoStepRequest();
         var fake = new FakeAttendanceService();
         using var db = CreateContext();
-        var svc = new ApprovalService(db, fake);
+        var svc = new ApprovalService(db, fake, AppOptions);
 
         var ok = await svc.HandleApprovalAsync(ApproverId, new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = false, Comment = "不批" });
         Assert.True(ok);

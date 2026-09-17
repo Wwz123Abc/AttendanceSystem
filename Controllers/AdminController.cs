@@ -58,7 +58,7 @@ public class AdminController(
     [HttpPost("users")]
     public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest req)
     {
-        if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role))
+        if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId))
             return Forbid();
         var contactError = ValidateContactFormat(req.Phone, req.IdNumber);
         if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
@@ -88,6 +88,7 @@ public class AdminController(
         const string initialPwd = "123456";
         var created = await userService.CreateUserAsync(user, initialPwd);
         await userService.SetUserDevicesAsync(created.Id, deviceIds);
+        await ApplyScopeAfterSaveAsync(created.Id, req.ScopedDepartmentId);
         return Ok(new { Success = true, Message = "员工创建成功", UserId = created.Id, InitialPassword = initialPwd });
     }
 
@@ -97,7 +98,7 @@ public class AdminController(
     public async Task<IActionResult> UpdateUser(int id, [FromBody] UpdateUserRequest req)
     {
         if (!await CanAccessUserAsync(id)) return Forbid();
-        if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role))
+        if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId))
             return Forbid();
         var contactError = ValidateContactFormat(req.Phone, req.IdNumber);
         if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
@@ -120,8 +121,12 @@ public class AdminController(
             HireDate          = req.HireDate
         };
         var ok = await userService.UpdateUserAsync(user);
-        if (ok && req.DeviceIds is not null)
-            await userService.SetUserDevicesAsync(id, req.DeviceIds);
+        if (ok)
+        {
+            if (req.DeviceIds is not null)
+                await userService.SetUserDevicesAsync(id, req.DeviceIds);
+            await ApplyScopeAfterSaveAsync(id, req.ScopedDepartmentId);
+        }
         return Ok(new { Success = ok, Message = ok ? "更新成功" : "用户不存在" });
     }
 
@@ -181,11 +186,29 @@ public class AdminController(
         return null;
     }
 
+    /// <summary>
+    /// 新建/编辑保存后，落定这个账号的"管理范围"（ScopedDepartmentId）：总部超级管理员（角色=Admin 且
+    /// 自己不受范围限制）可以自由指定 <paramref name="requestedScope"/>（含清空=设为不受限）；
+    /// 分公司管理员/文员调这个接口时，不管传什么范围值都会被忽略，强制钳到操作者自己当前的范围。
+    /// 跟 UserManage 页面的 ApplyScopeAfterSaveAsync 是同一套规则——之前这个接口完全没有设置
+    /// ScopedDepartmentId 的代码，等于不管谁调用，走 API 建的新账号 ScopedDepartmentId 恒为 null，
+    /// null 在 DeptScopeService 里的语义是"不受限"，是一条比页面那条更彻底的越权提权链。
+    /// </summary>
+    private async Task ApplyScopeAfterSaveAsync(int userId, int? requestedScope)
+    {
+        var isHqSuperAdmin = Cu.Role == UserRole.Admin && !Cu.IsScoped;
+        await userService.SetScopedDepartmentAsync(userId, isHqSuperAdmin ? requestedScope : Cu.ScopedDepartmentId);
+    }
+
     /// <summary>新建/编辑员工前的范围+权限校验：部门、直属上级必须在管理范围内；只有不受限的
     /// 总部管理员才能把角色设成管理员——跟 UserManage 页面用的是同一套规则。</summary>
-    private async Task<bool> ValidateUserScopeAsync(int? deptId, int? supervisorUserId, UserRole role)
+    private async Task<bool> ValidateUserScopeAsync(int? deptId, int? supervisorUserId, UserRole role, int? groupId = null)
     {
         if (!await deptScopeService.CanAccessDeptAsync(Cu, deptId)) return false;
+        // 考勤组归属校验：原来只校验了部门/上级/角色/设备，唯独漏了考勤组——受限管理员能通过这个接口
+        // 把员工挂到任意考勤组（含别的分公司的组），套用对方的班次时间/休息日/扣时规则，
+        // 跟 UserManage 页面的 IsGroupInScopeAsync 是同一套口径（2026-09-17 代码审查发现）
+        if (groupId.HasValue && !await IsGroupInScopeAsync(groupId.Value)) return false;
         if (supervisorUserId.HasValue)
         {
             var superDeptId = await db.Users.Where(u => u.Id == supervisorUserId.Value)
@@ -518,7 +541,10 @@ public record CreateUserRequest(
     DateOnly? HireDate,
     // 这个人要推送到哪几台考勤机（不传/传空 = 不指定任何设备）；初始密码不再由调用方指定，
     // 统一固定为 123456，见 CreateUser 方法内部
-    List<int>? DeviceIds = null);
+    List<int>? DeviceIds = null,
+    // 管理范围：只有总部超级管理员的这个值会被采纳（null=不受限）；分公司管理员/文员调这个接口时
+    // 传什么都会被忽略，新账号强制钳到操作者自己的范围，见 CreateUser 方法内部
+    int?       ScopedDepartmentId = null);
 
 public record UpdateUserRequest(
     string    EmployeeNo,
@@ -533,7 +559,8 @@ public record UpdateUserRequest(
     string?   IdNumber,
     DateOnly? HireDate,
     // null = 这次不改动设备分配；传了（哪怕空数组）就按传入集合全量覆盖
-    List<int>? DeviceIds = null);
+    List<int>? DeviceIds = null,
+    int?       ScopedDepartmentId = null);
 
 // ── 请求模型：装"新增/修改班次"表单字段的简洁数据载体 ──────────────────────────
 // 不直接绑 ShiftSchedule 实体：它的 AttendanceGroup 导航属性是非空引用类型，

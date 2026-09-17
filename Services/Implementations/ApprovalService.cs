@@ -1,9 +1,11 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.Implementations;
@@ -12,7 +14,7 @@ namespace AttendanceSystem.Services.Implementations;
 /// 审批服务：审批单的提交、多级流转、撤销、查询。
 /// 审批通过后会联动考勤服务回写考勤记录，并在各环节发站内通知。
 /// </summary>
-public class ApprovalService(AttendanceDbContext db, IAttendanceService attendanceService)
+public class ApprovalService(AttendanceDbContext db, IAttendanceService attendanceService, IOptions<AppSettingsOptions> appOptions)
     : IApprovalService
 {
     /// <summary>
@@ -69,16 +71,33 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 break;
         }
 
-        // 请假时长：跟"实际工时"用同一套算法（净时长超过 6/9 小时才扣一次午休/晚餐，不是跨度多长都原样算），
-        // 这样"请一整天假"和"正常上一整天班"算出来的小时数口径一致，不会因为没扣午休比标准工时凭空多 1 小时。
+        // 请假时长：逐日按 ComputeLeaveHoursForDay 累加（跟审批通过后 UpdateAttendanceAfterApprovalAsync
+        // 逐日回写用的是同一个函数），而不是直接拿整段起止时间套工时公式——直接套公式的话，跨天请假会把
+        // 期间的整晚睡眠时间也当成"在岗时长"一起扣两道餐时，算出来的总时长比逐日累加的结果还离谱地偏大
+        // （比如一张 3 天的假单，套公式=44.5 小时，逐日累加只有约 24 小时），两处口径还对不上。
         decimal? leaveDuration = null;
         if (dto.LeaveStartTime.HasValue && dto.LeaveEndTime.HasValue)
         {
             var group = user.AttendanceGroupId.HasValue
                 ? await db.AttendanceGroups.FindAsync(user.AttendanceGroupId.Value) : null;
-            leaveDuration = AttendanceService.ComputeWorkHours(
-                dto.LeaveStartTime.Value, dto.LeaveEndTime.Value,
-                group?.LunchBreakMinutes ?? 60, group?.DinnerBreakMinutes ?? 30);
+            var leaveSd = DateOnly.FromDateTime(dto.LeaveStartTime.Value);
+            var leaveEd = DateOnly.FromDateTime(dto.LeaveEndTime.Value);
+            var leaveShiftsInRange = (await db.ShiftAssignments
+                    .Include(a => a.ShiftSchedule)
+                    .Where(a => a.UserId == applicantUserId && a.WorkDate >= leaveSd && a.WorkDate <= leaveEd)
+                    .ToListAsync())
+                .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
+            var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+
+            decimal total = 0;
+            for (var d = leaveSd; d <= leaveEd; d = d.AddDays(1))
+            {
+                var dailyCap = leaveShiftsInRange.TryGetValue(d, out var leaveShift)
+                    ? leaveShift.StandardWorkHours : defaultDailyHours;
+                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value,
+                    group?.LunchBreakMinutes ?? 60, group?.DinnerBreakMinutes ?? 30, dailyCap);
+            }
+            leaveDuration = total;
         }
         decimal? overtimeDuration = dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue
             ? (decimal)(dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours : null;

@@ -117,20 +117,27 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             .OrderBy(s => s.AttendanceGroup.GroupName).ThenBy(s => s.ShiftName)
             .ToListAsync();
 
-        // 选中组的合并成员（跨组）；带上部门名，方便批量排班时按部门筛选
+        // 选中组的合并成员（跨组）；带上部门名，方便批量排班时按部门筛选。
+        // 上面第 99 行"能不能选中这个组"用的是 Any（组只要沾一个自己范围内的部门就算可见，因为那是
+        // "共用配置可见"的口径）——但选中的组可能是跨公司共用的，这里如果不再按成员自己的部门收窄，
+        // 受限管理员就能看到共用组里别的分公司员工的姓名/工号/部门/排班，是一条真实的越权读取
+        // （2026-09-17 代码审查发现）
         Members = await db.Users
             .Include(u => u.AttendanceGroup)
             .Include(u => u.Department)
-            .Where(u => u.IsActive && u.AttendanceGroupId != null && SelectedGroupIds.Contains(u.AttendanceGroupId.Value))
+            .Where(u => u.IsActive && u.AttendanceGroupId != null && SelectedGroupIds.Contains(u.AttendanceGroupId.Value)
+                     && (visibleIds == null || (u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value))))
             .OrderBy(u => u.AttendanceGroup!.GroupName).ThenBy(u => u.RealName)
             .Select(u => new MemberRow(u.Id, u.RealName, u.EmployeeNo, u.AttendanceGroupId!.Value, u.AttendanceGroup!.GroupName, u.Department != null ? u.Department.DeptName : null))
             .ToListAsync();
 
-        // 展示窗口内的排班记录（选中组成员的），按「日期 + 班次」聚合
+        // 展示窗口内的排班记录（选中组成员的），按「日期 + 班次」聚合——同上，跟 Members 用同一道
+        // 部门范围过滤，不然共用组里别的分公司员工的排班也会被聚合进这张表里显示出来
         var rows = await db.ShiftAssignments
             .Where(a => a.WorkDate >= ViewStart && a.WorkDate <= ViewEnd
                      && a.User.IsActive && a.User.AttendanceGroupId != null
-                     && SelectedGroupIds.Contains(a.User.AttendanceGroupId.Value))
+                     && SelectedGroupIds.Contains(a.User.AttendanceGroupId.Value)
+                     && (visibleIds == null || (a.User.DepartmentId != null && visibleIds.Contains(a.User.DepartmentId.Value))))
             .Select(a => new { a.WorkDate, a.ShiftSchedule.ShiftName, a.ShiftSchedule.Color, a.User.RealName })
             .ToListAsync();
 
@@ -260,7 +267,11 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             if (name.Length > 50) throw new Exception("班次名称不能超过 50 个字");
             if (!TimeOnly.TryParse(WorkStart, out var ws)) throw new Exception("上班时间格式不正确");
             if (!TimeOnly.TryParse(WorkEnd, out var we)) throw new Exception("下班时间格式不正确");
-            if (!CrossDay && we == ws) throw new Exception("下班时间不能和上班时间相同（如果是跨天班次，请勾选「跨天」）");
+            // 不是跨天班次时，下班时间必须晚于上班时间——原来只挡了"完全相同"这一种情况，
+            // 没挡"下班时间比上班时间还早却没勾跨天"（比如手滑填了 09:00~08:00），这种配置会让
+            // ComputeWorkHours 算出的在岗分钟数是负的，被 rawMinutes<=0 的保护直接归零，
+            // 这个班次的工时会一直算成 0（迟到/早退判断同样会跟着错），且不会有任何报错提示
+            if (!CrossDay && we <= ws) throw new Exception("下班时间必须晚于上班时间（如果是跨天班次，请勾选「跨天」）");
             if (LateTol is < 0 or > 60) throw new Exception("迟到容忍分钟数请填 0-60 之间");
             if (EarlyTol is < 0 or > 60) throw new Exception("早退容忍分钟数请填 0-60 之间");
             if (EarliestIn < 0) throw new Exception("最多提前打卡分钟数不能为负数");

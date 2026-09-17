@@ -245,11 +245,7 @@ public class UserManageModel(
             const string initialPwd = "123456";
             await userService.CreateUserAsync(newUser, initialPwd);
             await userService.SetUserDevicesAsync(newUser.Id, DeviceIds);
-            // 范围限定部门只有"总部超级管理员"（角色=Admin 且自己不受范围限制）才能设置——不能只判断
-            // !IsScoped，一个"没被设置范围、但角色是文员"的账号 IsScoped 也恒为 false，如果只挡"设置"
-            // 不挡"清空"，这种账号仍能靠提交空值把别人的 ScopedDeptId 清掉，等于变相帮别人提权
-            if (IsHqSuperAdmin(HttpContext.GetCurrentUser()!))
-                await userService.SetScopedDepartmentAsync(newUser.Id, ScopedDeptId);
+            await ApplyScopeAfterSaveAsync(newUser.Id);
 
             // 如果这次新建是在确认某条扫码登记，顺带把那条登记标记为「已确认」，关联上新建好的账号
             if (RegistrationId.HasValue)
@@ -293,8 +289,7 @@ public class UserManageModel(
             if (ok)
             {
                 await userService.SetUserDevicesAsync(EditUserId, DeviceIds);
-                if (IsHqSuperAdmin(HttpContext.GetCurrentUser()!))
-                    await userService.SetScopedDepartmentAsync(EditUserId, ScopedDeptId);
+                await ApplyScopeAfterSaveAsync(EditUserId);
             }
             SuccessMessage = ok ? "员工信息更新成功！" : "更新失败：用户不存在";
         }
@@ -424,12 +419,49 @@ public class UserManageModel(
     /// 只有不受限的总部管理员才能把角色设成管理员、或者设置/修改范围限定部门；勾选的考勤机也必须
     /// 在管理范围内——这些都不能只靠前端表单不给选项来挡，必须服务端重新校验一遍，防止绕过界面直接
     /// 提交越权的表单数据。</summary>
+    /// <summary>
+    /// 新建/编辑保存后，落定这个账号的"管理范围"（ScopedDepartmentId）：
+    /// 总部超级管理员可以自由指定（含清空=设为不受限）；非总部超管（分公司管理员/文员）新建或编辑的账号
+    /// ——角色只可能是 Clerk/Supervisor/TeamLeader（Admin 已在 ValidateScopeForSaveAsync 挡掉）——
+    /// 一律强制钳到操作者自己当前的范围，不能留空、也不能让对方自己选。
+    /// 这里堵的是一条真实的越权提权链：以前这一步只有总部超管会执行，分公司管理员新建的文员账号
+    /// ScopedDepartmentId 会一直是 null，而 null 在 DeptScopeService 里的语义是"不受限"——
+    /// 等于一个分公司账号凭空建出了一个能看/管全公司数据（含重置任意人密码）的文员账号。
+    /// </summary>
+    private async Task ApplyScopeAfterSaveAsync(int userId)
+    {
+        var cu = HttpContext.GetCurrentUser()!;
+        if (IsHqSuperAdmin(cu))
+            await userService.SetScopedDepartmentAsync(userId, ScopedDeptId);
+        else
+            await userService.SetScopedDepartmentAsync(userId, cu.ScopedDepartmentId);
+    }
+
+    /// <summary>某个考勤组是否在当前登录者的管理范围内可用（口径跟 ShiftManage/GroupManage 页一致）：
+    /// 不受限一律可以；组没关联任何部门（全局/多分公司共用组）算"在范围内"，可以拿来给自己范围内的
+    /// 员工排班；组关联了部门的话，只要有一个落在自己范围内就算数（Any，不是 All——这里是"使用"
+    /// 这个组给员工排班，不是"修改"组本身的配置，标准要比 IsGroupWritableAsync 松）。</summary>
+    private async Task<bool> IsGroupInScopeAsync(CurrentUser cu, int groupId)
+    {
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return true;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        return deptIds.Any(id => visibleIds!.Contains(id));
+    }
+
     private async Task ValidateScopeForSaveAsync(User user)
     {
         var cu = HttpContext.GetCurrentUser()!;
 
         if (user.DepartmentId.HasValue && !await deptScopeService.CanAccessDeptAsync(cu, user.DepartmentId))
             throw new InvalidOperationException("无权将员工分配到该部门");
+
+        // 考勤组归属校验：原来这里只校验了部门/上级/角色/设备，唯独漏了考勤组——受限管理员能把自己的
+        // 员工挂到任意考勤组（含别的分公司的组），套用对方的班次时间、休息日、午休/晚餐扣时和
+        // 迟到早退容忍度，是一条真实的越权口子（2026-09-17 代码审查发现）
+        if (user.AttendanceGroupId.HasValue && !await IsGroupInScopeAsync(cu, user.AttendanceGroupId.Value))
+            throw new InvalidOperationException("无权将员工分配到该考勤组");
 
         if (user.SupervisorUserId.HasValue)
         {

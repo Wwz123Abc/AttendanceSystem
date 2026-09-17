@@ -17,7 +17,7 @@ public static class ExcelExportHelper
     public static byte[] ExportMonthlySummary(
         List<MonthlySummaryDto> summaries, int year, int month)
     {
-        var wb     = new XSSFWorkbook();                              // 新建一个 Excel 文件
+        using var wb = new XSSFWorkbook();                            // 新建一个 Excel 文件
         var sheet  = wb.CreateSheet($"{year}年{month:D2}月考勤汇总");  // 新建一个工作表
 
         // 预先准备好几种单元格样式，后面反复用
@@ -101,7 +101,7 @@ public static class ExcelExportHelper
     // ── 报表 2：个人每日考勤明细（一行一天）─────────────────────────────────────
     public static byte[] ExportDailyStatusReport(MonthlySummaryDto summary)
     {
-        var wb    = new XSSFWorkbook();
+        using var wb = new XSSFWorkbook();
         var sheet = wb.CreateSheet($"{summary.RealName}_{summary.Year}年{summary.Month:D2}月");
 
         var headerStyle = HeaderStyle(wb);
@@ -167,7 +167,7 @@ public static class ExcelExportHelper
     // ── 报表 3：模板月度汇总表（对照公司要求的外部模板文件列结构，一行一个人，含每日打卡格子）──
     public static byte[] ExportTemplateReport(TemplateReportResultDto result)
     {
-        var wb    = new XSSFWorkbook();
+        using var wb = new XSSFWorkbook();
         var sheet = wb.CreateSheet("月度汇总");
 
         // 这份报表颜色统一改成白色（不再有隔行斑马纹/周末浅黄底）；
@@ -284,7 +284,7 @@ public static class ExcelExportHelper
         List<DateOnly> dates,
         List<(string RealName, string EmployeeNo, string GroupName, string? DeptName, List<string?> DailyShiftName, List<bool> DailyMissing, int MissingCount)> rows)
     {
-        var wb    = new XSSFWorkbook();
+        using var wb = new XSSFWorkbook();
         var sheet = wb.CreateSheet("排班记录");
 
         var titleStyle    = TitleStyle(wb);
@@ -362,7 +362,7 @@ public static class ExcelExportHelper
     // ── 报表 3.5：打卡时间表（月度报表页，按部门范围导出多个人的每日打卡明细，一行一人一天）──
     public static byte[] ExportClockTimeSheet(List<AttendanceRecordDto> records, DateOnly start, DateOnly end)
     {
-        var wb    = new XSSFWorkbook();
+        using var wb = new XSSFWorkbook();
         var sheet = wb.CreateSheet("打卡时间表");
 
         var titleStyle    = TitleStyle(wb);
@@ -436,7 +436,7 @@ public static class ExcelExportHelper
     // ── 报表 4：员工信息表（"员工信息"页按部门/关键字筛选后导出，一行一个人）───────
     public static byte[] ExportEmployeeList(List<User> users)
     {
-        var wb    = new XSSFWorkbook();
+        using var wb = new XSSFWorkbook();
         var sheet = wb.CreateSheet("员工信息");
 
         var titleStyle  = TitleStyle(wb);
@@ -617,8 +617,15 @@ public static class ExcelExportHelper
     // 是文字还是数字，去匹配对应的那一个，不需要写 SetCellText / SetCellInt 这种不同名字。
     private static void SetCell(IRow row, int col, string value, ICellStyle style)
     {
-        var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;
+        var c = row.CreateCell(col); c.SetCellValue(SanitizeForFormulaInjection(value)); c.CellStyle = style;
     }
+
+    // 姓名/工号/部门/岗位/备注等好几列都是用户自己能填的自由文本（比如自助登记的姓名、审批备注），
+    // 如果内容以 = + - @ 开头，有些电子表格软件打开时会把它当成公式执行（"公式注入"，
+    // OWASP 归类为 CSV/Excel Injection 的一种）——统一在最外层的 SetCell(string) 这个唯一出口
+    // 加一个前导单引号，让这类内容原样显示成文本，不会被当公式解析（发现于 2026-09-17 代码审查）。
+    private static string SanitizeForFormulaInjection(string value) =>
+        !string.IsNullOrEmpty(value) && "=+-@".IndexOf(value[0]) >= 0 ? "'" + value : value;
     private static void SetCell(IRow row, int col, int value, ICellStyle style)
     {
         var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;
