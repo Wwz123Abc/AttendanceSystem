@@ -60,6 +60,8 @@ public class AdminController(
     {
         if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role))
             return Forbid();
+        var contactError = ValidateContactFormat(req.Phone, req.IdNumber);
+        if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
         var deviceIds = req.DeviceIds ?? [];
         if (!await ValidateDeviceScopeAsync(deviceIds))
             return Forbid();
@@ -97,6 +99,8 @@ public class AdminController(
         if (!await CanAccessUserAsync(id)) return Forbid();
         if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role))
             return Forbid();
+        var contactError = ValidateContactFormat(req.Phone, req.IdNumber);
+        if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
         if (req.DeviceIds is not null && !await ValidateDeviceScopeAsync(req.DeviceIds))
             return Forbid();
 
@@ -161,6 +165,20 @@ public class AdminController(
             if (!await deptScopeService.CanAccessDeptAsync(Cu, device.DepartmentId)) return false;
         }
         return true;
+    }
+
+    /// <summary>手机号/身份证号格式校验，规则跟 UserManage 页面的 ValidateContact 保持一致——
+    /// 页面上虽然已经校验过，但直接调这两个接口能绕开页面，之前只校验了工号格式，手机号/身份证号
+    /// 完全没卡，畸形身份证号会让 CreateUserAsync 里"精确字符串匹配"的黑名单查重形同虚设。</summary>
+    private static string? ValidateContactFormat(string? phone, string? idNumber)
+    {
+        if (!string.IsNullOrWhiteSpace(phone) &&
+            !System.Text.RegularExpressions.Regex.IsMatch(phone.Trim(), @"^1[3-9]\d{9}$"))
+            return "请输入正确格式的手机号（11 位中国大陆手机号）";
+        if (!string.IsNullOrWhiteSpace(idNumber) &&
+            !System.Text.RegularExpressions.Regex.IsMatch(idNumber.Trim(), @"^\d{17}[\dXx]$"))
+            return "请输入正确格式的身份证号（18 位）";
+        return null;
     }
 
     /// <summary>新建/编辑员工前的范围+权限校验：部门、直属上级必须在管理范围内；只有不受限的
