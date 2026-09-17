@@ -1531,14 +1531,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     public static decimal ApplyLeaveHoursCap(decimal computedHours, decimal leaveHours, decimal standardHours) =>
         Math.Min(computedHours, Math.Max(0, standardHours - leaveHours));
 
-    /// <summary>把这天的请假小时数折算成"请假天数"：占当天标准工时的比例 ≥0.5 算 1 天，>0 且 <0.5 算
-    /// 半天，其余（占比 0 或标准工时未知）算 0 天。供月度汇总的 LeaveDays 统计用（2026-09-17 支持
-    /// 半天请假后，请假天数不再是"这天状态是请假就算一整天"）。</summary>
+    /// <summary>把这天的请假小时数折算成"请假天数"：占当天标准工时的比例 >0.5 算 1 天，恰好 0.5
+    /// （标准的半天假）算 0.5 天，>0 且 <0.5 也算半天，其余（占比 0 或标准工时未知）算 0 天。
+    /// 供月度汇总的 LeaveDays 统计用（2026-09-17 支持半天请假后，请假天数不再是"这天状态是
+    /// 请假就算一整天"；边界定成 ">0.5" 而不是 "≥0.5"，让最常见的"请 4 小时/标准工时 8 小时"
+    /// 半天假场景正确落在 0.5 天，不会被算成整天）。</summary>
     public static decimal ResolveLeaveDaysFraction(decimal leaveHours, decimal standardHours)
     {
         if (standardHours <= 0) return 0m;
         var ratio = leaveHours / standardHours;
-        return ratio >= 0.5m ? 1m : ratio > 0m ? 0.5m : 0m;
+        return ratio > 0.5m ? 1m : ratio > 0m ? 0.5m : 0m;
     }
 
     /// <summary>

@@ -112,8 +112,8 @@ public class LeaveHoursTests
 
     [Theory]
     [InlineData(8, 8, 1)]      // 一整天假（占比 100%）→ 1 天
-    [InlineData(5, 8, 1)]      // 占比 62.5%，≥0.5 → 算 1 天（口径登记表 §4.2 第 6 条按字面写的边界）
-    [InlineData(3.5, 8, 0.5)]  // 占比 43.75%，>0 且 <0.5 → 算半天，不是按比例给 0.4375 天
+    [InlineData(5, 8, 1)]      // 占比 62.5%，>0.5 → 算 1 天
+    [InlineData(3.5, 8, 0.5)]  // 占比 43.75%，>0 且 <=0.5 → 算半天，不是按比例给 0.4375 天
     [InlineData(0, 8, 0)]      // 没有请假小时数 → 0 天
     public void 请假天数按占比折算_不是按状态是否请假就算一整天(decimal leaveHours, decimal standardHours, decimal expectedDays)
     {
@@ -121,14 +121,11 @@ public class LeaveHoursTests
     }
 
     [Fact]
-    public void 边界情况_恰好占比50百分之_按规范字面意思算1天_不是0点5天()
+    public void 边界情况_恰好占比50百分之_算半天_不会被顶成整天()
     {
-        // ⚠️ 这条锁住的是口径登记表 §4.2 第 6 条"≥0.5 → 1 天"边界的字面行为：请假 4 小时、
-        // 标准工时 8 小时，占比恰好 50%，落在">=0.5"这一边，算出来是 1 天整——也就是最常见的
-        // "标准半天假"场景会被记成一整天请假。这看起来跟直觉不符（半天假直觉上该是 0.5 天），
-        // 已经单独跟你确认这条边界是否是故意这样定的，这个测试先照文档字面实现锁定当前行为，
-        // 如果确认后规则要改（比如改成 >0.5 才算 1 天，恰好 0.5 单独算 0.5 天），这个测试要跟着改。
-        Assert.Equal(1m, AttendanceService.ResolveLeaveDaysFraction(4m, 8m));
+        // 请假 4 小时、标准工时 8 小时——最常见的"标准半天假"场景，占比恰好 50%。
+        // 已经跟你确认过：这种情况应该算 0.5 天，不是 1 整天（边界定成 ">0.5" 而不是 "≥0.5"）。
+        Assert.Equal(0.5m, AttendanceService.ResolveLeaveDaysFraction(4m, 8m));
     }
 
     [Fact]
