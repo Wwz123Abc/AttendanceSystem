@@ -4,6 +4,7 @@ using NPOI.SS.Util;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Services.Implementations;
 
 namespace AttendanceSystem.Helpers;
 
@@ -154,8 +155,8 @@ public static class ExcelExportHelper
             SetCell(row, 3, rec.ClockOutText,                baseStyle);
             SetCell(row, 4, rec.StatusText,                  statusStyle);
             // 工时/加班按"半小时"为最小单位展示（不足半小时舍去），和月度汇总的合计口径一致
-            SetCell(row, 5, HalfFloor(rec.ActualWorkHours),  baseStyle);
-            SetCell(row, 6, HalfFloor(rec.OvertimeHours),    baseStyle);
+            SetCell(row, 5, (double)AttendanceService.FloorToHalf(rec.ActualWorkHours),  baseStyle);
+            SetCell(row, 6, (double)AttendanceService.FloorToHalf(rec.OvertimeHours),    baseStyle);
             SetCell(row, 7, rec.LateMinutes,
                 rec.LateMinutes > 0 ? orangeStyle : baseStyle);
             SetCell(row, 8, rec.ApprovalNote ?? "",          baseStyle);
@@ -247,7 +248,7 @@ public static class ExcelExportHelper
                 // 每日格子不管有没有值都要创建，夜班黄底才能连成一整块（不然没打卡的夜班格子会漏标）
                 var cell = xRow.CreateCell(fixedCols + i);
                 cell.CellStyle = row.DailyIsNightShift[i] ? nightShiftStyle : baseStyle;
-                if (row.DailyHours[i] is { } h) cell.SetCellValue(h);
+                if (row.DailyHours[i] is { } h) cell.SetCellValue((double)h);
             }
 
             var c = fixedCols + dayCount;
@@ -423,9 +424,9 @@ public static class ExcelExportHelper
             SetCell(row, 6,  rec.MidCheckTimeText, baseStyle);
             SetCell(row, 7,  rec.ClockOutText,     baseStyle);
             SetCell(row, 8,  rec.StatusText,       statusStyle);
-            SetCell(row, 9,  HalfFloor(rec.ActualWorkHours), baseStyle);
-            SetCell(row, 10, HalfFloor(rec.OvertimeHours),   baseStyle);
-            SetCell(row, 11, HalfFloor(rec.LeaveHours),      baseStyle);
+            SetCell(row, 9,  (double)AttendanceService.FloorToHalf(rec.ActualWorkHours), baseStyle);
+            SetCell(row, 10, (double)AttendanceService.FloorToHalf(rec.OvertimeHours),   baseStyle);
+            SetCell(row, 11, (double)AttendanceService.FloorToHalf(rec.LeaveHours),      baseStyle);
             SetCell(row, 12, rec.LateMinutes, rec.LateMinutes > 0 ? (banded ? orangeBandedStyle : orangeStyle) : baseStyle);
             SetCell(row, 13, rec.ApprovalNote ?? "", baseStyle);
         }
@@ -636,10 +637,6 @@ public static class ExcelExportHelper
     {
         var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;
     }
-
-    // 把工时数规范成"半小时"为最小单位（不足半小时舍去）：1.2→1.0，1.7→1.5。
-    // 报表里的工时数字统一走这一道，只会出现整数或 x.5（和服务层 AttendanceService.FloorToHalf 同一口径）。
-    private static double HalfFloor(decimal hours) => (double)(Math.Floor(hours * 2) / 2);
 
     // 值为 0 时不写（留空白格子），非 0 才写——模板月度汇总表里，迟到/早退/缺卡/旷工这类"异常次数"
     // 统一按这个规则显示，0 次留空更方便肉眼一眼看出哪些人有问题，不用满屏都是 0。

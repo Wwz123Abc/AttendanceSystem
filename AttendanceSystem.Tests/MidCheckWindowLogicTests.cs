@@ -137,11 +137,25 @@ public class MidCheckWindowLogicTests
     [InlineData(8, 30, 17, 30, 8.0)]    // 9 小时在岗，超 6 小时扣午休（60），不超 9 小时不扣晚餐 → 8.0
     [InlineData(8, 0, 19, 0, 9.5)]      // 11 小时在岗，超 9 小时再扣晚餐（30） → 660-60-30=570min=9.5
     [InlineData(9, 0, 11, 0, 2.0)]      // 2 小时在岗，不超 6 小时，不扣任何休息时间
+    [InlineData(8, 30, 17, 23, 7.5)]    // 2026-09-17 口径统一：出口按半小时取整，不再是 2 位小数——
+                                         // 8:53 在岗扣午休=473min=7.8833h，以前会存成 7.88，现在向下取整到 7.5
     public void 工时计算按阈值正确扣除午休晚餐(int inH, int inM, int outH, int outM, decimal expected)
     {
         var clockIn  = WorkDate.ToDateTime(new TimeOnly(inH, inM));
         var clockOut = WorkDate.ToDateTime(new TimeOnly(outH, outM));
         Assert.Equal(expected, AttendanceService.ComputeWorkHours(clockIn, clockOut, lunchBreak: 60, dinnerBreak: 30));
+    }
+
+    [Fact]
+    public void 工时结果对再次取半小时是幂等的()
+    {
+        // §5.2 验收 2：已经按半小时取整的值，再取一次不应该变——这是"月合计不变"这条验收标准的
+        // 数学基础（月合计本来就是"逐日 FloorToHalf 后累加"，日值现在也按这个口径取整，再取一次要不变）
+        var clockIn  = WorkDate.ToDateTime(new TimeOnly(8, 30));
+        var clockOut = WorkDate.ToDateTime(new TimeOnly(17, 30));
+        var once  = AttendanceService.ComputeWorkHours(clockIn, clockOut, 60, 30);
+        var twice = AttendanceService.FloorToHalf(once);
+        Assert.Equal(once, twice);
     }
 
     [Fact]

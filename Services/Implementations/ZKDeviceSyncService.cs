@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.Implementations;
@@ -11,7 +13,7 @@ namespace AttendanceSystem.Services.Implementations;
 /// 上班/下班按"当天第一次算上班、之后都算下班"自动判断（不少机型没有签到/签退按键，
 /// 设备上报的状态不可靠），迟到/早退状态当场按班次计算。
 /// </summary>
-public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger) : IZKDeviceSyncService
+public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger, IOptions<AppSettingsOptions> appOptions) : IZKDeviceSyncService
 {
     private const int MaxAttempts = 5;
 
@@ -190,14 +192,16 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                 record.ClockInTime = r.Time;
                 var status = AttendanceService.CalcClockInStatus(r.Time, shift, isRestDay, out var lateMin);
                 // 旷工可以被真的打了上班卡这件事纠正回来（不管是不是迟到，只要打了卡就不算旷工了），
-                // 但请假/出差/节假日这些由审批流程或定时任务设置的状态，不能被这里的上班打卡同步顺手覆盖掉。
+                // 但出差/节假日这两个由审批流程/定时任务设置的状态，不能被这里的上班打卡同步顺手覆盖掉。
                 // 之前只在"迟到"时才更新状态，导致旷工的人如果准点打卡（不迟到）反而不会被纠正回来，
-                // 状态会一直卡在"旷工"，这次一并修正。迟到分钟数同理不写回，避免残留在报表里。
-                if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
-                {
-                    record.LateMinutes      = lateMin;
+                // 状态会一直卡在"旷工"，这次一并修正。请假不再排除在外——半天假当天迟到分钟数也该
+                // 照算（2026-09-17 支持半天请假），但状态本身仍不会被这里改回正常/迟到（见下面单独的
+                // AttendanceStatus 判断，OnLeave 不在允许覆盖的白名单里）。
+                if (record.AttendanceStatus is not (AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
+                    record.LateMinutes = lateMin;
+                if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.Late
+                    or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched or AttendanceStatus.Absent)
                     record.AttendanceStatus = status;
-                }
             }
             else if (type == PunchType.ClockOut && (record.ClockOutTime is null || r.Time > record.ClockOutTime))
             {
@@ -213,8 +217,9 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                 // 定时任务或上班打卡设置的状态，优先级更高，不能被这里的下班打卡同步顺手覆盖掉。
                 record.ClockOutTime = r.Time;
                 var status = AttendanceService.CalcClockOutStatus(workDate, r.Time, shift, isRestDay, out var earlyMin);
-                // 请假/出差/节假日当天不写回早退分钟数，理由同上面 ClockIn 分支的 LateMinutes
-                if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
+                // 出差/节假日当天不写回早退分钟数，理由同上面 ClockIn 分支的 LateMinutes；
+                // 请假不再排除在外（半天假当天早退分钟数也该照算）
+                if (record.AttendanceStatus is not (AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
                     record.EarlyLeaveMinutes = earlyMin;
                 if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
                     record.AttendanceStatus = status;
@@ -238,9 +243,10 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                     record.AttendanceStatus = AttendanceStatus.Holiday;
                 continue;   // 节假日不结算工时，避免没走加班审批就白得工时
             }
-            // 非节假日但当天是请假/出差/节假日状态（比如批准请假前设备已经同步过打卡），工时已经
-            // 由审批流程/定时任务定好了，不能被这里的考勤机同步顺手重算覆盖掉（避免既算请假又算工时）
-            if (record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday)
+            // 非节假日但当天是出差/节假日状态（比如批准出差前设备已经同步过打卡），工时已经由审批
+            // 流程/定时任务定好了，不能被这里的考勤机同步顺手重算覆盖掉。请假不再跳过——半天假当天
+            // 如果有真实打卡，走到下面按标准工时封顶结算（2026-09-17 支持半天请假）。
+            if (record.AttendanceStatus is AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday)
                 continue;
 
             shiftByUserDate.TryGetValue((uid, workDate), out var shift);
@@ -281,7 +287,13 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             {
                 var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
                 var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift, secondHalfAbsentBoundary);
-                record.ActualWorkHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut, lunch, dinner);
+                var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut, lunch, dinner);
+                // 半天假当天设备同步到打卡：按"标准工时 − 已批准的请假小时数"封顶，跟本地打卡/
+                // 补卡重算是同一套口径（2026-09-17 支持半天请假）
+                record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
+                    ? AttendanceService.ApplyLeaveHoursCap(computedHours, record.LeaveHours,
+                        AttendanceService.ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
+                    : computedHours;
             }
         }
 

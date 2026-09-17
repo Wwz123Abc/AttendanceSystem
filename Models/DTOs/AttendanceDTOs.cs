@@ -159,9 +159,10 @@ public class TemplateReportRowDto
     public int     NightShiftDays  { get; set; }   // 夜班天数
     public decimal NightShiftHours { get; set; }   // 夜班总工时（小时，口径同 TotalWorkHours：按半小时取整累加）
 
-    /// <summary>每天的工时（整数，舍去小数）；当天没有工时（休息/请假/旷工等）为 null，导出时显示空白。
+    /// <summary>每天的工时（按半小时取整，跟月度合计同一个取整口径，不再是"整数舍去小数"）；
+    /// 当天没有工时（休息/请假/旷工等）为 null，导出时显示空白。
     /// 下标和 TemplateReportResultDto.Dates 一一对应。</summary>
-    public List<int?> DailyHours { get; set; } = [];
+    public List<decimal?> DailyHours { get; set; } = [];
 
     /// <summary>每天是不是上的夜班（跨天班次，或没排班时按打卡时间兜底判断）；导出 Excel 时用来把当天格子标黄。
     /// 下标和 DailyHours/TemplateReportResultDto.Dates 一一对应。</summary>
