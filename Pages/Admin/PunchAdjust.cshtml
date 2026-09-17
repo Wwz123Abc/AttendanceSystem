@@ -129,7 +129,7 @@ function renderUserResults(list) {
     const box = document.getElementById('fUserResults');
     if (list.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
     box.innerHTML = list.map((u, i) =>
-        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">${u.label}</button>`
+        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">${escapeHtml(u.label)}</button>`
     ).join('');
     box.style.display = 'block';
     box.querySelectorAll('[data-idx]').forEach(btn => {
