@@ -715,8 +715,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     {
                         var midCheckResults = shift is not null ? r.MidCheckResults.ParseMidCheckResults() : [];
                         var missedEnds = shift is not null
-                            ? midCheckResults.Where(m => !m.IsSatisfied)
-                                .Select(m => ResolveShiftTime(r.WorkDate, m.WindowEnd, shift)).ToList()
+                            ? ResolveMissedNonLastWindowEnds(r.WorkDate, shift, midCheckResults)
                             : [];
                         var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds);
                         var effCo = ClampEffectiveClockOut(r.WorkDate, co, shift, ResolveSecondHalfAbsentBoundary(r.WorkDate, shift, midCheckResults));
@@ -1240,12 +1239,15 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                      && p.PunchTime <= workDate.ToDateTime(TimeOnly.MinValue).AddDays(2))
             .Select(p => p.PunchTime)
             .ToListAsync();
+        // 这次打卡本身可能刚 Add 但还没 SaveChanges，数据库还查不到，要单独补进去——不然如果正好
+        // 是这次打卡本身落在窗口里（比如误判成下班的午间打卡），会查不到自己这一条、误判成没满足窗口。
+        // 跟 ZKDeviceSyncService 那边的同类查询保持一致做法。
+        dayPunches.AddRange(db.AttendancePunches.Local.Where(p => p.UserId == record.UserId).Select(p => p.PunchTime));
 
-        var results = ResolveMidCheckResults(workDate, shift, windows, dayPunches);
+        var results = ResolveMidCheckResults(workDate, shift, windows, dayPunches.Distinct().ToList());
         record.MidCheckResults = results.FormatMidCheckResults();
 
-        var missedEnds = results.Where(r => !r.IsSatisfied)
-            .Select(r => ResolveShiftTime(workDate, r.WindowEnd, shift)).ToList();
+        var missedEnds = ResolveMissedNonLastWindowEnds(workDate, shift, results);
         var effectiveClockIn = ClampEffectiveClockIn(workDate, clockIn, shift, missedEnds);
         return (effectiveClockIn, ResolveSecondHalfAbsentBoundary(workDate, shift, results));
     }
@@ -1279,14 +1281,25 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         return dt;
     }
 
-    /// <summary>某个打卡时刻是否落在班次配置的任意一段"午间必打卡"窗口内，没配班次/没配窗口一律算不在。
-    /// 供考勤机同步（ZKDeviceSyncService）判断"这次打卡算午间打卡还是下班"复用，避免两处各写一套判断逻辑、日后改窗口匹配规则时漏改一处。</summary>
-    public static bool IsWithinAnyMidCheckWindow(DateTime time, DateOnly workDate, ShiftSchedule? shift)
+    /// <summary>
+    /// 考勤机同步时，一次"不是上班、也不是刚打完上班卡没多久"的打卡，够不够资格被当成"下班候选"——
+    /// 判断依据不是"是否落在配置的午间必打卡窗口内"（这条路以前试过，效果不可靠：员工午休回来
+    /// 打卡只要没精确落进窗口，就会被误判成下班，在真正下班打卡之前账号上会显示一段"早退"，
+    /// 等真正下班打卡后才被纠正回来，用户能看到这个中间态、会以为系统出错），改成看"离排班的
+    /// 应下班时间还有多久"——只有到了应下班时间前 <see cref="ClockOutEligibleHoursBeforeEnd"/> 小时
+    /// 以内，才算下班候选；这之前的打卡（不管落不落在午间必打卡窗口里）一律当"午间打卡"处理，
+    /// 不碰上下班时间和状态。没排班时不知道应下班时间，只能按老办法直接当下班。
+    /// 代价：如果员工真的提前很多（超过这个小时数）就走了、之后再也没打卡，当天会显示"未打卡"
+    /// 而不是"早退"——比起员工每天午休回来都被误判"早退"，这个取舍更合理。
+    /// </summary>
+    public const int ClockOutEligibleHoursBeforeEnd = 2;
+
+    public static bool IsEligibleClockOutCandidate(DateTime time, DateOnly workDate, ShiftSchedule? shift)
     {
-        if (shift is null) return false;
-        return shift.ParseMidCheckWindows().Any(w =>
-            time >= ResolveShiftTime(workDate, w.Start, shift) &&
-            time <= ResolveShiftTime(workDate, w.End, shift));
+        if (shift is null) return true;
+        var scheduledEnd = workDate.ToDateTime(shift.WorkEndTime);
+        if (shift.IsCrossDay) scheduledEnd = scheduledEnd.AddDays(1);
+        return time >= scheduledEnd.AddHours(-ClockOutEligibleHoursBeforeEnd);
     }
 
     /// <summary>
@@ -1318,8 +1331,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// （跨天班次顺延到第二天）；提前下班（早退）不受影响，仍按实际下班时间算，正常反映早退少算的工时。
     /// 加班不再从打卡时间估算，只认「加班申请」审批通过后累加到 OvertimeHours 的时长。
     /// <paramref name="secondHalfAbsentBoundary"/>：配了午间打卡的班次，如果时间最晚的那一段午间窗口
-    /// 没打上（见 <see cref="ResolveSecondHalfAbsentBoundary"/>），从这段窗口结束时间起到下班就不再计
-    /// 入工时（相当于下半个班次不算出勤），不影响 AttendanceStatus，也不发旷工提醒/不计入旷工统计。
+    /// 没打上（见 <see cref="ResolveSecondHalfAbsentBoundary"/>），从这段窗口**开始**时间起到下班就不再
+    /// 计入工时（窗口本身就是午休时段，本来就不该算钱；相当于下半个班次不算出勤），不影响
+    /// AttendanceStatus，也不发旷工提醒/不计入旷工统计。
     /// ★ 全系统唯一口径：本地打卡、钉钉同步、补卡回写都调这一个，保证结果一致。
     /// </summary>
     public static DateTime ClampEffectiveClockOut(DateOnly workDate, DateTime clockOut, ShiftSchedule? shift, DateTime? secondHalfAbsentBoundary = null)
@@ -1334,8 +1348,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
     /// <summary>
     /// 配了午间打卡窗口的班次，判断"下半个班次算不算旷工（不计工时）"：只看时间最晚的那一段窗口
-    /// （不一定是配置里最后一个，取 WindowEnd 最晚的那个），这段没打上就返回它的窗口结束时间，
-    /// 供 <see cref="ClampEffectiveClockOut"/> 把有效下班时间收窄到这个点，之后到实际下班这段不算工时；
+    /// （不一定是配置里最后一个，取 WindowEnd 最晚的那个），这段没打上就返回它的**窗口开始时间**，
+    /// 供 <see cref="ClampEffectiveClockOut"/> 把有效下班时间收窄到这个点，之后（含这段窗口本身、
+    /// 也就是午休时段）到实际下班这段都不算工时。
+    /// ★ 这里必须用窗口的开始时间，不能用结束时间——窗口本身就是午休/休息时段，午休从来不算工时，
+    /// 如果用结束时间当边界，会把"没打卡证明"的这段休息时间也顺带算成了工时，多算钱。用开始时间
+    /// 才能保证从午休开始那一刻起（不管是不是真的在休息、还是没回来上班）都不计入，跟"午休本来就
+    /// 不算钱"这条基本规则保持一致（发现于 2026-09-17，之前的实现用了结束时间，是个真实 bug）。
     /// 这段打上了，或者班次没配午间窗口，返回 null（不额外限制）。
     /// 只看最晚这一段，不管前面几段有没有漏打——前面漏打已经由 <see cref="ClampEffectiveClockIn"/> 单独顺延处理了。
     /// </summary>
@@ -1343,7 +1362,24 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     {
         if (shift is null || results.Count == 0) return null;
         var lastWindow = results.OrderBy(r => r.WindowEnd).Last();
-        return lastWindow.IsSatisfied ? null : ResolveShiftTime(workDate, lastWindow.WindowEnd, shift);
+        return lastWindow.IsSatisfied ? null : ResolveShiftTime(workDate, lastWindow.WindowStart, shift);
+    }
+
+    /// <summary>
+    /// 算"漏打的、且不是最后一段"窗口的结束时间，供 <see cref="ClampEffectiveClockIn"/> 顺延有效
+    /// 上班时间用。★ 必须排除最后一段（按结束时间最晚算，跟 <see cref="ResolveSecondHalfAbsentBoundary"/>
+    /// 用的是同一个"最后一段"）——那一段漏打的后果已经单独由 ResolveSecondHalfAbsentBoundary 处理
+    /// （下半个班次直接不算工时）。之前这里没排除，导致班次只配了一段午间窗口（这一段自然也是
+    /// "最后一段"）时，漏打这一段会同时触发"上班时间顺延到这段结束"和"下班时间收窄到这段结束"
+    /// 两条规则，两边都收缩到同一个点，直接把一整天的工时清零——本意只是"下半个班次不算"，
+    /// 结果变成"整天不算"，是个真实的工时计算 bug（发现于 2026-09-17 数据核查）。
+    /// </summary>
+    public static List<DateTime> ResolveMissedNonLastWindowEnds(DateOnly workDate, ShiftSchedule shift, List<MidCheckWindowResult> results)
+    {
+        if (results.Count == 0) return [];
+        var lastWindowEnd = results.Max(r => r.WindowEnd);
+        return results.Where(r => !r.IsSatisfied && r.WindowEnd != lastWindowEnd)
+            .Select(r => ResolveShiftTime(workDate, r.WindowEnd, shift)).ToList();
     }
 
     /// <summary>

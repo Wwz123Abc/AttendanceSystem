@@ -75,13 +75,20 @@ public class RemotePunchModel(
                 throw new InvalidOperationException(
                     $"识别失败次数过多，请 {faceOptions.Value.AttemptWindowMinutes} 分钟后再试，或联系管理员改用补卡申请");
 
-            // 不用员工手选上班/下班，系统按"今天打过上班卡没有"自动判断：
-            // 还没打过 → 算上班；已经打过 → 算下班（下班之后还能反复再打，PunchAsync 里下班卡
-            // 本来就是"每次都覆盖成最新时间"，所以最后一次打卡的时间点会成为最终的下班时间）。
+            // 不用员工手选上班/下班，系统按"今天打过上班卡没有"自动判断：还没打过 → 算上班；
+            // 已经打过、且离排班的应下班时间够近了 → 算下班；已经打过上班卡、但离下班还早的（比如
+            // 午休期间又打了一次），算"午间打卡"，不碰下班时间和状态——不然像考勤机同步那边一样，
+            // 员工中午随手打一次卡就会被当成"下班"，账号上临时显示一段"早退"（同一个 bug 之前
+            // 在考勤机同步那边修过，这里是同一个道理，见 AttendanceService.IsEligibleClockOutCandidate）。
+            // 没排班时不知道应下班时间，只能按老办法直接当下班。
             // 提到成本闸门前面算，是因为下面的"两次打卡间隔"要用到——上班卡刚打完马上接着打下班卡
             // （夜班跨天很常见）不该被当成"重复打卡"拦下来。
             var todayBeforePunch = await attendanceService.GetTodayAttendanceAsync(CurrentUserId);
-            var type = todayBeforePunch?.ClockInTime is null ? PunchType.ClockIn : PunchType.ClockOut;
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
+            var type = todayBeforePunch?.ClockInTime is null ? PunchType.ClockIn
+                : AttendanceService.IsEligibleClockOutCandidate(DateTime.Now, today, todayShift) ? PunchType.ClockOut
+                : PunchType.MidCheck;
 
             // 成本闸门：跟上面的失败限流是两回事（那个防冒充，这个控成本/防刷）——挡"手快连点"
             // 和正常员工也不该出现的异常高频打卡。命中这里直接拒绝，不产生任何（付费的）阿里云调用；

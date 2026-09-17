@@ -153,9 +153,13 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
             var isRestDay = await AttendanceService.IsNonCompRestDayAsync(db, workDate, shift, punchGroupId);
 
             // 不少机型没有签到/签退按键（或员工不会用），设备上报的 Status 不可靠，改成不看 Status、
-            // 按班次配置自动判断：当天第一次算上班；之后如果落在班次配置的"午间必打卡"窗口内，算午间
-            // 打卡（不影响上下班时间）；不在任何窗口内，才算下班。这样员工上班期间随手多刷几次脸
-            // 也不会把午间打卡误记成下班时间。外出/外出返回（Status 2、3）设备上报明确，仍按设备说的走。
+            // 按班次配置自动判断：当天第一次算上班；之后如果离排班的应下班时间还早（超过
+            // AttendanceService.ClockOutEligibleHoursBeforeEnd 小时），不管这次打卡落不落在配置的
+            // "午间必打卡"窗口里，都当午间打卡处理（不影响上下班时间）——这样员工上班期间随手多刷
+            // 几次脸、或者午休回来打卡没精确落进窗口，都不会被误记成下班（之前按"是否落在窗口内"
+            // 判断时，只要没精确落进窗口，就会在真正下班打卡之前，账号上临时显示一段"早退"，
+            // 详见 AttendanceService.IsEligibleClockOutCandidate 的说明）；到了应下班时间前这个
+            // 时间窗口以内，才算下班候选。外出/外出返回（Status 2、3）设备上报明确，仍按设备说的走。
             // 另外：刚打完上班卡没多久（比如人脸识别失败、几十秒内又扫了一次）不能当成下班——
             // 必须离上班时间超过 MinMinutesBeforeClockOut 才有资格被当成"下班"候选。
             var type = r.Status switch
@@ -163,8 +167,8 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                 2 or 3 => PunchType.MidCheck,
                 _ => record.ClockInTime is null ? PunchType.ClockIn
                     : r.Time - record.ClockInTime.Value < TimeSpan.FromMinutes(MinMinutesBeforeClockOut) ? PunchType.ClockIn
-                    : AttendanceService.IsWithinAnyMidCheckWindow(r.Time, workDate, shift) ? PunchType.MidCheck
-                    : PunchType.ClockOut
+                    : AttendanceService.IsEligibleClockOutCandidate(r.Time, workDate, shift) ? PunchType.ClockOut
+                    : PunchType.MidCheck
             };
 
             if (!punchSet.Add((uid, type, TruncateToMinute(r.Time)))) continue;   // 去重：同一人同类型同一分钟已经存过就跳过
@@ -264,8 +268,7 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
                     .Select(p => p.PunchTime));
                 var midCheckResults = AttendanceService.ResolveMidCheckResults(workDate, shift, windows, dayPunchTimes.Distinct().ToList());
                 record.MidCheckResults = midCheckResults.FormatMidCheckResults();
-                missedWindowEnds = midCheckResults.Where(m => !m.IsSatisfied)
-                    .Select(m => AttendanceService.ResolveShiftTime(workDate, m.WindowEnd, shift)).ToList();
+                missedWindowEnds = AttendanceService.ResolveMissedNonLastWindowEnds(workDate, shift, midCheckResults);
                 secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, midCheckResults);
             }
 
