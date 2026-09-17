@@ -349,8 +349,8 @@ detailModal.addEventListener('show.bs.modal', function(e) {
     let rows = `
         <dt class="col-4">单号</dt><dd class="col-8">${d.no}</dd>
         <dt class="col-4">申请类型</dt><dd class="col-8">${d.type}</dd>
-        <dt class="col-4">申请人</dt><dd class="col-8">${d.name}（${d.empNo}）</dd>
-        <dt class="col-4">部门</dt><dd class="col-8">${d.dept || '—'}</dd>`;
+        <dt class="col-4">申请人</dt><dd class="col-8">${escapeHtml(d.name)}（${escapeHtml(d.empNo)}）</dd>
+        <dt class="col-4">部门</dt><dd class="col-8">${d.dept ? escapeHtml(d.dept) : '—'}</dd>`;
 
     // 按类型展示具体日期/时间
     if (d.leaveStart) {
@@ -372,13 +372,13 @@ detailModal.addEventListener('show.bs.modal', function(e) {
     }
     if (d.tripStart) {
         rows += `
-        <dt class="col-4">出差目的地</dt><dd class="col-8">${d.tripDest || '未填写'}</dd>
+        <dt class="col-4">出差目的地</dt><dd class="col-8">${d.tripDest ? escapeHtml(d.tripDest) : '未填写'}</dd>
         <dt class="col-4">出差起止</dt><dd class="col-8">${d.tripStart} ~ ${d.tripEnd}</dd>
         <dt class="col-4">出差天数</dt><dd class="col-8">${d.tripDays} 天</dd>`;
     }
 
     rows += `
-        <dt class="col-4">申请原因</dt><dd class="col-8">${d.reason || '无'}</dd>
+        <dt class="col-4">申请原因</dt><dd class="col-8">${d.reason ? escapeHtml(d.reason) : '无'}</dd>
         <dt class="col-4">提交时间</dt><dd class="col-8">${d.time}</dd>`;
 
     // 附件材料（审批人可点击查看）
@@ -394,5 +394,14 @@ detailModal.addEventListener('show.bs.modal', function(e) {
 
     document.getElementById('detailBody').innerHTML = `<dl class="row mb-0">${rows}${att}</dl>`;
 });
+
+// 申请原因、出差目的地、申请人姓名都是员工自己能填的自由文本，不能直接拼进 HTML（存储型 XSS 风险：
+// 任何员工提交一张申请，审批人打开"待我审批"点开详情就会在审批人（Admin/Clerk/主管/班组长）的
+// 会话里执行）——这里转义成安全文本再拼
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s ?? '';
+    return d.innerHTML;
+}
 </script>
 }

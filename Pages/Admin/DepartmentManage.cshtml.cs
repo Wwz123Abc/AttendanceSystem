@@ -31,7 +31,7 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
     [BindProperty] public string? DeleteIds { get; set; }   // 逗号分隔的待删除部门 id
 
     /// <summary>一行部门数据：部门本身 + 层级深度 + 成员数 + 是否有子部门。</summary>
-    public record DeptRow(Department Dept, int Depth, int MemberCount, bool HasChildren);
+    public record DeptRow(Department Dept, int Depth, int MemberCount, int DeviceCount, bool HasChildren);
 
     public async Task OnGetAsync() => await LoadAsync();
 
@@ -53,6 +53,13 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
                 .ToListAsync())
             .ToDictionary(x => x.DeptId, x => x.Count);
 
+        // 每个部门直属的考勤机数——删除部门前要提醒管理员这些设备会失去归属，跟员工是同一个道理
+        var directDevices = (await db.ZKDevices.Where(dv => dv.DepartmentId != null)
+                .GroupBy(dv => dv.DepartmentId!.Value)
+                .Select(g => new { DeptId = g.Key, Count = g.Count() })
+                .ToListAsync())
+            .ToDictionary(x => x.DeptId, x => x.Count);
+
         // 按“上级部门”分组，方便递归展开（顶级部门用 0 当 key，因为没有 Id=0 的部门）
         var byParent = AllDepts
             .GroupBy(d => d.ParentId ?? 0)
@@ -68,6 +75,16 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
             total[deptId] = sum;
             return sum;
         }
+        // 考勤机数同样按"本部门 + 所有下级部门"累加，口径跟上面的成员数一致
+        var totalDevices = new Dictionary<int, int>();
+        int RollupDevices(int deptId)
+        {
+            var sum = directDevices.GetValueOrDefault(deptId);
+            if (byParent.TryGetValue(deptId, out var kids))
+                foreach (var k in kids) sum += RollupDevices(k.Id);
+            totalDevices[deptId] = sum;
+            return sum;
+        }
 
         Rows = [];
         void Walk(int parentKey, int depth)
@@ -75,7 +92,7 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
             if (!byParent.TryGetValue(parentKey, out var kids)) return;
             foreach (var d in kids)
             {
-                Rows.Add(new DeptRow(d, depth, total.GetValueOrDefault(d.Id), byParent.ContainsKey(d.Id)));
+                Rows.Add(new DeptRow(d, depth, total.GetValueOrDefault(d.Id), totalDevices.GetValueOrDefault(d.Id), byParent.ContainsKey(d.Id)));
                 Walk(d.Id, depth + 1);   // 递归处理它的子部门
             }
         }
@@ -84,19 +101,19 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
             // 受限管理员：树顶就是自己的范围根部门本身，不是"没有父部门"的那批顶级部门
             var rootId = cu.ScopedDepartmentId!.Value;
             if (byParent.TryGetValue(rootId, out var rootKids))
-                foreach (var r in rootKids) Rollup(r.Id);
-            Rollup(rootId);
+                foreach (var r in rootKids) { Rollup(r.Id); RollupDevices(r.Id); }
+            Rollup(rootId); RollupDevices(rootId);
             var root = AllDepts.FirstOrDefault(d => d.Id == rootId);
             if (root is not null)
             {
-                Rows.Add(new DeptRow(root, 0, total.GetValueOrDefault(root.Id), byParent.ContainsKey(root.Id)));
+                Rows.Add(new DeptRow(root, 0, total.GetValueOrDefault(root.Id), totalDevices.GetValueOrDefault(root.Id), byParent.ContainsKey(root.Id)));
                 Walk(root.Id, 1);
             }
         }
         else
         {
             if (byParent.TryGetValue(0, out var roots))
-                foreach (var r in roots) Rollup(r.Id);
+                foreach (var r in roots) { Rollup(r.Id); RollupDevices(r.Id); }
             Walk(0, 0);
         }
     }

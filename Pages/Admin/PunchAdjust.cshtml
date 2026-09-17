@@ -56,7 +56,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">备注 <small class="text-muted">（可选）</small></label>
-                        <input asp-for="Remark" class="form-control" maxlength="200" placeholder="如：打卡设备故障，管理员核实后补录" />
+                        <input asp-for="Remark" class="form-control" maxlength="100" placeholder="如：打卡设备故障，管理员核实后补录" />
                     </div>
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-save me-1"></i>保存
@@ -169,10 +169,18 @@ async function loadCurrentRecord() {
         } else {
             box.innerHTML = `<i class="bi bi-info-circle me-1"></i>当前记录：上班 ${data.clockIn ? data.clockIn.replace('T', ' ') : '--'}，`
                 + `下班 ${data.clockOut ? data.clockOut.replace('T', ' ') : '--'}，状态 ${data.status}，工时 ${data.workHours} 小时`
-                + (data.note ? `，备注：${data.note}` : '');
+                + (data.note ? `，备注：${escapeHtml(data.note)}` : '');
         }
         box.style.display = '';
     } catch (e) { alert('查询失败，请重试'); }
+}
+
+// 备注（ApprovalNote）里可能带有出差目的地这类员工自己填的自由文本，不能直接拼进 HTML
+// （存储型 XSS：管理员打开"手动补卡"查该员工那天记录就会在管理员会话里执行）
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s ?? '';
+    return d.innerHTML;
 }
 </script>
 }

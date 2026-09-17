@@ -931,9 +931,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 给 ApprovalNote 追加一条新的审批说明，而不是直接覆盖——同一天可能先后批了不同类型的审批
     /// （比如先批了请假、后来又批了加班），如果直接覆盖，先写的那条说明会凭空消失，明明这天两件事
     /// 都批了，备注却只看得出后写的那一件。已有内容就用"；"隔开拼在后面，没有就直接写。
+    /// ApprovalNote 数据库列是 [MaxLength(200)]（AttendanceRecord.cs），改成"追加"之后，同一天
+    /// 反复手动补卡（每次备注控制在 100 字以内，见 AdminAdjustPunchAsync 的校验）叠加几次就有可能
+    /// 超过 200 字上限，SaveChangesAsync 会直接报数据库层面的"数据太长"错误——这里在拼接后统一截断到
+    /// 200 字以内（截断时带上省略号，不会悄无声息地丢内容却看不出来），当最后一道安全网。
     /// </summary>
-    private static void AppendApprovalNote(AttendanceRecord record, string note) =>
-        record.ApprovalNote = string.IsNullOrEmpty(record.ApprovalNote) ? note : $"{record.ApprovalNote}；{note}";
+    private static void AppendApprovalNote(AttendanceRecord record, string note)
+    {
+        var combined = string.IsNullOrEmpty(record.ApprovalNote) ? note : $"{record.ApprovalNote}；{note}";
+        record.ApprovalNote = combined.Length > 200 ? combined[..197] + "..." : combined;
+    }
 
     /// <summary>
     /// 审批通过后回写考勤：补卡 → 补填上/下班时间；加班 → 按审批单时长累加加班工时（加班不再从
@@ -1116,6 +1123,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// </summary>
     public async Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName)
     {
+        // 备注长度校验：ApprovalNote 数据库列上限 200 字，现在改成"追加"而不是覆盖后，同一天反复
+        // 手动补卡会不断累加，单次备注控制在 100 字以内才留得出余量给后面可能追加的其它说明
+        // （AppendApprovalNote 里还有一道 200 字截断兜底，这里是提前给管理员一个看得懂的提示，
+        // 而不是让内容被静默截断）
+        if (!string.IsNullOrWhiteSpace(remark) && remark.Trim().Length > 100)
+            throw new InvalidOperationException("补卡备注不能超过 100 个字");
+
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
         if (record is null)
         {

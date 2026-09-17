@@ -174,10 +174,16 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
         var dates = new List<DateOnly>();
         for (var d = start; d <= end; d = d.AddDays(1)) dates.Add(d);
 
+        // 跟 OnGetAsync 页面显示那边同一道过滤——IsGroupInScopeAsync 只是"能不能选这个组"的
+        // Any 语义（组没关联部门/沾一个自己范围内的部门就算数），选中的组可能是跨分公司共用的，
+        // 这里如果不按成员自己的部门再收窄，导出的 Excel 里会带上别的分公司员工的姓名/工号/排班
+        // （2026-09-17 复审发现，此前只修了页面显示，漏了导出这条路径）
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
         var members = await db.Users
             .Include(u => u.AttendanceGroup)
             .Include(u => u.Department)
-            .Where(u => u.IsActive && u.AttendanceGroupId != null && selectedGroupIds.Contains(u.AttendanceGroupId.Value))
+            .Where(u => u.IsActive && u.AttendanceGroupId != null && selectedGroupIds.Contains(u.AttendanceGroupId.Value)
+                     && (visibleIds == null || (u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value))))
             .OrderBy(u => u.AttendanceGroup!.GroupName).ThenBy(u => u.RealName)
             .ToListAsync();
         if (members.Count == 0) { ErrorMessage = "所选考勤组内没有在职员工"; return RedirectToSelf(viewStart, viewEnd, selectedGroupIds); }

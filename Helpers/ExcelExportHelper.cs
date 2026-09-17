@@ -615,17 +615,19 @@ public static class ExcelExportHelper
     // 这里写了 3 个同名的 SetCell 方法，唯一区别是 value 参数的类型不同（文字/整数/小数）。
     // 这种"同一个名字、参数类型不同"的写法叫"方法重载"：调用的时候，C# 会自动根据你传的值
     // 是文字还是数字，去匹配对应的那一个，不需要写 SetCellText / SetCellInt 这种不同名字。
+    // 之前这里加过一道"内容以 = + - @ 开头就前置一个单引号"的公式注入防护（OWASP 的 CSV/Excel
+    // Injection），后来实测发现对这里不适用、而且有副作用，撤掉了：POI 的 SetCellValue(string)
+    // 存的是纯字符串类型的单元格（CellType.String），不是公式类型（Formula，对应 xlsx 里的 <f> 元素），
+    // Excel/WPS 打开原生 xlsx 时不会把字符串单元格的内容重新解析成公式——这跟"把一份 CSV 文本文件
+    // 导入 Excel"是完全不同的两条路径，公式注入风险主要出在 CSV 导入这一类场景，这个项目目前没有
+    // CSV 导出功能。而且 Excel 的"前导单引号=强制文本"是它自己编辑器输入时的行为（单引号本身不会
+    // 存进单元格内容，只是给这个单元格的样式打一个"强制文本"标记），不是文件格式层面的规则——
+    // 这里手动拼进字符串值的单引号会被原样存成看得见的字符，打开后会显示成"'张三"这种带撇号的
+    // 姓名，反而是个新问题。以后如果这个项目真的要做 CSV 导出，需要在那条路径上单独处理这个问题。
     private static void SetCell(IRow row, int col, string value, ICellStyle style)
     {
-        var c = row.CreateCell(col); c.SetCellValue(SanitizeForFormulaInjection(value)); c.CellStyle = style;
+        var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;
     }
-
-    // 姓名/工号/部门/岗位/备注等好几列都是用户自己能填的自由文本（比如自助登记的姓名、审批备注），
-    // 如果内容以 = + - @ 开头，有些电子表格软件打开时会把它当成公式执行（"公式注入"，
-    // OWASP 归类为 CSV/Excel Injection 的一种）——统一在最外层的 SetCell(string) 这个唯一出口
-    // 加一个前导单引号，让这类内容原样显示成文本，不会被当公式解析（发现于 2026-09-17 代码审查）。
-    private static string SanitizeForFormulaInjection(string value) =>
-        !string.IsNullOrEmpty(value) && "=+-@".IndexOf(value[0]) >= 0 ? "'" + value : value;
     private static void SetCell(IRow row, int col, int value, ICellStyle style)
     {
         var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;

@@ -580,7 +580,7 @@ function renderAMapSearchResults(items) {
     const box = document.getElementById('amapSearchResults');
     if (items.length === 0) { hideAMapSearchResults(); return; }
     box.innerHTML = items.map((it, i) =>
-        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">${it.label}</button>`
+        `<button type="button" class="list-group-item list-group-item-action py-1 px-2 small" data-idx="${i}">${escapeHtml(it.label)}</button>`
     ).join('');
     box.style.display = 'block';
     box.querySelectorAll('[data-idx]').forEach(btn => {
@@ -648,6 +648,13 @@ function confirmAMapPicker() {
     amapTargetRow.querySelector('[data-field="Latitude"]').value = amapPickerState.wgs[1].toFixed(6);
     amapTargetRow.querySelector('[data-field="Longitude"]').value = amapPickerState.wgs[0].toFixed(6);
     bootstrap.Modal.getInstance(document.getElementById('amapPickerModal')).hide();
+}
+
+// 高德地址搜索结果理论上是第三方接口返回的文本，拼进 HTML 前统一转义一下
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s ?? '';
+    return d.innerHTML;
 }
 </script>
 }

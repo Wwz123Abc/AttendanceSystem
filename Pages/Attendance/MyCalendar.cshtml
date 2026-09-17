@@ -265,10 +265,17 @@ function showDay(dateStr) {
     if (d.early)     rows += `<dt class="col-4">早退</dt><dd class="col-8 text-danger">${d.early} 分钟</dd>`;
     if (d.shiftName) rows += `
         <dt class="col-4">当天排班</dt><dd class="col-8">${d.shiftName}（${d.shiftTime}）</dd>`;
-    if (d.note) rows += `<dt class="col-4">备注</dt><dd class="col-8 text-muted">${d.note}</dd>`;
+    if (d.note) rows += `<dt class="col-4">备注</dt><dd class="col-8 text-muted">${escapeHtml(d.note)}</dd>`;
 
     document.getElementById('dayModalBody').innerHTML = `<dl class="row mb-0">${rows}</dl>`;
     dayModal.show();
+}
+
+// 备注可能带有员工自己填的出差目的地这类自由文本，不能直接拼进 HTML（存储型 XSS）
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s ?? '';
+    return d.innerHTML;
 }
 </script>
 }

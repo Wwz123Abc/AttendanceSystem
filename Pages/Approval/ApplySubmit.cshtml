@@ -344,11 +344,18 @@ function renderFileList() {
     const list = document.getElementById('fileList');
     list.innerHTML = [...staged.files].map((f, i) =>
         `<span class="badge bg-light text-dark border d-inline-flex align-items-center">
-            <i class="bi bi-paperclip me-1"></i>${f.name} (${(f.size/1024).toFixed(0)}KB)
+            <i class="bi bi-paperclip me-1"></i>${escapeHtml(f.name)} (${(f.size/1024).toFixed(0)}KB)
             <button type="button" class="btn-close btn-close-sm ms-2" style="font-size:.6rem"
                     aria-label="删除" onclick="removeFile(${i})"></button>
          </span>`
     ).join('');
+}
+
+// 文件名是用户从自己电脑选的本地文件名，理论上可以包含任意字符，拼进 HTML 前统一转义一下
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s ?? '';
+    return d.innerHTML;
 }
 
 function showAttachments(urls) {

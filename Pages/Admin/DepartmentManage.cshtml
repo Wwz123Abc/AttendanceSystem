@@ -48,6 +48,7 @@
                             data-name="@r.Dept.DeptName" data-parentid="@(r.Dept.ParentId?.ToString() ?? "")"
                             data-sort="@r.Dept.SortIndex" data-active="@r.Dept.IsActive.ToString().ToLower()"
                             data-haschildren="@r.HasChildren.ToString().ToLower()" data-members="@r.MemberCount"
+                            data-devices="@r.DeviceCount"
                             style="@(r.Depth > 0 ? "display:none" : "")">
                             <td><input type="checkbox" class="row-check" value="@r.Dept.Id" /></td>
                             <td>
@@ -188,13 +189,28 @@ function editSelected() {
 // ── 删除（批量 / 单个）────────────────────────────────────────────────────
 function submitDelete(ids) {
     if (ids.length === 0) { alert('请先勾选要删除的部门'); return; }
-    let warn = false;
+    // 挨个部门列出具体受影响的人数/设备数，而不是笼统一句"含有子部门或员工"——
+    // 数字越具体，管理员越容易判断这次删除是不是自己真的想要的操作
+    const lines = [];
+    let hasImpact = false;
     ids.forEach(id => {
         const tr = document.querySelector(`tr[data-id="${id}"]`);
-        if (tr && (tr.dataset.haschildren === 'true' || parseInt(tr.dataset.members) > 0)) warn = true;
+        if (!tr) return;
+        const name    = tr.dataset.name;
+        const members = parseInt(tr.dataset.members) || 0;
+        const devices = parseInt(tr.dataset.devices) || 0;
+        const hasKids = tr.dataset.haschildren === 'true';
+        if (members > 0 || devices > 0 || hasKids) {
+            hasImpact = true;
+            const parts = [];
+            if (members > 0) parts.push(`${members} 名员工`);
+            if (devices > 0) parts.push(`${devices} 台考勤机`);
+            if (hasKids)     parts.push('子部门');
+            lines.push(`「${name}」：${parts.join('、')}`);
+        }
     });
-    const msg = warn
-        ? '所选部门中含有子部门或员工。\n删除后：这些部门的员工将变为“未分配”，其子部门将提升为顶级部门。\n\n确认删除？'
+    const msg = hasImpact
+        ? `所选部门（含下级）合计影响：\n${lines.join('\n')}\n\n删除后：员工将变为"未分配"，考勤机将失去归属，子部门将提升为顶级部门。\n\n确认删除？`
         : '确认删除所选部门？';
     if (!confirm(msg)) return;
     document.getElementById('fDeleteIds').value = ids.join(',');
