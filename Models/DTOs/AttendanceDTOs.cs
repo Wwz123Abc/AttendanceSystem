@@ -124,7 +124,7 @@ public class MonthlySummaryDto
     public int Month { get; set; }
 
     public int     ExpectedWorkdays  { get; set; }   // 应出勤天数
-    public int     ActualWorkdays    { get; set; }   // 实际出勤天数
+    public decimal ActualWorkdays    { get; set; }   // 实际出勤天数（半天假的那天算 0.5 天）
     public int     NightShiftDays    { get; set; }   // 夜班天数（按排班/打卡时间实时算，不存表）
     public int     LateCount         { get; set; }   // 迟到次数
     public int     EarlyLeaveCount   { get; set; }   // 早退次数

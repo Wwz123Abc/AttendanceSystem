@@ -311,7 +311,16 @@ document.querySelector('form[enctype]').addEventListener('submit', function (e) 
         if (fTripStart.value && fTripStart.value < nowStr) msg = '出差开始时间不能早于现在';
         else if (fTripStart.value && fTripEnd.value && fTripEnd.value <= fTripStart.value) msg = '出差结束时间必须晚于开始时间';
     }
-    if (msg) { e.preventDefault(); alert(msg); }
+    if (msg) { e.preventDefault(); alert(msg); return; }
+
+    // 提交按钮点一下就立刻锁住、变成"提交中..."：防止手机上网络慢的时候用户以为没反应又连点几下，
+    // 同一份申请被发了两三份一模一样的（发现于 2026-09-18 发工资前的数据核查：不少加班申请几百毫秒
+    // 内被连续提交了 2-4 次，后端的重复检查在这么短的间隔里也可能来不及生效，源头上锁住按钮更可靠）。
+    const submitBtn = this.querySelector('button[type="submit"]');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>提交中...';
+    }
 });
 
 // 附件支持逐个添加、单独删除：用 DataTransfer 维护已选文件列表

@@ -114,21 +114,28 @@ public class RemotePunchModel(
                 }
             }
 
-            var todayStart    = DateTime.Today;
-            var todayAttempts = await db.FaceVerifyAttempts.CountAsync(a =>
-                a.UserId == CurrentUserId && a.BlockedReason == null && a.CreatedAt >= todayStart);
-            if (todayAttempts >= faceOptions.Value.MaxAttemptsPerDay)
+            // "今日次数"这两道闸门也要放过当天还没打的这一次下班卡——不然员工早上/中午多试了几次
+            // （光线不好、角度不对）攒够了次数，到真正该下班打卡的时候反而被这里挡住，只能走管理员
+            // 手动补卡，等于成本闸门制造出新的"缺卡"记录，跟这道闸门本身的目的（省钱）背道而驰
+            // （发现于 2026-09-18：把每日上限从 20/40 收紧到 6/12 之后，这个场景变得容易触发）。
+            var todayStart = DateTime.Today;
+            if (!isComplementaryClockOut)
             {
-                await LogBlockedAsync("今日尝试次数上限");
-                throw new InvalidOperationException("今日远程打卡尝试次数已达上限，请联系管理员");
-            }
+                var todayAttempts = await db.FaceVerifyAttempts.CountAsync(a =>
+                    a.UserId == CurrentUserId && a.BlockedReason == null && a.CreatedAt >= todayStart);
+                if (todayAttempts >= faceOptions.Value.MaxAttemptsPerDay)
+                {
+                    await LogBlockedAsync("今日尝试次数上限");
+                    throw new InvalidOperationException("今日远程打卡尝试次数已达上限，请联系管理员");
+                }
 
-            var todaySuccesses = await db.FaceVerifyAttempts.CountAsync(a =>
-                a.UserId == CurrentUserId && a.Success && a.BlockedReason == null && a.CreatedAt >= todayStart);
-            if (todaySuccesses >= faceOptions.Value.MaxSuccessfulVerificationsPerDay)
-            {
-                await LogBlockedAsync("今日成功次数上限");
-                throw new InvalidOperationException("今日远程打卡次数已达上限，确有特殊情况请联系管理员或走补卡申请");
+                var todaySuccesses = await db.FaceVerifyAttempts.CountAsync(a =>
+                    a.UserId == CurrentUserId && a.Success && a.BlockedReason == null && a.CreatedAt >= todayStart);
+                if (todaySuccesses >= faceOptions.Value.MaxSuccessfulVerificationsPerDay)
+                {
+                    await LogBlockedAsync("今日成功次数上限");
+                    throw new InvalidOperationException("今日远程打卡次数已达上限，确有特殊情况请联系管理员或走补卡申请");
+                }
             }
 
             if (!Latitude.HasValue || !Longitude.HasValue)

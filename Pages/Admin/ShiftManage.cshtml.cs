@@ -299,6 +299,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                 if (!TimeOnly.TryParse(w.Start, out var ms) || !TimeOnly.TryParse(w.End, out var me))
                     throw new Exception("午间必打卡窗口时间格式不正确");
                 if (me <= ms) throw new Exception("午间必打卡窗口的结束时间要晚于开始时间");
+                if (midCheckWindows.Contains((ms, me))) throw new Exception("午间必打卡窗口不能配置两段完全相同的时间");
                 midCheckWindows.Add((ms, me));
             }
             var midCheckWindowsCsv = midCheckWindows.FormatMidCheckWindows();

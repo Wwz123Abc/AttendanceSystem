@@ -764,8 +764,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             // 根据每日记录算出各项统计
             summary.ExpectedWorkdays  = expected;
-            // 实际出勤 = 打了上班卡的天数 + 已批准出差的天数（请假/旷工/未打卡都不算出勤）
-            summary.ActualWorkdays    = records.Count(IsPresent);
+            // 实际出勤 = 打了上班卡的天数 + 已批准出差的天数（旷工/未打卡都不算出勤）；
+            // 请假当天如果也有真实打卡（半天假），只算"1 − 请假占比"那一部分出勤，不再跟 LeaveDays
+            // 重复记满整天——不然半天假的人会变成"出勤 1 天 + 请假 0.5 天"，一天算出 1.5 天（发现于
+            // 2026-09-18 发工资前的数据核查）。
+            summary.ActualWorkdays = records.Sum(r => !IsPresent(r) ? 0m
+                : r.AttendanceStatus == AttendanceStatus.OnLeave
+                    ? Math.Max(0m, 1m - ResolveLeaveDaysFraction(r.LeaveHours, ResolveDailyStandardHours(shiftByDate.GetValueOrDefault(r.WorkDate), defaultDailyHours)))
+                    : 1m);
             // 迟到/早退按「状态」统计（钉钉同步只写状态、不写分钟数，按分钟数会漏算）
             summary.LateCount         = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);
             summary.EarlyLeaveCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.EarlyLeave);
@@ -1051,6 +1057,20 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             for (var d = sd; d <= ed; d = d.AddDays(1))   // 请假区间内每一天
             {
+                // 请假时长只算落在"这一天"里的那一段——跨天请假的第一天/最后一天可能不是整天
+                // （比如 09-09 14:00 请假到 09-11 12:00，09-09 当天只算 14:00~24:00 这一段），
+                // 用 ComputeLeaveHoursForDay 取交集再扣午休/晚餐，并封顶在这天的标准工时。
+                // 先算这个再判断要不要处理这一天：如果结束时间恰好卡在午夜 0 点（比如请假到
+                // 9-11 00:00），区间最后一天（9-11）跟请假时段其实没有任何交集，算出来是 0——
+                // 这种天直接跳过，不新建记录、不标"请假"状态，让这天照正常规则走（打卡/旷工都行），
+                // 不会出现"状态是请假、时长却是 0"这种对不上的记录（发现于 2026-09-18 发工资前的
+                // 数据核查）。
+                var dailyCap = leaveShiftsInRange.TryGetValue(d, out var leaveShift)
+                    ? leaveShift.StandardWorkHours : defaultDailyHours;
+                var leaveHoursToday = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd,
+                    leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30, dailyCap);
+                if (leaveHoursToday <= 0) continue;
+
                 // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
                 // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
                 if (!recordsInRange.TryGetValue(d, out var record))
@@ -1067,13 +1087,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 record.ActualWorkHours   = 0;
                 record.LateMinutes       = 0;
                 record.EarlyLeaveMinutes = 0;
-                // 请假时长只算落在"这一天"里的那一段——跨天请假的第一天/最后一天可能不是整天
-                // （比如 09-09 14:00 请假到 09-11 12:00，09-09 当天只算 14:00~24:00 这一段），
-                // 用 ComputeLeaveHoursForDay 取交集再扣午休/晚餐，并封顶在这天的标准工时。
-                var dailyCap = leaveShiftsInRange.TryGetValue(d, out var leaveShift)
-                    ? leaveShift.StandardWorkHours : defaultDailyHours;
-                var leaveHoursToday = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd,
-                    leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30, dailyCap);
                 // 累加而不是覆盖：同一天可能先后批了两张假单（比如上午一张、下午一张），
                 // 覆盖会让后批的那张顶掉先批的，天数折算（GenerateMonthlySummaryAsync 里的
                 // LeaveDays）就会少算（2026-09-17 支持半天请假时一并修复）

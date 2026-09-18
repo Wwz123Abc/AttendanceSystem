@@ -67,7 +67,7 @@ public static class ExcelExportHelper
             SetCell(row, 2,  dto.DeptName ?? "",                          baseStyle);
             SetCell(row, 3,  dto.Position ?? "",                          baseStyle);
             SetCell(row, 4,  dto.ExpectedWorkdays,                        baseStyle);
-            SetCell(row, 5,  dto.ActualWorkdays,                          baseStyle);
+            SetCell(row, 5,  (double)dto.ActualWorkdays,                  baseStyle);
             SetCell(row, 6,  dto.NightShiftDays,                          baseStyle);   // 夜班天数
             SetCell(row, 7,  dto.LateCount,        dto.LateCount > 0        ? orangeStyle : baseStyle);  // 有迟到→橙
             SetCell(row, 8,  dto.EarlyLeaveCount,  dto.EarlyLeaveCount > 0  ? orangeStyle : baseStyle);  // 有早退→橙
@@ -86,7 +86,7 @@ public static class ExcelExportHelper
             totalRow.HeightInPoints = 18;
             SetCell(totalRow, 0,  "合计",                                                     headerStyle);
             SetCell(totalRow, 4,  summaries.Sum(s => s.ExpectedWorkdays),                    headerStyle);
-            SetCell(totalRow, 5,  summaries.Sum(s => s.ActualWorkdays),                      headerStyle);
+            SetCell(totalRow, 5,  (double)summaries.Sum(s => s.ActualWorkdays),              headerStyle);
             SetCell(totalRow, 6,  summaries.Sum(s => s.NightShiftDays),                      headerStyle);
             SetCell(totalRow, 7,  summaries.Sum(s => s.LateCount),                           headerStyle);
             SetCell(totalRow, 8,  summaries.Sum(s => s.EarlyLeaveCount),                     headerStyle);
