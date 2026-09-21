@@ -198,6 +198,12 @@ public class AttendanceBackgroundService(
                 if (todayAssignmentByUser.TryGetValue(user.Id, out var crossDayAssign) && crossDayAssign.ShiftSchedule.IsCrossDay)
                     continue;
 
+                // 已经标记过"未打卡"的记录不再重复处理/重复发提醒——_lastAbsentDate 是内存变量，
+                // 应用如果恰好在 00:00-03:00 补跑窗口内重启，_lastAbsentDate 会归零，补跑逻辑会把
+                // "昨天"重新标一遍，之前已经正确标成"未打卡"、也已经发过提醒的记录会被这里无条件
+                // 再 Add 一条一模一样的 Notification，员工会收到重复提醒（2026-09-21 代码审查发现）
+                if (record.AttendanceStatus == AttendanceStatus.NotPunched) continue;
+
                 // 打了上班卡但没打下班卡 → 未打卡，并发提醒
                 record.AttendanceStatus = AttendanceStatus.NotPunched;
                 record.UpdatedAt        = DateTime.Now;

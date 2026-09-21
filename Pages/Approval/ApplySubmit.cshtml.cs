@@ -162,11 +162,18 @@ public class ApplySubmitModel(
             {
                 var shift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, DateOnly.FromDateTime(start)))?.ShiftSchedule;
                 var windows = shift?.ParseMidCheckWindows() ?? [];
+                var startTime = TimeOnly.FromDateTime(start);
+                var endTime   = TimeOnly.FromDateTime(end);
                 foreach (var w in windows)
                 {
-                    if (TimeOnly.FromDateTime(start) > w.Start && TimeOnly.FromDateTime(start) < w.End)
+                    // 窗口按左闭右开 [Start,End) 判：开始时间落在 [Start,End) 里（含 Start）要拒——
+                    // 比如窗口是午休 12:00-13:00，开始时间填 12:00 会被拒，只能填 13:00 或更晚；
+                    // 结束时间落在 (Start,End] 里（含 End）要拒——填 13:00 会被拒，只能填 12:00 或更早。
+                    // 以前用严格的 </> 判断，刚好把 12:00 当开始、13:00 当结束这两个边界值放过去了，
+                    // 而这两个值正是问题清单 §8-1 举的那个会多算一小时请假的例子本身（2026-09-21 修正）。
+                    if (startTime >= w.Start && startTime < w.End)
                         return $"请假开始时间不能选在班次的午间/中段时间窗口内（{w.Start:HH\\:mm}–{w.End:HH\\:mm}），请选窗口之前或之后的时间点";
-                    if (TimeOnly.FromDateTime(end) > w.Start && TimeOnly.FromDateTime(end) < w.End)
+                    if (endTime > w.Start && endTime <= w.End)
                         return $"请假结束时间不能选在班次的午间/中段时间窗口内（{w.Start:HH\\:mm}–{w.End:HH\\:mm}），请选窗口之前或之后的时间点";
                 }
             }
