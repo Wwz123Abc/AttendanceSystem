@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
@@ -60,7 +61,7 @@ public class AdminController(
     {
         if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId))
             return Forbid();
-        var contactError = ValidateContactFormat(req.Phone, req.IdNumber);
+        var contactError = ContactValidationHelper.ValidateContactFormat(req.Phone, req.IdNumber);
         if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
         var deviceIds = req.DeviceIds ?? [];
         if (!await ValidateDeviceScopeAsync(deviceIds))
@@ -100,7 +101,7 @@ public class AdminController(
         if (!await CanAccessUserAsync(id)) return Forbid();
         if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId))
             return Forbid();
-        var contactError = ValidateContactFormat(req.Phone, req.IdNumber);
+        var contactError = ContactValidationHelper.ValidateContactFormat(req.Phone, req.IdNumber);
         if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
         if (req.DeviceIds is not null && !await ValidateDeviceScopeAsync(req.DeviceIds))
             return Forbid();
@@ -155,11 +156,6 @@ public class AdminController(
         return await deptScopeService.CanAccessDeptAsync(Cu, deptId);
     }
 
-    /// <summary>勾选的这些考勤机是否都存在（且启用）、并且都在当前登录者的管理范围内——跟 UserManage
-    /// 页面 ValidateScopeForSaveAsync 里对 DeviceIds 的校验是同一个道理，防止受限管理员绕过 API
-    /// 把员工分配到别的分公司的设备上。必须先查"设备是否存在"：只查 DepartmentId 的话，一个瞎编的
-    /// 设备 id 会查出 null，对不受限的总部管理员来说"null 部门"天然放行——范围校验形同虚设，
-    /// 这个不存在的 id 会一路走到 SetUserDevicesAsync 插入 UserZKDevice 时才撞外键约束报 500。</summary>
     /// <summary>考勤机不做管理范围校验（2026-09-21 按业务要求取消隔离，方便员工借调到其他分公司时
     /// 直接推送到对方的考勤机），跟 UserManage 页面同口径——只确认设备真的存在且启用，不存在的 id
     /// 会查出 null，不然会一路走到 SetUserDevicesAsync 插入 UserZKDevice 时才撞外键约束报错（500）。</summary>
@@ -169,20 +165,6 @@ public class AdminController(
         if (idSet.Count == 0) return true;
         var validCount = await db.ZKDevices.CountAsync(d => idSet.Contains(d.Id) && d.IsActive);
         return validCount == idSet.Count;
-    }
-
-    /// <summary>手机号/身份证号格式校验，规则跟 UserManage 页面的 ValidateContact 保持一致——
-    /// 页面上虽然已经校验过，但直接调这两个接口能绕开页面，之前只校验了工号格式，手机号/身份证号
-    /// 完全没卡，畸形身份证号会让 CreateUserAsync 里"精确字符串匹配"的黑名单查重形同虚设。</summary>
-    private static string? ValidateContactFormat(string? phone, string? idNumber)
-    {
-        if (!string.IsNullOrWhiteSpace(phone) &&
-            !System.Text.RegularExpressions.Regex.IsMatch(phone.Trim(), @"^1[3-9]\d{9}$"))
-            return "请输入正确格式的手机号（11 位中国大陆手机号）";
-        if (!string.IsNullOrWhiteSpace(idNumber) &&
-            !System.Text.RegularExpressions.Regex.IsMatch(idNumber.Trim(), @"^\d{17}[\dXx]$"))
-            return "请输入正确格式的身份证号（18 位）";
-        return null;
     }
 
     /// <summary>

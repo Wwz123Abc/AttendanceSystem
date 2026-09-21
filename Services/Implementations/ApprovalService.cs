@@ -173,7 +173,17 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             }
         }
 
-        await CreateApprovalStepsAsync(request!, user, dto.ApproverUserId);   // 建审批节点
+        try
+        {
+            await CreateApprovalStepsAsync(request!, user, dto.ApproverUserId);   // 建审批节点
+        }
+        catch
+        {
+            // 建节点失败（比如没有可用审批人）：申请单已经落库，这里连带删掉，不留一张审不掉的脏单
+            db.ApprovalRequests.Remove(request!);
+            await db.SaveChangesAsync();
+            throw;
+        }
         await NotifyApproversAsync(request!);             // 通知第一个审批人
         return request!;
     }
@@ -439,7 +449,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         if (user?.AttendanceGroupId is null) return [];   // 没有考勤组，就没有名单可选
 
         return await db.AttendanceGroupApprovers
-            .Where(a => a.AttendanceGroupId == user.AttendanceGroupId)
+            .Where(a => a.AttendanceGroupId == user.AttendanceGroupId && a.Approver.IsActive)
             .Include(a => a.Approver)
             .OrderBy(a => a.Approver.RealName)
             .Select(a => new ApproverOptionDto
@@ -505,34 +515,39 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             approverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
         }
 
-        if (approverId.HasValue)
-        {
-            db.ApprovalSteps.Add(new ApprovalStep
-            {
-                ApprovalRequestId = request.Id,
-                ApproverUserId    = approverId.Value,
-                StepOrder         = 1,
-                ApprovalStatus    = ApprovalStatus.Pending,
-                CreatedAt         = DateTime.Now
-            });
+        // 没有任何可用审批人（没配名单、没上级、兜底也找不到一个在职管理员/文员覆盖这个部门）时，
+        // 以前这里什么都不做也不报错——申请单已经落库（在 SubmitApprovalAsync 里），却一个审批节点
+        // 都没建，NotifyApproversAsync 发现 firstStep 是 null 也直接返回、连通知都不发，整张单
+        // 永远停在"待审批"，没有任何人能处理（2026-09-21 代码审查发现）。改成显式抛异常，
+        // 调用方 SubmitApprovalAsync 会连带把已落库的申请单一起删掉，不会留下这种"审不掉"的脏单。
+        if (!approverId.HasValue)
+            throw new InvalidOperationException("没有找到可用的审批人，请联系管理员配置审批人或直属上级");
 
-            // 二级审批：一级节点通过后再自动追加一个申请人"直属上级"的节点。
-            // 组里没配审批人名单时，一级也是"直属上级 ?? 兜底"这同一个表达式——如果直接照旧生成二级节点，
-            // 会跟一级是同一个人，等于要同一个人对同一张单连点两次"通过"（2026-09-21 代码审查发现）。
-            // 这里两者相同就不再生成二级节点，一级通过即整单通过，跟单级审批的组行为一致。
-            if (group?.ApprovalLevel == ApprovalLevelType.Level2)
-            {
-                var level2ApproverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
-                if (level2ApproverId.HasValue && level2ApproverId.Value != approverId.Value)
-                    db.ApprovalSteps.Add(new ApprovalStep
-                    {
-                        ApprovalRequestId = request.Id,
-                        ApproverUserId    = level2ApproverId.Value,
-                        StepOrder         = 2,
-                        ApprovalStatus    = ApprovalStatus.Pending,
-                        CreatedAt         = DateTime.Now
-                    });
-            }
+        db.ApprovalSteps.Add(new ApprovalStep
+        {
+            ApprovalRequestId = request.Id,
+            ApproverUserId    = approverId.Value,
+            StepOrder         = 1,
+            ApprovalStatus    = ApprovalStatus.Pending,
+            CreatedAt         = DateTime.Now
+        });
+
+        // 二级审批：一级节点通过后再自动追加一个申请人"直属上级"的节点。
+        // 组里没配审批人名单时，一级也是"直属上级 ?? 兜底"这同一个表达式——如果直接照旧生成二级节点，
+        // 会跟一级是同一个人，等于要同一个人对同一张单连点两次"通过"（2026-09-21 代码审查发现）。
+        // 这里两者相同就不再生成二级节点，一级通过即整单通过，跟单级审批的组行为一致。
+        if (group?.ApprovalLevel == ApprovalLevelType.Level2)
+        {
+            var level2ApproverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
+            if (level2ApproverId.HasValue && level2ApproverId.Value != approverId.Value)
+                db.ApprovalSteps.Add(new ApprovalStep
+                {
+                    ApprovalRequestId = request.Id,
+                    ApproverUserId    = level2ApproverId.Value,
+                    StepOrder         = 2,
+                    ApprovalStatus    = ApprovalStatus.Pending,
+                    CreatedAt         = DateTime.Now
+                });
         }
 
         await db.SaveChangesAsync();
@@ -613,11 +628,19 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             "ApprovalPending", request.Id);
     }
 
-    /// <summary>审批结束（通过/驳回）后，通知申请人。</summary>
+    /// <summary>每处理完一个节点都会调用，通知申请人当前进展。以前统一按"Approved 才算已通过，否则
+    /// 一律算已驳回"，但多级审批里"中间级通过"时整单状态是 InProgress——既不是 Approved 也不是
+    /// Rejected，会被 else 分支误判成"已驳回"，导致申请人明明只是过了一级、后面还要再审一级，
+    /// 却收到一条"审批已驳回"的通知（2026-09-21 代码审查发现）。</summary>
     private async Task NotifyApplicantAsync(ApprovalRequest request)
     {
-        var statusText = request.ApprovalStatus == ApprovalStatus.Approved ? "已通过" : "已驳回";
-        await AddNotificationAsync(request.ApplicantUserId, $"审批{statusText}",
+        var statusText = request.ApprovalStatus switch
+        {
+            ApprovalStatus.Approved   => "已通过",
+            ApprovalStatus.InProgress => "已通过一级审批，待下一级审批",
+            _                         => "已驳回"
+        };
+        await AddNotificationAsync(request.ApplicantUserId, $"审批{(request.ApprovalStatus == ApprovalStatus.InProgress ? "进展" : statusText)}",
             $"您的{request.ApprovalType.ToDisplayName()}申请（{request.RequestNo}）{statusText}",
             "ApprovalResult", request.Id);
     }

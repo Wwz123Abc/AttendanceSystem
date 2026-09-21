@@ -199,7 +199,7 @@
                                     <td class="small">@(u.Department?.DeptName ?? "—")</td>
                                     <td><span class="badge bg-secondary">@u.Role.ToDisplayName()</span></td>
                                     <td>
-                                        @if (u.Role == UserRole.Admin)
+                                        @if (u.Role is UserRole.Admin or UserRole.Clerk)
                                         { <span class="badge bg-primary">正式工</span> }
                                         else
                                         { <span class="badge bg-light text-muted">临时工</span> }
@@ -435,7 +435,7 @@
                                 <option value="Clerk">文员</option>
                                 <option value="Admin">管理员</option>
                             </select>
-                            <div class="form-text">本系统只有"管理员"是正式工，其余角色均为临时工。</div>
+                            <div class="form-text">本系统"管理员""文员"是正式工，其余角色均为临时工。</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">部门 <span class="text-danger" id="fDeptIdReq">*</span></label>

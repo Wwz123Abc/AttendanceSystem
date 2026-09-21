@@ -13,7 +13,7 @@ namespace AttendanceSystem.Services.Implementations;
 /// 考勤核心服务：打卡、考勤记录查询、月度汇总等。
 /// 打卡时会根据员工的考勤组/班次，实时算出迟到、早退、加班、实际工时和考勤状态。
 /// </summary>
-public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptions> appOptions) : IAttendanceService
+public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptions> appOptions, ILogger<AttendanceService> logger) : IAttendanceService
 {
     private const int MaxPunchAttempts = 5;
 
@@ -33,9 +33,19 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             {
                 return await PunchCoreAsync(userId, request, skipLocationCheck);
             }
-            catch (DbUpdateException) when (attempt < MaxPunchAttempts)
+            catch (DbUpdateException ex) when (attempt < MaxPunchAttempts)
             {
+                logger.LogWarning(ex, "打卡写入冲突，第 {Attempt} 次重试（用户 {UserId}）", attempt, userId);
                 db.ChangeTracker.Clear();   // 丢弃这次没保存成功的改动，下一轮重新从数据库读最新状态
+            }
+            catch (Exception ex)
+            {
+                // 以前这里完全没有日志——重试耗尽或遇到非 DbUpdateException 的异常时，唯一调用方
+                // RemotePunch.cshtml.cs 会把 ex.Message（EF 原始异常文本）直接显示给员工，运维这边
+                // 却查不到任何真实原因（2026-09-21 代码审查发现）。这里补上日志再往上抛，
+                // 调用方改成显示统一的友好文案，不再把内部异常细节暴露给员工。
+                logger.LogError(ex, "打卡失败，用户 {UserId}", userId);
+                throw;
             }
         }
         // 理论上到不了这里：循环最后一次要么 return，要么让异常继续往上抛
@@ -243,6 +253,12 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         record.UpdatedAt = now;
         await db.SaveChangesAsync();
+
+        // 同步刷新这个月的月度汇总，跟审批回写/管理员手动补卡是同一个道理——不然跨月夜班下班卡、
+        // 设备断网补传等场景落在"月初自动生成汇总"之后时，月度汇总会停留在陈旧数字，要等下次人工点
+        // "重新生成"或员工自己打开"我的日历"（只重算当月）才会更新；上月的汇总不会自己更新
+        // （2026-09-21 代码审查发现）。只传这一个人，不会引发全库重算。
+        await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
 
         // 把结果返回给网页显示
         return new PunchResponseDto
@@ -815,6 +831,31 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         }
 
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>"我的记录"/"我的日历"共用：确保这个人这个月的汇总是新鲜的，不是每次打开页面都无条件
+    /// 重算一遍——"我的日历"以前是每次 GET 都调 GenerateMonthlySummaryAsync，哪怕数据毫无变化也会
+    /// 产生一次 UPDATE；"我的记录"则完全不重算，只读现有汇总行，当月还没生成过汇总时会显示空白，
+    /// 跟"我的日历"（强制重算，总有数据）表现不一致，容易让人以为哪个页面出了 bug（2026-09-21
+    /// 代码审查发现，见 docs/项目审查与问题总表.md B3/C3）。</summary>
+    public async Task EnsureMonthlySummaryFreshAsync(int userId, int year, int month)
+    {
+        var summary = await db.MonthlyAttendanceSummaries
+            .FirstOrDefaultAsync(s => s.UserId == userId && s.Year == year && s.Month == month);
+        if (summary is null)
+        {
+            await GenerateMonthlySummaryAsync(year, month, [userId]);
+            return;
+        }
+
+        var start = new DateOnly(year, month, 1);
+        var end   = start.AddMonths(1).AddDays(-1);
+        var latestRecordUpdate = await db.AttendanceRecords
+            .Where(r => r.UserId == userId && r.WorkDate >= start && r.WorkDate <= end)
+            .Select(r => (DateTime?)r.UpdatedAt)
+            .MaxAsync() ?? DateTime.MinValue;
+        if (latestRecordUpdate > summary.UpdatedAt)
+            await GenerateMonthlySummaryAsync(year, month, [userId]);
     }
 
     /// <summary>今日考勤看板统计（出勤/旷工/迟到/请假/未打卡人数）。</summary>

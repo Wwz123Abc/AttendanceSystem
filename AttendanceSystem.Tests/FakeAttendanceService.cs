@@ -29,6 +29,7 @@ public class FakeAttendanceService : IAttendanceService
     public Task<List<MyScheduleDto>> GetMyScheduleAsync(int userId, int year, int month) => throw new NotImplementedException();
     public Task<List<MonthlySummaryDto>> GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null) => throw new NotImplementedException();
     public Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null) => throw new NotImplementedException();
+    public Task EnsureMonthlySummaryFreshAsync(int userId, int year, int month) => throw new NotImplementedException();
     public Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null) => throw new NotImplementedException();
     public Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null) => throw new NotImplementedException();
     public Task<bool> IsHolidayAsync(DateOnly date, int? groupId = null) => throw new NotImplementedException();

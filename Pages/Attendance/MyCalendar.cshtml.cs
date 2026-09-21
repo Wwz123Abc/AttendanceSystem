@@ -41,10 +41,11 @@ public class MyCalendarModel(IAttendanceService attendanceService) : AppPageMode
         var holidays = await attendanceService.GetMonthHolidaysAsync(Year, Month, groupId);
 
         // 月度汇总平时只在”月初自动生成上个月”或管理员打开月度报表时才会算，本月进行中的汇总一直是空的，
-        // 员工自己在日历页也看不到本月概况。这里跟月度报表页一样，打开就顺带重算一遍当月汇总再读出来——
+        // 员工自己在日历页也看不到本月概况。这里只在没有汇总行、或汇总行比考勤记录更新时间还旧时才重算
+        // （EnsureMonthlySummaryFreshAsync），不是每次打开页面、哪怕数据毫无变化也无条件重算一遍写库；
         // 只传自己的 userId，只重算自己这一条，不是不分青红皂白重算全公司所有人（这里任何登录员工都能到达，
         // year/month 还是 URL 任意指定的，之前不限范围重算全库是个很容易被反复触发的重负载操作）
-        await attendanceService.GenerateMonthlySummaryAsync(Year, Month, [userId]);
+        await attendanceService.EnsureMonthlySummaryFreshAsync(userId, Year, Month);
         Summary = await attendanceService.GetMonthlySummaryAsync(userId, Year, Month);
 
         var recByDate     = records.ToDictionary(r => r.WorkDate);

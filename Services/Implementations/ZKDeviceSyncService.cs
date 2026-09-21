@@ -13,7 +13,11 @@ namespace AttendanceSystem.Services.Implementations;
 /// 上班/下班按"当天第一次算上班、之后都算下班"自动判断（不少机型没有签到/签退按键，
 /// 设备上报的状态不可靠），迟到/早退状态当场按班次计算。
 /// </summary>
-public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncService> logger, IOptions<AppSettingsOptions> appOptions) : IZKDeviceSyncService
+public class ZKDeviceSyncService(
+    AttendanceDbContext db,
+    ILogger<ZKDeviceSyncService> logger,
+    IOptions<AppSettingsOptions> appOptions,
+    IAttendanceService attendanceService) : IZKDeviceSyncService
 {
     private const int MaxAttempts = 5;
 
@@ -307,6 +311,13 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
         }
 
         await db.SaveChangesAsync(ct);
+
+        // 同步刷新这一批实际受影响的人当月的月度汇总——跟本地打卡（PunchCoreAsync）、审批回写、
+        // 管理员手动补卡是同一个道理：不然跨月夜班下班卡、设备断网补传落在"月初自动生成汇总"之后时，
+        // 月度汇总会停留在陈旧数字（2026-09-21 代码审查发现）。按(人,月)去重，避免同一批里同一个人
+        // 涉及好几天都在同一个月时被重复刷新好几遍。
+        foreach (var (uid, year, month) in touchedKeys.Select(k => (k.UserId, k.WorkDate.Year, k.WorkDate.Month)).Distinct())
+            await attendanceService.GenerateMonthlySummaryAsync(year, month, [uid]);
     }
 
     /// <summary>

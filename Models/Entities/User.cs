@@ -42,10 +42,10 @@ public class User
 
     /// <summary>
     /// 用工性质（由角色推导，仅展示用，不单独存库）：
-    /// 本系统里只有「管理员」是正式工，其余角色（文员/主管/班组长/员工）一律是临时工。
+    /// 「管理员」「文员」是正式工，其余角色（主管/班组长/员工）一律是临时工（2026-09-21 起文员也算正式工）。
     /// </summary>
     [NotMapped]
-    public string EmploymentTypeText => Role == UserRole.Admin ? "正式工" : "临时工";
+    public string EmploymentTypeText => Role is UserRole.Admin or UserRole.Clerk ? "正式工" : "临时工";
 
     public int? AttendanceGroupId { get; set; }             // 所属考勤组的编号（可空）
 

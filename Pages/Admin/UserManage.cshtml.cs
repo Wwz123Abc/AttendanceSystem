@@ -528,14 +528,11 @@ public class UserManageModel(
 
         if (requirePhone && string.IsNullOrWhiteSpace(Phone))
             throw new InvalidOperationException("请填写手机号（用于以后自助找回密码）");
-        if (!string.IsNullOrWhiteSpace(Phone) &&
-            !System.Text.RegularExpressions.Regex.IsMatch(Phone.Trim(), @"^1[3-9]\d{9}$"))
+        if (!string.IsNullOrWhiteSpace(Phone) && !ContactValidationHelper.IsValidPhone(Phone))
             throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
-        if (!string.IsNullOrWhiteSpace(EmergencyContactPhone) &&
-            !System.Text.RegularExpressions.Regex.IsMatch(EmergencyContactPhone.Trim(), @"^1[3-9]\d{9}$"))
+        if (!string.IsNullOrWhiteSpace(EmergencyContactPhone) && !ContactValidationHelper.IsValidPhone(EmergencyContactPhone))
             throw new InvalidOperationException("请输入正确格式的紧急联系人电话（11 位中国大陆手机号）");
-        if (!string.IsNullOrWhiteSpace(IdNumber) &&
-            !System.Text.RegularExpressions.Regex.IsMatch(IdNumber.Trim(), @"^\d{17}[\dXx]$"))
+        if (!string.IsNullOrWhiteSpace(IdNumber) && !ContactValidationHelper.IsValidIdNumber(IdNumber))
             throw new InvalidOperationException("请输入正确格式的身份证号（18 位）");
 
         if (!string.IsNullOrWhiteSpace(Position) && Position.Trim().Length > 100)

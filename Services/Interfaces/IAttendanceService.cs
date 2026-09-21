@@ -36,6 +36,10 @@ public interface IAttendanceService
     /// <summary>生成/重算指定月份的考勤汇总；onlyUserIds 不为空时只重算这批人（审批回写/手动补卡/分公司管理员
     /// 批量重算范围内员工时用，一次调用批量处理，避免调用方自己逐人循环调用导致的重复查库）。</summary>
     Task                           GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null);
+    /// <summary>"我的记录"/"我的日历"共用：确保这个人这个月的汇总是新鲜的——没有汇总行就生成一份；
+    /// 已有的话，只有当这个月的考勤记录比汇总行更新（比如刚打了卡、审批刚回写）时才重算，避免
+    /// 每次单纯打开页面查看、数据毫无变化时也无条件重算一遍、白白写一次库。</summary>
+    Task                           EnsureMonthlySummaryFreshAsync(int userId, int year, int month);
     /// <summary>今日考勤看板统计（出勤、缺勤、迟到等）。<paramref name="deptIds"/> 非空时只统计部门在这个
     /// 集合内的员工——分公司管理员登录时用来把看板收窄到自己管理范围内，不受限管理员不传（看全公司）。</summary>
     Task<AttendanceStatsDto>       GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null);

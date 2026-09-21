@@ -90,7 +90,7 @@
                         <h4 class="mb-1">
                             @e.RealName
                             <span class="badge bg-secondary align-middle">@e.Role.ToDisplayName()</span>
-                            @if (e.Role == UserRole.Admin)
+                            @if (e.Role is UserRole.Admin or UserRole.Clerk)
                             { <span class="badge bg-primary align-middle">正式工</span> }
                             else
                             { <span class="badge bg-light text-muted align-middle">临时工</span> }

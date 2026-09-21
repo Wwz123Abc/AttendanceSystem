@@ -78,6 +78,15 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         a.IsActive  = false;
         a.UpdatedAt = DateTime.Now;
         await db.SaveChangesAsync();
+
+        // 撤下的同时把发布时给每个受众发的站内通知一并标已读，不然铃铛里还留着这条、
+        // 点进去却因为 IsActive=false 在公告栏里看不到了（NotificationController 的未读列表
+        // 只看 UserId/IsRead，不管公告本身是不是已经撤下——2026-09-21 代码审查发现）
+        await db.Notifications
+            .Where(n => n.NotificationType == "Announcement" && n.RelatedId == announcementId && !n.IsRead)
+            .ExecuteUpdateAsync(n => n
+                .SetProperty(x => x.IsRead, true)
+                .SetProperty(x => x.ReadAt, DateTime.Now));
         return true;
     }
 
@@ -100,13 +109,24 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
                 // 不然跨司共用组发的公告，两边分公司管理员都能撤
                 return groupDeptIds.Count > 0 && groupDeptIds.All(visibleDeptIds.Contains);
             case AnnouncementScopeType.DirectReports:
-                var publisherDeptId = await db.Users.Where(u => u.Id == a.PublisherUserId)
-                    .Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
-                return publisherDeptId.HasValue && visibleDeptIds.Contains(publisherDeptId.Value);
+                // 不能用"发布人现在所在的部门"判断——真正的受众是发布时 ResolveAudienceAsync 按
+                // SupervisorUserId 算出来的那批人，发布人后续调岗不会改变已经发出去的这条公告的受众。
+                // 用 AnnouncementReads 里实际留底的受众名单反查他们的部门，才是这条公告真实覆盖的范围
+                // （2026-09-21 代码审查发现：原实现会因为发布人调岗，让"能不能撤/查已读"的判定跟着
+                // 发布人的新部门变，而不是跟着这条公告实际发给了谁）
+                var audienceDeptIds = await db.AnnouncementReads.Where(r => r.AnnouncementId == a.Id)
+                    .Join(db.Users, r => r.UserId, u => u.Id, (r, u) => u.DepartmentId)
+                    .Where(d => d != null).Select(d => d!.Value).Distinct().ToListAsync();
+                return audienceDeptIds.Count > 0 && audienceDeptIds.All(visibleDeptIds.Contains);
             default:
                 return false;
         }
     }
+
+    /// <summary>公告栏最多显示这么多条——以前不限条数，一个部门/全公司发久了公告栏会无限变长，
+    /// 每次打开都要整表拉回来（2026-09-21 代码审查发现）。按时间只留最近这些，不做真分页
+    /// （公告本来就不是需要往前翻很久的内容，旧的仍然在"我的已发布"里能查到）。</summary>
+    private const int BoardMaxItems = 200;
 
     public async Task<List<AnnouncementBoardItemDto>> GetBoardForUserAsync(int userId)
     {
@@ -114,6 +134,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
             .Include(r => r.Announcement).ThenInclude(a => a.Publisher)
             .Where(r => r.UserId == userId && r.Announcement.IsActive)
             .OrderByDescending(r => r.Announcement.CreatedAt)
+            .Take(BoardMaxItems)
             .Select(r => new AnnouncementBoardItemDto
             {
                 Id            = r.Announcement.Id,
@@ -140,6 +161,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
             .Include(a => a.Reads)
             .Where(a => a.PublisherUserId == publisherUserId)
             .OrderByDescending(a => a.CreatedAt)
+            .Take(BoardMaxItems)
             .ToListAsync();
 
         // 范围文字要查部门/考勤组名字，一次性批量查出来，避免在循环里逐条查库

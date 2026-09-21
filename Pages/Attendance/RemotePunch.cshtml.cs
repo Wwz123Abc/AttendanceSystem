@@ -200,9 +200,20 @@ public class RemotePunchModel(
                 if (!IsSuccess) ErrorMessage = punchResult.Message;
             }
         }
+        catch (InvalidOperationException ex)
+        {
+            // 本文件（以及它调用的 AttendanceService/AliyunFaceClient）里 InvalidOperationException
+            // 的 Message 都是特意写好给员工看的中文提示，可以直接显示
+            ErrorMessage = ex.Message;
+        }
         catch (Exception ex)
         {
-            ErrorMessage = ex.Message;
+            // 其它类型是内部框架异常（比如 PunchAsync 重试耗尽后抛出的 DbUpdateException），
+            // 不能把原始报错文本直接显示给员工——真实异常已经在 AttendanceService.PunchAsync 里
+            // 记了日志，这里只给统一的友好文案（2026-09-21 代码审查发现：以前这里不分青红皂白
+            // 把 ex.Message 显示给员工，而 PunchAsync 当时完全没有日志，出问题只能靠员工截图报错）
+            logger.LogError(ex, "远程打卡失败，UserId={UserId}", CurrentUserId);
+            ErrorMessage = "打卡失败，请稍后重试或联系管理员";
         }
 
         await LoadStateAsync();
