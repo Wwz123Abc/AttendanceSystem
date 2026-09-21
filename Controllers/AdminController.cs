@@ -160,16 +160,15 @@ public class AdminController(
     /// 把员工分配到别的分公司的设备上。必须先查"设备是否存在"：只查 DepartmentId 的话，一个瞎编的
     /// 设备 id 会查出 null，对不受限的总部管理员来说"null 部门"天然放行——范围校验形同虚设，
     /// 这个不存在的 id 会一路走到 SetUserDevicesAsync 插入 UserZKDevice 时才撞外键约束报 500。</summary>
+    /// <summary>考勤机不做管理范围校验（2026-09-21 按业务要求取消隔离，方便员工借调到其他分公司时
+    /// 直接推送到对方的考勤机），跟 UserManage 页面同口径——只确认设备真的存在且启用，不存在的 id
+    /// 会查出 null，不然会一路走到 SetUserDevicesAsync 插入 UserZKDevice 时才撞外键约束报错（500）。</summary>
     private async Task<bool> ValidateDeviceScopeAsync(IEnumerable<int> deviceIds)
     {
-        foreach (var deviceId in deviceIds)
-        {
-            var device = await db.ZKDevices.Where(d => d.Id == deviceId && d.IsActive)
-                .Select(d => new { d.DepartmentId }).FirstOrDefaultAsync();
-            if (device is null) return false;
-            if (!await deptScopeService.CanAccessDeptAsync(Cu, device.DepartmentId)) return false;
-        }
-        return true;
+        var idSet = deviceIds.Distinct().ToList();
+        if (idSet.Count == 0) return true;
+        var validCount = await db.ZKDevices.CountAsync(d => idSet.Contains(d.Id) && d.IsActive);
+        return validCount == idSet.Count;
     }
 
     /// <summary>手机号/身份证号格式校验，规则跟 UserManage 页面的 ValidateContact 保持一致——
@@ -319,7 +318,9 @@ public class AdminController(
     [HttpPost("attendance-groups")]
     public async Task<IActionResult> CreateAttendanceGroup([FromBody] AttendanceGroup group)
     {
-        if (Cu.IsScoped) return Forbid();
+        // 只判 IsScoped 挡不住"没被设置范围、但角色只是文员"的账号（IsScoped 恒为 false）——
+        // 跟 ValidateUserScopeAsync（:221）、ApplyScopeAfterSaveAsync（:199）用同一套口径
+        if (Cu.IsScoped || Cu.Role != UserRole.Admin) return Forbid();
 
         group.CreatedAt = group.UpdatedAt = DateTime.Now;
         db.AttendanceGroups.Add(group);

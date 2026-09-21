@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
+using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
@@ -24,6 +25,9 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
         [FromQuery] int? deptId, [FromQuery] int? groupId,
         [FromQuery] int year, [FromQuery] int month)
     {
+        var rangeError = ValidateYearMonth(year, month);
+        if (rangeError != null) return BadRequest(new { Success = false, Message = rangeError });
+
         var cu = HttpContext.GetCurrentUser()!;
         deptId = await deptScopeService.ResolveEffectiveDeptIdAsync(cu, deptId);
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
@@ -60,20 +64,37 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
     public async Task<IActionResult> GenerateMonthlySummary(
         [FromQuery] int year, [FromQuery] int month)
     {
+        var rangeError = ValidateYearMonth(year, month);
+        if (rangeError != null) return BadRequest(new { Success = false, Message = rangeError });
+
         var cu = HttpContext.GetCurrentUser()!;
-        if (!cu.IsScoped)
+        // 只判 IsScoped 挡不住"没被设置范围、但角色只是文员"的账号（IsScoped 恒为 false）——
+        // 这类账号本不该能一次性重算全公司的月度汇总，跟 AdminController 里同款校验用同一套口径
+        if (cu.Role == UserRole.Admin && !cu.IsScoped)
         {
             await attendanceService.GenerateMonthlySummaryAsync(year, month);
         }
         else
         {
             var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
-            var userIds = await db.Users.Where(u => u.DepartmentId != null && visibleIds!.Contains(u.DepartmentId.Value))
-                .Select(u => u.Id).ToListAsync();
+            // visibleIds 为 null 说明这是个没设置管理范围、角色又不是 Admin 的异常账号（本不该存在），
+            // 按"看不到任何人"兜底，不能当成"不受限"落到上面的全库分支
+            var userIds = visibleIds is null
+                ? []
+                : await db.Users.Where(u => u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value))
+                    .Select(u => u.Id).ToListAsync();
             // 一次调用把这批人整批传进去（原来是逐人循环调用，等于一遍遍重复批量查同一个月的
             // 考勤记录/排班/假期表，人数一多这个接口会明显变慢）
             await attendanceService.GenerateMonthlySummaryAsync(year, month, userIds);
         }
         return Ok(new { Success = true, Message = $"{year}年{month}月考勤汇总已生成" });
+    }
+
+    /// <summary>非法的 year/month（比如 month=13）传下去会在构造 DateOnly 时直接抛异常报 500，这里提前挡住。</summary>
+    private static string? ValidateYearMonth(int year, int month)
+    {
+        if (month is < 1 or > 12) return "月份不正确";
+        if (year is < 2000 or > 2100) return "年份不正确";
+        return null;
     }
 }

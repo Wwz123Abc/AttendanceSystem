@@ -271,11 +271,6 @@ function showDay(dateStr) {
     dayModal.show();
 }
 
-// 备注可能带有员工自己填的出差目的地这类自由文本，不能直接拼进 HTML（存储型 XSS）
-function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s ?? '';
-    return d.innerHTML;
-}
+// escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 </script>
 }

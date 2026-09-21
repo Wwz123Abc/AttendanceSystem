@@ -999,7 +999,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 超过 200 字上限，SaveChangesAsync 会直接报数据库层面的"数据太长"错误——这里在拼接后统一截断到
     /// 200 字以内（截断时带上省略号，不会悄无声息地丢内容却看不出来），当最后一道安全网。
     /// </summary>
-    private static void AppendApprovalNote(AttendanceRecord record, string note)
+    internal static void AppendApprovalNote(AttendanceRecord record, string note)
     {
         var combined = string.IsNullOrEmpty(record.ApprovalNote) ? note : $"{record.ApprovalNote}；{note}";
         record.ApprovalNote = combined.Length > 200 ? combined[..197] + "..." : combined;
@@ -1258,8 +1258,21 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// （否则人有全天工时却仍被记旷工，工资和出勤对不上）。上下班两次卡都有且下班晚于上班才会重算；
     /// 加班不再从打卡时间估算，只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
     /// </summary>
+    /// <summary>上下班卡都有、但下班时间早于或等于上班时间（时间倒挂，通常是手动补卡填反了，或者
+    /// 设备/客户端时钟异常）时用来提醒的说明文字——这种记录不满足"两个 null 判断"，之前会被当天
+    /// 补卡后的三处工时结算逻辑直接跳过，工时永远停在占位值 0，且不出现在任何异常统计里，管理员
+    /// 完全看不出这天有问题（2026-09-21 代码审查发现）。这里不猜"最终有效时间"去强行重算，只是
+    /// 把异常显式记进 ApprovalNote，让管理员能看到、去人工核实；用 Contains 判重，避免同一条记录
+    /// 每次触发结算都重复追加同一句话。</summary>
+    internal const string ClockTimeInvertedNote = "打卡时间异常（下班时间早于或等于上班时间），工时未结算，需人工核实";
+
     private async Task RecalcWorkHoursAfterManualPunchAsync(AttendanceRecord record, int userId)
     {
+        if (record.ClockInTime.HasValue && record.ClockOutTime is { } coRaw && coRaw <= record.ClockInTime.Value
+            && (record.ApprovalNote is null || !record.ApprovalNote.Contains(ClockTimeInvertedNote)))
+        {
+            AppendApprovalNote(record, ClockTimeInvertedNote);
+        }
         if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) return;
 
         var applicant   = await db.Users.FindAsync(userId);
@@ -1621,16 +1634,17 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     public static decimal ApplyLeaveHoursCap(decimal computedHours, decimal leaveHours, decimal standardHours) =>
         Math.Min(computedHours, Math.Max(0, standardHours - leaveHours));
 
-    /// <summary>把这天的请假小时数折算成"请假天数"：占当天标准工时的比例 >0.5 算 1 天，恰好 0.5
-    /// （标准的半天假）算 0.5 天，>0 且 <0.5 也算半天，其余（占比 0 或标准工时未知）算 0 天。
-    /// 供月度汇总的 LeaveDays 统计用（2026-09-17 支持半天请假后，请假天数不再是"这天状态是
-    /// 请假就算一整天"；边界定成 ">0.5" 而不是 "≥0.5"，让最常见的"请 4 小时/标准工时 8 小时"
-    /// 半天假场景正确落在 0.5 天，不会被算成整天）。</summary>
+    /// <summary>把这天的请假小时数折算成"请假天数"：占当天标准工时的比例四舍五入到最近的 0.5 天
+    /// （占比 ≥0.75 算 1 天，[0.25, 0.75) 算 0.5 天，&lt;0.25 算 0 天）。供月度汇总的 LeaveDays
+    /// 统计用。旧口径是"占比 >0.5 才算 1 天，否则一律算 0.5 天"，导致同样是"半天假"，上午请假
+    /// （比如 3.5h/8h=43.75%）算 0.5 天、下午请假（4.5h/8h=56.25%）却算 1 整天——两种半天假因为
+    /// 占比刚好卡在 0.5 两侧，天数差一倍；改成就近取整到 0.5 后两者都落在 0.5 天，不再不对称
+    /// （2026-09-21）。</summary>
     public static decimal ResolveLeaveDaysFraction(decimal leaveHours, decimal standardHours)
     {
         if (standardHours <= 0) return 0m;
         var ratio = leaveHours / standardHours;
-        return ratio > 0.5m ? 1m : ratio > 0m ? 0.5m : 0m;
+        return ratio >= 0.75m ? 1m : ratio >= 0.25m ? 0.5m : 0m;
     }
 
     /// <summary>

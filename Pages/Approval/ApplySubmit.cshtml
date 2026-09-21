@@ -360,12 +360,7 @@ function renderFileList() {
     ).join('');
 }
 
-// 文件名是用户从自己电脑选的本地文件名，理论上可以包含任意字符，拼进 HTML 前统一转义一下
-function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s ?? '';
-    return d.innerHTML;
-}
+// escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 
 function showAttachments(urls) {
     alert('附件：\n' + urls.join('\n'));

@@ -54,6 +54,9 @@ public class AttendanceController(IAttendanceService attendanceService, IDeptSco
         [FromQuery] int? deptId, [FromQuery] int? groupId,
         [FromQuery] int year, [FromQuery] int month)
     {
+        if (month is < 1 or > 12) return BadRequest(new { Success = false, Message = "月份不正确" });
+        if (year is < 2000 or > 2100) return BadRequest(new { Success = false, Message = "年份不正确" });
+
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
         var list = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month, visibleIds);
         return Ok(new { Success = true, Data = list, Total = list.Count });

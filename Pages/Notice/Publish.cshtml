@@ -195,12 +195,6 @@ document.querySelectorAll('.read-detail-btn').forEach(btn => {
     });
 });
 
-// 姓名是员工自助登记时自己填的自由文本，不能直接拼进 HTML（存储型 XSS 风险），
-// 这里转义成安全文本；工号一般是系统生成的固定格式，顺手一起转义，成本为零
-function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s ?? '';
-    return d.innerHTML;
-}
+// escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 </script>
 }

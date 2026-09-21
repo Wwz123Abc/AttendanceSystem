@@ -516,11 +516,14 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 CreatedAt         = DateTime.Now
             });
 
-            // 二级审批：一级节点通过后再自动追加一个申请人"直属上级"的节点
+            // 二级审批：一级节点通过后再自动追加一个申请人"直属上级"的节点。
+            // 组里没配审批人名单时，一级也是"直属上级 ?? 兜底"这同一个表达式——如果直接照旧生成二级节点，
+            // 会跟一级是同一个人，等于要同一个人对同一张单连点两次"通过"（2026-09-21 代码审查发现）。
+            // 这里两者相同就不再生成二级节点，一级通过即整单通过，跟单级审批的组行为一致。
             if (group?.ApprovalLevel == ApprovalLevelType.Level2)
             {
                 var level2ApproverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
-                if (level2ApproverId.HasValue)
+                if (level2ApproverId.HasValue && level2ApproverId.Value != approverId.Value)
                     db.ApprovalSteps.Add(new ApprovalStep
                     {
                         ApprovalRequestId = request.Id,

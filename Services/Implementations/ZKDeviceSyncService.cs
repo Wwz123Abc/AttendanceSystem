@@ -234,6 +234,15 @@ public class ZKDeviceSyncService(AttendanceDbContext db, ILogger<ZKDeviceSyncSer
         foreach (var (uid, workDate) in touchedKeys)
         {
             var record = recordMap[(uid, workDate)];
+            // 时间倒挂（下班≤上班，通常是设备时钟异常/补录乱序）不猜"最终有效时间"去强行重算，
+            // 只记进 ApprovalNote 提醒人工核实，跟 AttendanceService.RecalcWorkHoursAfterManualPunchAsync
+            // 同一处理方式（2026-09-21 代码审查发现：以前这种记录直接跳过，工时停在占位值 0，
+            // 且不出现在任何异常统计里，管理员完全看不出来）
+            if (record.ClockInTime.HasValue && record.ClockOutTime is { } coRaw && coRaw <= record.ClockInTime.Value
+                && (record.ApprovalNote is null || !record.ApprovalNote.Contains(AttendanceService.ClockTimeInvertedNote)))
+            {
+                AttendanceService.AppendApprovalNote(record, AttendanceService.ClockTimeInvertedNote);
+            }
             if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) continue;
 
             groupIdByUser.TryGetValue(uid, out var groupId);

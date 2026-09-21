@@ -532,7 +532,13 @@ public class UserService(
         if (user is null) return;
 
         var existing = await db.UserZKDevices.Where(m => m.UserId == userId).ToListAsync();
-        var toRemove = existing.Where(m => !idSet.Contains(m.ZKDeviceId)).ToList();
+        // 停用中的设备不进候选列表（见 UserManage.cshtml.cs 的 AssignableDevices），管理员在界面上
+        // 根本看不到这台设备、也没法勾选保留它——这次提交的 deviceIds 里天然不会包含它。如果不排除
+        // 停用设备，diff 会把它当成"这次没勾选=要解除"处理，导致设备一停用，下次随便编辑一下这个人
+        // 的资料就会静默解绑、还真去下发一条删除该员工人脸信息的指令；重新启用后又得手动重新绑定
+        // （2026-09-21 发现）。只对"仍启用"的设备做去留判断，停用设备的绑定原样保留。
+        var activeIds = await db.ZKDevices.Where(d => d.IsActive).Select(d => d.Id).ToHashSetAsync();
+        var toRemove = existing.Where(m => activeIds.Contains(m.ZKDeviceId) && !idSet.Contains(m.ZKDeviceId)).ToList();
         var toAddIds = idSet.Except(existing.Select(m => m.ZKDeviceId)).ToList();
         var removedDeviceIds = toRemove.Select(m => m.ZKDeviceId).ToList();
 

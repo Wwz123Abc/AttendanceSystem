@@ -47,7 +47,23 @@ public class AttendanceBackgroundService(
                 // 把这天误标记成"已处理"，同一晚窗口内下一分钟还会自动重试。
                 if (now.Hour == 23 && now.Minute >= 55 && _lastAbsentDate.Date < now.Date)
                 {
-                    await MarkAbsentAsync();
+                    await MarkAbsentAsync(DateOnly.FromDateTime(now.Date));
+                    _lastAbsentDate = now;
+                }
+                // 补跑：如果 23:55-23:59 这 5 分钟整窗口都没标记成功（数据库宕机超过 5 分钟、应用在
+                // 这段时间反复重启等），过了午夜 now.Hour == 23 就再也不成立，原来没有任何补跑路径，
+                // 当天的旷工/未打卡会被永久跳过。这里跟月度汇总的 2、3 号补跑是同一个思路：次日凌晨
+                // 0-3 点这段时间，只要发现"昨天"还没标记过，就把从上次标记成功的次日起、到昨天为止
+                // 逐天补标一遍（MarkAbsentAsync 对同一天重复调用是幂等的：旷工状态只是覆盖，不会
+                // 重复插入记录；提醒通知只在"当天完全没有记录"这个分支发一次，重复调用不会再命中，
+                // 不会重复打扰员工）。_lastAbsentDate 是 MinValue（比如刚上线还从没标记过）时，
+                // 只补昨天一天，不会一路补到系统最早上线那天（2026-09-21 新增）。
+                else if (now.Hour is >= 0 and < 3 && _lastAbsentDate.Date < now.Date.AddDays(-1))
+                {
+                    var yesterday = now.Date.AddDays(-1);
+                    var from = _lastAbsentDate == DateTime.MinValue ? yesterday : _lastAbsentDate.Date.AddDays(1);
+                    for (var d = from; d <= yesterday; d = d.AddDays(1))
+                        await MarkAbsentAsync(DateOnly.FromDateTime(d));
                     _lastAbsentDate = now;
                 }
 
@@ -82,15 +98,15 @@ public class AttendanceBackgroundService(
     }
 
     /// <summary>
-    /// 扫描当天所有在职员工：没记录/没打上班卡 → 旷工；打了上班卡但没打下班卡 → 未打卡。
-    /// 节假日（以及非补班日的周末）跳过；对旷工/缺卡发提醒通知。
+    /// 扫描 <paramref name="today"/> 这一天所有在职员工：没记录/没打上班卡 → 旷工；打了上班卡但没打
+    /// 下班卡 → 未打卡。节假日（以及非补班日的周末）跳过；对旷工/缺卡发提醒通知。参数化成任意日期
+    /// 是为了给补跑用——正常每天 23:55-23:59 传的就是当天，补跑时传的是错过的历史日期。
     /// </summary>
-    private async Task MarkAbsentAsync()
+    private async Task MarkAbsentAsync(DateOnly today)
     {
         // 后台任务里要自己开一个“作用域”来拿数据库（不能直接用构造函数注入的，生命周期不同）
         using var scope = scopeFactory.CreateScope();
         var db    = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
-        var today = DateOnly.FromDateTime(DateTime.Today);
 
         var users = await db.Users.Where(u => u.IsActive).ToListAsync();
 

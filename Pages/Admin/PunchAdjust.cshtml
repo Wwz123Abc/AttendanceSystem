@@ -175,12 +175,6 @@ async function loadCurrentRecord() {
     } catch (e) { alert('查询失败，请重试'); }
 }
 
-// 备注（ApprovalNote）里可能带有出差目的地这类员工自己填的自由文本，不能直接拼进 HTML
-// （存储型 XSS：管理员打开"手动补卡"查该员工那天记录就会在管理员会话里执行）
-function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s ?? '';
-    return d.innerHTML;
-}
+// escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 </script>
 }

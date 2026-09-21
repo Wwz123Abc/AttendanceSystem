@@ -46,24 +46,24 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
             if (name?.Length > 100)
                 throw new InvalidOperationException("设备别名不能超过 100 个字符");
 
-            // 受限管理员：设备归属部门强制收敛到自己的范围（哪怕前端下拉框已经只显示自己范围内的部门，
-            // 后端也不能只信前端传来的值）；不受限管理员必须给设备选一个归属部门
-            var effectiveDeptId = cu.IsScoped ? cu.ScopedDepartmentId : DepartmentId;
-            if (!await deptScopeService.CanAccessDeptAsync(cu, effectiveDeptId))
-                throw new InvalidOperationException("无权将设备分配到该部门");
-
             var snTaken = await db.ZKDevices.AnyAsync(d => d.SN == sn && d.Id != Id);
             if (snTaken)
                 throw new InvalidOperationException($"序列号 {sn} 已经被别的设备使用");
 
             if (Id == 0)   // 新增
             {
+                // 受限管理员：设备归属部门强制收敛到自己的范围（哪怕前端下拉框已经只显示自己范围内的部门，
+                // 后端也不能只信前端传来的值）；不受限管理员必须给设备选一个归属部门
+                var newDeptId = cu.IsScoped ? cu.ScopedDepartmentId : DepartmentId;
+                if (!await deptScopeService.CanAccessDeptAsync(cu, newDeptId))
+                    throw new InvalidOperationException("无权将设备分配到该部门");
+
                 db.ZKDevices.Add(new ZKDevice
                 {
                     SN           = sn,
                     Name         = name,
                     IsActive     = IsActive,
-                    DepartmentId = effectiveDeptId,
+                    DepartmentId = newDeptId,
                     CreatedAt    = DateTime.Now
                 });
                 SuccessMessage = $"设备「{sn}」已添加";
@@ -77,12 +77,16 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
                     if (!await deptScopeService.CanAccessDeptAsync(cu, d.DepartmentId))
                         throw new InvalidOperationException("无权编辑该设备");
 
+                    // 受限管理员编辑设备时保留原有归属部门，不强制改写成自己的范围根——原来这里跟新增
+                    // 共用一个 effectiveDeptId，导致受限管理员哪怕只是改个别名/启停状态，设备的归属部门
+                    // 也会被静默改写成他自己的范围根部门（即使这台设备原本挂在他范围内的某个下级部门）。
+                    // 只有不受限的总部管理员才能通过表单实际改动归属部门。
                     var wasActive = d.IsActive;
                     var oldSn     = d.SN;
                     d.SN           = sn;
                     d.Name         = name;
                     d.IsActive     = IsActive;
-                    d.DepartmentId = effectiveDeptId;
+                    if (!cu.IsScoped) d.DepartmentId = DepartmentId;
                     SuccessMessage = $"设备「{sn}」已更新";
 
                     // 停用这台设备时，把它还没确认执行的旧命令一并清掉——不然万一以后同一个 SN

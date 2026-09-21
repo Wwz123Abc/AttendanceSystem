@@ -201,15 +201,6 @@ async function openDrilldown(category, title) {
     }
 }
 
-// 把后台返回的文字（姓名、部门名等）原样塞进 HTML 之前，先过一遍这个函数处理一下。
-// 原因：如果员工姓名或备注里刚好包含 <script> 这种尖括号内容，直接拼进网页会被浏览器当成
-// 真正的 HTML/代码执行，可能被人利用来搞破坏（这在安全上叫"XSS 攻击"）。
-// 这个函数的做法：先把文字塞进一个看不见的 <div> 的"纯文本"属性里，
-// 再把它当成 HTML 读出来——这样浏览器会自动把尖括号等特殊字符转义成安全的写法。
-function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s ?? '';
-    return d.innerHTML;
-}
+// escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 </script>
 }

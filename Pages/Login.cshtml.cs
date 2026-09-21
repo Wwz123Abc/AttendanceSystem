@@ -81,6 +81,6 @@ public class LoginModel(IUserService userService, IOptions<AppSettingsOptions> a
     {
         UserRole.Admin or UserRole.Clerk                 => "/Admin/Dashboard",            // 管理/文员→看板
         UserRole.Supervisor or UserRole.TeamLeader       => "/Approval/PendingApproval",   // 主管/班组长→待审批
-        _                                                => "/Attendance/PunchCard"        // 员工→打卡页
+        _                                                => "/Attendance/MyRecord"         // 员工→我的记录（手动打卡已关闭，PunchCard 页面已删除）
     };
 }

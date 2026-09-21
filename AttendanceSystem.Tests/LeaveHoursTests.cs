@@ -114,8 +114,10 @@ public class LeaveHoursTests
 
     [Theory]
     [InlineData(8, 8, 1)]      // 一整天假（占比 100%）→ 1 天
-    [InlineData(5, 8, 1)]      // 占比 62.5%，>0.5 → 算 1 天
-    [InlineData(3.5, 8, 0.5)]  // 占比 43.75%，>0 且 <=0.5 → 算半天，不是按比例给 0.4375 天
+    [InlineData(6.5, 8, 1)]    // 占比 81.25%，>=0.75 → 算 1 天
+    [InlineData(5, 8, 0.5)]    // 占比 62.5%，就近取整到 0.5 天（2026-09-21 起不再是 >0.5 就算整天）
+    [InlineData(3.5, 8, 0.5)]  // 占比 43.75%，落在 [0.25,0.75) → 算半天，不是按比例给 0.4375 天
+    [InlineData(1, 8, 0)]      // 占比 12.5%，<0.25 → 算 0 天
     [InlineData(0, 8, 0)]      // 没有请假小时数 → 0 天
     public void 请假天数按占比折算_不是按状态是否请假就算一整天(decimal leaveHours, decimal standardHours, decimal expectedDays)
     {
@@ -125,9 +127,19 @@ public class LeaveHoursTests
     [Fact]
     public void 边界情况_恰好占比50百分之_算半天_不会被顶成整天()
     {
-        // 请假 4 小时、标准工时 8 小时——最常见的"标准半天假"场景，占比恰好 50%。
-        // 已经跟你确认过：这种情况应该算 0.5 天，不是 1 整天（边界定成 ">0.5" 而不是 "≥0.5"）。
+        // 请假 4 小时、标准工时 8 小时——最常见的"标准半天假"场景，占比恰好 50%，落在
+        // [0.25, 0.75) 区间内，就近取整到 0.5 天，不是 1 整天。
         Assert.Equal(0.5m, AttendanceService.ResolveLeaveDaysFraction(4m, 8m));
+    }
+
+    [Fact]
+    public void 上午半天假和下午半天假折算的天数现在一样_不再因为占比卡在0点5两侧而差一倍()
+    {
+        // 标准白班 08:30-12:00 + 13:00-17:30、标准工时 8 小时：上午假 3.5 小时（占比 43.75%）、
+        // 下午假 4.5 小时（占比 56.25%）——旧口径下前者算 0.5 天、后者算 1 整天，同样是"半天假"
+        // 天数差一倍；改成就近取整到 0.5 后两者都落在 [0.25,0.75) 区间，一致算 0.5 天（2026-09-21）。
+        Assert.Equal(0.5m, AttendanceService.ResolveLeaveDaysFraction(3.5m, 8m));
+        Assert.Equal(0.5m, AttendanceService.ResolveLeaveDaysFraction(4.5m, 8m));
     }
 
     [Fact]

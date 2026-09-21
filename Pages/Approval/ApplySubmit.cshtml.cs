@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
+using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 
@@ -12,6 +13,7 @@ namespace AttendanceSystem.Pages.Approval;
 [Authorize]
 public class ApplySubmitModel(
     IApprovalService approvalService,
+    IAttendanceService attendanceService,
     IWebHostEnvironment env,                    // 用来定位 wwwroot 目录存附件
     IOptions<AppSettingsOptions> appOptions) : AppPageModel
 {
@@ -56,7 +58,7 @@ public class ApplySubmitModel(
         try
         {
             // 校验时间是否合理（前端已经限制过选择范围，这里是服务器端的权威兜底，不能只信前端）
-            var dateError = ValidateDates();
+            var dateError = await ValidateDatesAsync();
             if (dateError != null)
             {
                 ErrorMessage = dateError;
@@ -139,7 +141,7 @@ public class ApplySubmitModel(
     /// 出差——开始不能选过去、结束必须晚于开始（出差是提前申请的，不允许补报过去的出差）。
     /// 不合理就返回一句中文提示，合理则返回 null。
     /// </summary>
-    private string? ValidateDates()
+    private async Task<string?> ValidateDatesAsync()
     {
         if (ApprovalType == "Leave")
         {
@@ -151,6 +153,23 @@ public class ApplySubmitModel(
                 return "请假开始时间最早只能选到现在往前推24小时以内";
             if (end <= start)
                 return "请假结束时间必须晚于开始时间";
+
+            // 半天假如果把午间休息时段也框进请假区间（比如下午假填 12:00 而不是 13:00），
+            // 请假时长会把这段本来就不用上班的午休时间也算进去，多算出的这一小时会从当天标准工时里
+            // 多扣一小时（口径见 docs/口径登记表.md 半天假章节）。同一天内的请假只能挑在班次的
+            // 午间窗口（如午休 12:00-13:00）之外的时间点起止；没配午间窗口的班次无法判断，不做限制。
+            if (start.Date == end.Date)
+            {
+                var shift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, DateOnly.FromDateTime(start)))?.ShiftSchedule;
+                var windows = shift?.ParseMidCheckWindows() ?? [];
+                foreach (var w in windows)
+                {
+                    if (TimeOnly.FromDateTime(start) > w.Start && TimeOnly.FromDateTime(start) < w.End)
+                        return $"请假开始时间不能选在班次的午间/中段时间窗口内（{w.Start:HH\\:mm}–{w.End:HH\\:mm}），请选窗口之前或之后的时间点";
+                    if (TimeOnly.FromDateTime(end) > w.Start && TimeOnly.FromDateTime(end) < w.End)
+                        return $"请假结束时间不能选在班次的午间/中段时间窗口内（{w.Start:HH\\:mm}–{w.End:HH\\:mm}），请选窗口之前或之后的时间点";
+                }
+            }
         }
         else if (ApprovalType == "PunchReplenishment")
         {

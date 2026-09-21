@@ -26,8 +26,10 @@ public class MyCalendarModel(IAttendanceService attendanceService) : AppPageMode
 
     public async Task OnGetAsync(int? year, int? month)
     {
-        Year  = year  ?? DateTime.Today.Year;
-        Month = month ?? DateTime.Today.Month;
+        // year/month 直接来自 URL，非法值（如 month=13）构造 DateOnly 时会直接抛异常报 500，
+        // 这里跟"没传"一样兜底成当前年月，而不是校验失败就 500
+        Year  = year  is >= 2000 and <= 2100 ? year.Value : DateTime.Today.Year;
+        Month = month is >= 1 and <= 12 ? month.Value : DateTime.Today.Month;
         var userId  = CurrentUserId;
         var groupId = CurrentGroupId;
 

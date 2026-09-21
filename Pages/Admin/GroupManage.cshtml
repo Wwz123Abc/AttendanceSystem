@@ -650,11 +650,6 @@ function confirmAMapPicker() {
     bootstrap.Modal.getInstance(document.getElementById('amapPickerModal')).hide();
 }
 
-// 高德地址搜索结果理论上是第三方接口返回的文本，拼进 HTML 前统一转义一下
-function escapeHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s ?? '';
-    return d.innerHTML;
-}
+// escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 </script>
 }
