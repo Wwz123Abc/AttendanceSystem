@@ -95,10 +95,10 @@ public class RemotePunchModel(
                 : AttendanceService.IsEligibleClockOutCandidate(DateTime.Now, workDate, todayShift) ? PunchType.ClockOut
                 : PunchType.MidCheck;
 
-            // 成本闸门：跟上面的失败限流是两回事（那个防冒充，这个控成本/防刷）——挡"手快连点"
-            // 和正常员工也不该出现的异常高频打卡。命中这里直接拒绝，不产生任何（付费的）阿里云调用；
-            // 拦截行为会写一条 BlockedReason 记录（供以后做统计看板用），但查上面失败限流、
-            // 和下面"今日次数"时都会排除这类行，不会互相影响。
+            // 成本闸门：跟上面的失败限流是两回事（那个防冒充，这个防"手快连点"造成的重复付费调用）。
+            // 命中这里直接拒绝，不产生任何（付费的）阿里云调用；拦截行为会写一条 BlockedReason 记录
+            // （供以后做统计看板用），查上面失败限流时会排除这类行，不会互相影响。
+            // 每日次数上限已取消（2026-09-21 按业务要求，人脸识别打卡不再限制每人每天的次数）。
             var isComplementaryClockOut = type == PunchType.ClockOut && todayBeforePunch?.ClockOutTime is null;
             if (!isComplementaryClockOut)
             {
@@ -111,30 +111,6 @@ public class RemotePunchModel(
                 {
                     await LogBlockedAsync("间隔未到");
                     throw new InvalidOperationException("刚刚已打卡成功，无需重复打卡");
-                }
-            }
-
-            // "今日次数"这两道闸门也要放过当天还没打的这一次下班卡——不然员工早上/中午多试了几次
-            // （光线不好、角度不对）攒够了次数，到真正该下班打卡的时候反而被这里挡住，只能走管理员
-            // 手动补卡，等于成本闸门制造出新的"缺卡"记录，跟这道闸门本身的目的（省钱）背道而驰
-            // （发现于 2026-09-18：把每日上限从 20/40 收紧到 6/12 之后，这个场景变得容易触发）。
-            var todayStart = DateTime.Today;
-            if (!isComplementaryClockOut)
-            {
-                var todayAttempts = await db.FaceVerifyAttempts.CountAsync(a =>
-                    a.UserId == CurrentUserId && a.BlockedReason == null && a.CreatedAt >= todayStart);
-                if (todayAttempts >= faceOptions.Value.MaxAttemptsPerDay)
-                {
-                    await LogBlockedAsync("今日尝试次数上限");
-                    throw new InvalidOperationException("今日远程打卡尝试次数已达上限，请联系管理员");
-                }
-
-                var todaySuccesses = await db.FaceVerifyAttempts.CountAsync(a =>
-                    a.UserId == CurrentUserId && a.Success && a.BlockedReason == null && a.CreatedAt >= todayStart);
-                if (todaySuccesses >= faceOptions.Value.MaxSuccessfulVerificationsPerDay)
-                {
-                    await LogBlockedAsync("今日成功次数上限");
-                    throw new InvalidOperationException("今日远程打卡次数已达上限，确有特殊情况请联系管理员或走补卡申请");
                 }
             }
 

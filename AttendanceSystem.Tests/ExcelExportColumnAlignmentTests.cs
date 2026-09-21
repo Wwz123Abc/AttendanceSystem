@@ -25,6 +25,7 @@ public class ExcelExportColumnAlignmentTests
             DailyHours = [8, null],
             DailyIsNightShift = [false, false],
             ActualWorkdays        = 21,
+            LeaveDays             = 1.5m,
             RestDays              = 8,
             TotalWorkHours        = 168.5m,
             RegularWorkHours      = 158.5m,
@@ -63,7 +64,7 @@ public class ExcelExportColumnAlignmentTests
         // 顺带断言表头列数和下面实际读到的数据列数一致，不多不少
         string[] expectedHeaders =
         [
-            "出勤天数", "休息天数", "总工时", "正班工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
+            "出勤天数", "请假天数", "休息天数", "总工时", "正班工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长", "夜班次数", "夜班总工时",
             "加班总时长", "工作日加班", "休息日加班", "节假日加班"
         ];
@@ -72,24 +73,25 @@ public class ExcelExportColumnAlignmentTests
 
         // 逐一核对数据行：每一列的数值必须精确落在表头对应的那一列上
         Assert.Equal(21,    dataRow.GetCell(tailStart + 0).NumericCellValue);   // 出勤天数
-        Assert.Equal(8,     dataRow.GetCell(tailStart + 1).NumericCellValue);   // 休息天数
-        Assert.Equal(168.5, dataRow.GetCell(tailStart + 2).NumericCellValue);   // 总工时
-        Assert.Equal(158.5, dataRow.GetCell(tailStart + 3).NumericCellValue);   // 正班工时
-        Assert.Equal(5,     dataRow.GetCell(tailStart + 4).NumericCellValue);   // 迟到时长
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 5).NumericCellValue);   // 早退次数
-        Assert.Equal(2,     dataRow.GetCell(tailStart + 6).NumericCellValue);   // 迟到次数
-        Assert.Equal(3,     dataRow.GetCell(tailStart + 7).NumericCellValue);   // 早退时长
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 8).NumericCellValue);   // 上班缺卡次数
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 9).NumericCellValue);   // 下班缺卡次数
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 10).NumericCellValue);  // 旷工天数
-        Assert.Equal(8,     dataRow.GetCell(tailStart + 11).NumericCellValue);  // 出差时长
-        Assert.Null(dataRow.GetCell(tailStart + 12));                          // 外出时长：系统没有这个概念，恒不写值
-        Assert.Equal(2,     dataRow.GetCell(tailStart + 13).NumericCellValue);  // 夜班次数
-        Assert.Equal(16,    dataRow.GetCell(tailStart + 14).NumericCellValue);  // 夜班总工时
-        Assert.Equal(10,    dataRow.GetCell(tailStart + 15).NumericCellValue);  // 加班总时长
-        Assert.Equal(4,     dataRow.GetCell(tailStart + 16).NumericCellValue);  // 工作日加班
-        Assert.Equal(3,     dataRow.GetCell(tailStart + 17).NumericCellValue);  // 休息日加班
-        Assert.Equal(6,     dataRow.GetCell(tailStart + 18).NumericCellValue);  // 节假日加班
+        Assert.Equal(1.5,   dataRow.GetCell(tailStart + 1).NumericCellValue);   // 请假天数
+        Assert.Equal(8,     dataRow.GetCell(tailStart + 2).NumericCellValue);   // 休息天数
+        Assert.Equal(168.5, dataRow.GetCell(tailStart + 3).NumericCellValue);   // 总工时
+        Assert.Equal(158.5, dataRow.GetCell(tailStart + 4).NumericCellValue);   // 正班工时
+        Assert.Equal(5,     dataRow.GetCell(tailStart + 5).NumericCellValue);   // 迟到时长
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 6).NumericCellValue);   // 早退次数
+        Assert.Equal(2,     dataRow.GetCell(tailStart + 7).NumericCellValue);   // 迟到次数
+        Assert.Equal(3,     dataRow.GetCell(tailStart + 8).NumericCellValue);   // 早退时长
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 9).NumericCellValue);   // 上班缺卡次数
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 10).NumericCellValue);  // 下班缺卡次数
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 11).NumericCellValue);  // 旷工天数
+        Assert.Equal(8,     dataRow.GetCell(tailStart + 12).NumericCellValue);  // 出差时长
+        Assert.Null(dataRow.GetCell(tailStart + 13));                          // 外出时长：系统没有这个概念，恒不写值
+        Assert.Equal(2,     dataRow.GetCell(tailStart + 14).NumericCellValue);  // 夜班次数
+        Assert.Equal(16,    dataRow.GetCell(tailStart + 15).NumericCellValue);  // 夜班总工时
+        Assert.Equal(10,    dataRow.GetCell(tailStart + 16).NumericCellValue);  // 加班总时长
+        Assert.Equal(4,     dataRow.GetCell(tailStart + 17).NumericCellValue);  // 工作日加班
+        Assert.Equal(3,     dataRow.GetCell(tailStart + 18).NumericCellValue);  // 休息日加班
+        Assert.Equal(6,     dataRow.GetCell(tailStart + 19).NumericCellValue);  // 节假日加班
 
         // 数据行最后一个有值的单元格必须正好是最后一列（节假日加班），不多出、也不少一列——
         // 这一条能直接抓出"表头 19 列，但写值那边多写/少写了一列"这种整体错位的 bug

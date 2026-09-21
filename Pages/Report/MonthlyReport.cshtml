@@ -21,7 +21,7 @@
     string NI(int v)     => v == 0 ? "" : v.ToString();
     string ND(decimal v) => v == 0 ? "" : v.ToString("0.##");
 
-    var totalCols = 6 + Model.Dates.Count + 20;   // 固定列 + 每日格子 + 尾部统计列(19，含夜班总工时/正班工时) + 操作列(1)，空数据行合并单元格用
+    var totalCols = 6 + Model.Dates.Count + 21;   // 固定列 + 每日格子 + 尾部统计列(20，含请假天数/夜班总工时/正班工时) + 操作列(1)，空数据行合并单元格用
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -128,6 +128,7 @@
                         <th rowspan="2" style="min-width:100px">合同公司</th>
                         <th colspan="@Model.Dates.Count" class="text-center">考勤结果</th>
                         <th rowspan="2">出勤天数</th>
+                        <th rowspan="2">请假天数</th>
                         <th rowspan="2">休息天数</th>
                         <th rowspan="2">总工时</th>
                         <th rowspan="2">正班工时</th>
@@ -177,7 +178,8 @@
                                 var isWeekend = Model.Dates[i].DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
                                 <td class="text-center @(isWeekend ? "table-warning bg-opacity-25" : "")">@(row.DailyHours[i]?.ToString() ?? "")</td>
                             }
-                            <td class="text-center">@row.ActualWorkdays</td>
+                            <td class="text-center">@row.ActualWorkdays.ToString("0.##")</td>
+                            <td class="text-center">@ND(row.LeaveDays)</td>
                             <td class="text-center">@NI(row.RestDays)</td>
                             <td class="text-center">@row.TotalWorkHours.ToString("0.##")</td>
                             <td class="text-center">@row.RegularWorkHours.ToString("0.##")</td>

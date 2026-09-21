@@ -1,11 +1,13 @@
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
@@ -92,6 +94,43 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
                 return Task.CompletedTask;
             }
             return redirectToAccessDenied(ctx);
+        };
+
+        // [Authorize(Policy = "ManagePolicy"/"ApprovePolicy")] 走的是 RequireRole，检查的是 Cookie
+        // 登录时签发的角色标签——而这个校验发生在 app.UseAuthorization()，比 CurrentUserMiddleware
+        // 每请求查库刷新角色还要早（见 Program.cs 管线顺序）。也就是说：总部把一个管理员/主管降职为
+        // 普通员工，只要没有同时停用账号，此人在 Cookie 有效期内（SlidingExpiration 会一直续期）对
+        // 所有靠这两个策略把关的功能一直有权限，要等他自己退出登录才失效——这跟 CurrentUserMiddleware
+        // 注释里"改了立刻生效，不用等重新登录"的设计初衷矛盾。这里在鉴权环节之前先把角色核对一遍：
+        // 账号停用/查不到直接判失效；角色变了就用最新角色重建身份，同一个请求里马上生效
+        // （发现于 2026-09-18 数据核查）。
+        options.Events.OnValidatePrincipal = async ctx =>
+        {
+            var userIdStr = ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (userIdStr is null || !int.TryParse(userIdStr, out var userId))
+            {
+                ctx.RejectPrincipal();
+                return;
+            }
+
+            var db   = ctx.HttpContext.RequestServices.GetRequiredService<AttendanceDbContext>();
+            var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+
+            if (user is null || !user.IsActive)
+            {
+                ctx.RejectPrincipal();
+                await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                return;
+            }
+
+            // 角色变了就用数据库最新数据重建身份标签，同一个请求里马上生效，不用等重新登录——
+            // 跟登录时用同一个 AuthClaimsFactory，避免两处各写一份建 Claims 的逻辑。
+            if (ctx.Principal?.FindFirstValue(ClaimTypes.Role) != user.Role.ToString())
+            {
+                var identity = new ClaimsIdentity(AuthClaimsFactory.BuildUserClaims(user), CookieAuthenticationDefaults.AuthenticationScheme);
+                ctx.ReplacePrincipal(new ClaimsPrincipal(identity));
+                ctx.ShouldRenew = true;
+            }
         };
     });
 

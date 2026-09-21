@@ -64,7 +64,7 @@ AgentService（对话编排：循环 模型↔工具，最多 N 轮）
 - `ParamsSchema`（JSON Schema，供模型填参）
 - `Category`：`read` | `write_low` | `write_high`
 - `RequireApproval`：read=false；write=true（全部走提案）
-- `ScopeHint`：人/部门/组/设备/登记/全局，工具实现内部据此做范围校验
+- `ScopeHint`：人/部门/组/考勤机/登记/全局，工具实现内部据此做范围校验（**注：考勤机已于 2026-09-21 取消按管理范围过滤，设备类工具不做范围收窄**，详见 `docs/更新日志.md` 与隔离复查文档第 0 节）
 - `MaxRows` 等护栏（防止模型一次拉全表）
 
 **首批工具（建议）**
@@ -75,7 +75,7 @@ AgentService（对话编排：循环 模型↔工具，最多 N 轮）
 | `pending_registration_list` | read | 待确认登记（不含身份证号/住址/照片 URL，仅姓名/手机号后四位/提交时间/意向部门） | 登记 DepartmentId ∈ 范围 |
 | `attendance_anomaly_list` | read | 指定日期范围/部门的迟到/早退/旷工清单（含汇总） | deptId 收窄 |
 | `monthly_summary_get` | read | 某部门/某人月度汇总解释 | deptId 收窄 |
-| `device_status_list` | read | 本范围考勤机在线/离线/SN | ZKDevice.DepartmentId ∈ 范围 |
+| `device_status_list` | read | 全部启用中的考勤机在线/离线（含 SN，**是否回显 SN 见下方注**） | **不按管理范围过滤**（2026-09-21 起设备隔离取消）——注意 SN 是设备通道唯一凭证，建议该工具**不返回 SN** |
 | `group_shift_holiday_list` | read | 考勤组/班次/假期查询 | 组可见性（ANY/零部门口径同页面） |
 | `employee_create_propose` | write | 建档草稿（工号/部门/考勤组/设备/上级） | 表单所有字段范围校验（复刻 ValidateScopeForSaveAsync） |
 | `employee_update_propose` | write | 改资料（含停用/启用） | CanAccessUser |

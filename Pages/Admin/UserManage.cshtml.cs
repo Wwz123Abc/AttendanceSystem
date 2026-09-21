@@ -29,7 +29,7 @@ public class UserManageModel(
     public List<User>            Users       { get; set; } = [];
     public List<AttendanceGroup> Groups      { get; set; } = [];
     public List<User>            Supervisors { get; set; } = [];
-    public List<ZKDevice>        AssignableDevices { get; set; } = [];   // 建档/编辑表单里"推送到哪些考勤机"多选框的候选列表，已按范围过滤
+    public List<ZKDevice>        AssignableDevices { get; set; } = [];   // 建档/编辑表单里"推送到哪些考勤机"多选框的候选列表，全公司启用中的设备都在内，不按管理范围过滤
     /// <summary>当前这一页员工，每个人已经被指定推送到哪些设备（编辑弹窗回填用，key=UserId）。</summary>
     public Dictionary<int, List<int>> UserDeviceIdsByUser { get; set; } = [];
     /// <summary>当前登录者是不是"总部超级管理员"（角色=Admin 且自己不受范围限制）——只有这种人能在
@@ -482,18 +482,15 @@ public class UserManageModel(
                 throw new InvalidOperationException("无权设置管理范围，请联系总部管理员操作");
         }
 
-        foreach (var deviceId in DeviceIds)
+        // 考勤机不做管理范围校验（2026-09-21 按业务要求取消隔离，方便员工借调到其他分公司时
+        // 直接推送到对方的考勤机）——只确认设备真的存在且启用，不存在的 id 会查出 null，
+        // 不然会一路走到 SetUserDevicesAsync 插入 UserZKDevice 时才撞外键约束报错（500），
+        // 而不是在这里给出一句看得懂的"不存在"提示
+        if (DeviceIds.Count > 0)
         {
-            // 先查设备是否真的存在（且启用）：如果只查 DepartmentId，不存在的 id 会查出 null，
-            // 对不受限的总部管理员来说"null 部门"天然放行——范围校验形同虚设，一个瞎编的设备 id
-            // 会一路走到 SetUserDevicesAsync 插入 UserZKDevice 时才撞外键约束报错（500），
-            // 而不是在这里给出一句看得懂的"无权/不存在"提示
-            var device = await db.ZKDevices.Where(d => d.Id == deviceId && d.IsActive)
-                .Select(d => new { d.DepartmentId }).FirstOrDefaultAsync();
-            if (device is null)
+            var validDeviceCount = await db.ZKDevices.CountAsync(d => DeviceIds.Contains(d.Id) && d.IsActive);
+            if (validDeviceCount != DeviceIds.Distinct().Count())
                 throw new InvalidOperationException("勾选的考勤机不存在或已停用");
-            if (!await deptScopeService.CanAccessDeptAsync(cu, device.DepartmentId))
-                throw new InvalidOperationException("无权把员工分配到该考勤机");
         }
     }
 
@@ -585,6 +582,15 @@ public class UserManageModel(
         var ext = Path.GetExtension(IdCardPhoto.FileName).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
             throw new InvalidOperationException("身份证照片只支持 jpg / png / webp 格式");
+
+        // 只看扩展名挡不住"把其他类型文件改个后缀名冒充图片上传"——员工自助登记的身份证照片上传
+        // 入口已经有这道文件头校验，管理员这边"新增/编辑员工"漏了，这里补上，两处共用同一个方法
+        // （发现于 2026-09-21 数据核查）。
+        var header = new byte[12];
+        await using (var headerStream = IdCardPhoto.OpenReadStream())
+            await headerStream.ReadExactlyAsync(header.AsMemory(0, (int)Math.Min(12, IdCardPhoto.Length)));
+        if (!ImageValidationHelper.IsValidImageHeader(ext, header))
+            throw new InvalidOperationException("身份证照片文件内容与格式不符，请重新选择图片文件");
 
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
         var privateRoot = PrivateFileStorage.GetRoot(env);   // 身份证照片是敏感文件，存在 wwwroot 之外，见 PrivateFilesController
@@ -732,9 +738,9 @@ public class UserManageModel(
             supervisorQuery = supervisorQuery.Where(u => u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value));
         Supervisors = await supervisorQuery.OrderBy(u => u.RealName).ToListAsync();
 
-        var deviceQuery = db.ZKDevices.Where(d => d.IsActive);
-        if (visibleIds is not null)
-            deviceQuery = deviceQuery.Where(d => d.DepartmentId != null && visibleIds.Contains(d.DepartmentId.Value));
-        AssignableDevices = await deviceQuery.OrderBy(d => d.Name).ThenBy(d => d.SN).ToListAsync();
+        // 考勤机不受管理范围限制：任何管理员/文员都能看到全公司所有启用中的考勤机并勾选，
+        // 方便给借调到其他分公司的员工推送到对方的考勤机（2026-09-21 按业务要求取消考勤机隔离）。
+        AssignableDevices = await db.ZKDevices.Where(d => d.IsActive)
+            .OrderBy(d => d.Name).ThenBy(d => d.SN).ToListAsync();
     }
 }

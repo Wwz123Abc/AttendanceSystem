@@ -59,18 +59,11 @@ public class AliyunFaceOptions
     /// 超了说明是侧脸/歪头——质量分主要看清晰度光照，侧脸也可能拿高分，得单独卡这一项。</summary>
     public double EnrollMaxPoseAngle { get; set; } = 20;
 
-    // ── 以下是"成本闸门"：限制成功打卡的频率/次数，跟前面 MaxAttemptsPerWindow（失败限流，防止
-    // 拿别人照片反复试）是两回事——这里挡的是"手快连点"和"正常员工也不该出现的异常高频打卡"，
-    // 目的是控成本、防刷，不是防冒充。命中这几条时会在真正调用（付费的）阿里云接口之前就拦下来，
-    // 且不计入失败限流，避免"被这里拦 → 算一次失败 → 更容易触发失败限流"的连锁反应。
+    // ── 以下是"成本闸门"：跟前面 MaxAttemptsPerWindow（失败限流，防止拿别人照片反复试）是两回事——
+    // 这里挡的是"手快连点"造成的重复付费调用，不是防冒充。命中时会在真正调用（付费的）阿里云接口
+    // 之前就拦下来，且不计入失败限流，避免"被这里拦 → 算一次失败 → 更容易触发失败限流"的连锁反应。
+    // （每日次数上限已于 2026-09-21 按业务要求取消，人脸识别打卡不再限制每人每天的次数。）
 
     /// <summary>两次成功识别之间最少要隔多少秒，防止手快连点/网络重试造成重复的付费调用。</summary>
     public int MinSecondsBetweenVerifications { get; set; } = 30;
-
-    /// <summary>每人每天最多成功识别几次。正常通勤一天 2-4 次，这里给得比较宽松，只挡明显异常的情况。</summary>
-    public int MaxSuccessfulVerificationsPerDay { get; set; } = 20;
-
-    /// <summary>每人每天最多尝试几次（成功+失败一起算），挡"慢速滴灌式"刷量
-    /// （比如故意错开失败限流的时间窗口、每隔十几分钟试一次）。</summary>
-    public int MaxAttemptsPerDay { get; set; } = 40;
 }

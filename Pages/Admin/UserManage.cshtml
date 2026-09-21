@@ -520,18 +520,17 @@
                             <div class="border rounded p-2" style="max-height:150px;overflow-y:auto" id="fDeviceIdsBox">
                                 @if (Model.AssignableDevices.Count == 0)
                                 {
-                                    <span class="text-muted small">暂无可选设备（还没有归属到你管理范围内的考勤机）</span>
+                                    <span class="text-muted small">暂无可选设备（系统里还没有启用中的考勤机）</span>
                                 }
                                 @foreach (var dev in Model.AssignableDevices)
                                 {
-                                    <div class="form-check device-row" data-dept-id="@(dev.DepartmentId?.ToString() ?? "")">
+                                    <div class="form-check">
                                         <input class="form-check-input device-checkbox" type="checkbox" name="DeviceIds" value="@dev.Id" id="fDevice_@dev.Id" />
                                         <label class="form-check-label" for="fDevice_@dev.Id">@(dev.Name ?? dev.SN)（@dev.SN）</label>
                                     </div>
                                 }
-                                <div id="fDeviceIdsEmptyHint" class="text-muted small" style="display:none">该部门暂无可选设备（还没有归属到这个分公司的考勤机）</div>
                             </div>
-                            <div class="form-text">只有勾选过的考勤机才会收到这个人的工号/人脸信息；选定部门后会自动只显示该分公司的设备（没归属具体部门的设备全公司通用，一直显示）。</div>
+                            <div class="form-text">只有勾选过的考勤机才会收到这个人的工号/人脸信息；不限分公司，方便借调员工推送到其他分公司的考勤机。</div>
                         </div>
                         @if (Model.CurrentUserIsUnscoped)
                         {
@@ -693,38 +692,7 @@ document.getElementById('fDeptId').addEventListener('change', function () {
     fillEmployeeNoForDept(this.value);
     suggestSupervisorForDept(this.value);
     autoFillScopedDept();
-    filterDevicesForDept(this.value);
 });
-
-// ── "推送到哪些考勤机"自动按选中的部门过滤：选定部门后，只显示这个分公司的设备，不用管理员
-// 自己在一长串全范围设备里去找、也不会误勾到别的分公司的设备。考勤机通常注册在"分公司"这一级
-// （部门树里比较靠上的节点），选中的部门可能就是分公司本身，也可能是分公司下面的具体小组/团队，
-// 都要能匹配到那台设备——判断方法是"设备归属部门是不是选中部门的祖先（含自己）"，用左侧已经
-// 渲染好的部门树 DOM（data-id/data-parent）沿着往上走就能查到，不用再单独发请求。
-// 没归属具体部门的设备（data-dept-id 为空）当成全公司通用设备，任何部门下都显示。
-function deptAncestorIds(deptId) {
-    const ids = new Set();
-    let cur = String(deptId || '');
-    for (let i = 0; i < 50 && cur; i++) {
-        ids.add(cur);
-        const node = document.querySelector(`.dept-node[data-id="${cur}"]`);
-        cur = node ? (node.getAttribute('data-parent') || '') : '';
-    }
-    return ids;
-}
-function filterDevicesForDept(deptId) {
-    const ancestors = deptAncestorIds(deptId);
-    let anyVisible = false;
-    document.querySelectorAll('#fDeviceIdsBox .device-row').forEach(row => {
-        const devDept = row.getAttribute('data-dept-id');
-        const visible = !deptId || !devDept || ancestors.has(devDept);
-        row.style.display = visible ? '' : 'none';
-        if (!visible) row.querySelector('.device-checkbox').checked = false;   // 隐藏的行强制取消勾选，避免看不见但仍提交
-        if (visible) anyVisible = true;
-    });
-    const emptyHint = document.getElementById('fDeviceIdsEmptyHint');
-    if (emptyHint) emptyHint.style.display = (deptId && !anyVisible) ? '' : 'none';
-}
 
 // ── 管理范围默认跟着"部门"走：这两个字段本来就经常设成同一个值（详见 CanAccessDeptAsync/
 // ValidateScopeForSaveAsync 的口径说明），分开填一步很容易漏掉后者，导致新账号意外变成
@@ -847,7 +815,6 @@ function openAdd() {
     document.getElementById('fGroupId').value = '';
     setSuperId('');
     setDeviceIds([]);
-    filterDevicesForDept(document.getElementById('fDeptId').value);
     setScopedDeptId(null);
     document.getElementById('fPhone').required = true;             // 新建必须填手机号
     document.getElementById('fPhoneReq').style.display = '';
@@ -919,7 +886,6 @@ function openConfirm(data) {
     document.getElementById('fGroupId').value    = '';
     setSuperId('');
     setDeviceIds([]);
-    filterDevicesForDept(document.getElementById('fDeptId').value);
     setScopedDeptId(null);
     document.getElementById('fPhone').required   = true;
     document.getElementById('fPhoneReq').style.display = '';
@@ -958,7 +924,6 @@ function openEdit(data) {
     document.getElementById('fGroupId').value    = data.groupId || '';
     setSuperId(data.superId || '');
     setDeviceIds(data.deviceIds);
-    filterDevicesForDept(data.deptId || '');
     setScopedDeptId(data.scopedDeptId);
     document.getElementById('fPosition').value   = data.position;
     document.getElementById('fPhone').value      = data.phone;

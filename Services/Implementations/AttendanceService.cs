@@ -191,39 +191,53 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         }
         else                                          // ── 下班卡 ──
         {
-            record.ClockOutTime = punchTime;
-            status = CalcClockOutStatus(workDate, punchTime, shift, isRestDay, out var earlyMin);  // 算是否早退
-            // 出差/节假日当天不该有早退分钟数残留，理由同上面的 LateMinutes；请假（半天假）同理不再排除
-            if (record.AttendanceStatus is not (AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
-                record.EarlyLeaveMinutes = earlyMin;
-            // 只在当天状态还是"正常/早退/未打卡"这种由打卡本身决定的状态时才更新——
-            // "未打卡"要能被这次下班打卡覆盖掉（既然真的打了下班卡，就不再是"未打卡"了）；
-            // 已经迟到的不会被这次的下班状态覆盖掉，请假/出差/节假日/旷工这些状态也不受影响。
-            if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
-                record.AttendanceStatus = status;
-            if (earlyMin > 0)
+            // 只有这次打卡时间比已经记录的下班时间更晚（或者还没有下班记录）才更新——避免本地/远程
+            // 打卡的请求乱序到达时（比如设备同步已经记了更晚的下班时间，之后又收到一次时间更早的
+            // 补传/重试请求），把已经记录的更晚的下班时间"倒退"回去，放大早退分钟数、少算工时。
+            // 跟 ZKDeviceSyncService 的"取更晚"口径保持一致（发现于 2026-09-18 数据核查：这两条路径
+            // 之前一个是无条件覆盖、一个是取更晚，口径不一样）。
+            if (record.ClockOutTime is null || punchTime > record.ClockOutTime)
             {
-                message = $"下班打卡成功，早退 {earlyMin} 分钟";
+                record.ClockOutTime = punchTime;
+                status = CalcClockOutStatus(workDate, punchTime, shift, isRestDay, out var earlyMin);  // 算是否早退
+                // 出差/节假日当天不该有早退分钟数残留，理由同上面的 LateMinutes；请假（半天假）同理不再排除
+                if (record.AttendanceStatus is not (AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
+                    record.EarlyLeaveMinutes = earlyMin;
+                // 只在当天状态还是"正常/早退/未打卡"这种由打卡本身决定的状态时才更新——
+                // "未打卡"要能被这次下班打卡覆盖掉（既然真的打了下班卡，就不再是"未打卡"了）；
+                // 已经迟到的不会被这次的下班状态覆盖掉，请假/出差/节假日/旷工这些状态也不受影响。
+                if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
+                    record.AttendanceStatus = status;
+                if (earlyMin > 0)
+                {
+                    message = $"下班打卡成功，早退 {earlyMin} 分钟";
+                }
+                else
+                {
+                    message = "下班打卡成功";
+                }
+
+                // 上下班卡都齐了，算实际工时（不早于应上班时间、不晚于应下班时间——早到晚走都不多算钱）。
+                // 加班不再从打卡时间估算：只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
+                // 出差/节假日当天工时已经由审批流程/定时任务定好（标准工时/0），不能被这里顺手打的下班卡
+                // 覆盖掉（打卡流水本身照常记，仅作审计）。请假不再整天排除在外：半天假当天如果还有真实
+                // 打卡，按"标准工时 − 已批准的请假小时数"封顶结算，全天假（LeaveHours≥标准工时）上限
+                // 自动变成 0，跟原来"请假当天工时恒为 0"的效果一致（2026-09-17 支持半天请假）。
+                if (record.ClockInTime.HasValue
+                    && record.AttendanceStatus is not (AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
+                {
+                    var computedHours = await ComputeDailyWorkHoursAsync(
+                        record, workDate, record.ClockInTime.Value, punchTime, shift, user.AttendanceGroupId);
+                    record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
+                        ? ApplyLeaveHoursCap(computedHours, record.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
+                        : computedHours;
+                }
             }
             else
             {
+                // 已经有更晚的下班记录了，这次乱序/重复打卡不改变结果
+                status  = record.AttendanceStatus;
                 message = "下班打卡成功";
-            }
-
-            // 上下班卡都齐了，算实际工时（不早于应上班时间、不晚于应下班时间——早到晚走都不多算钱）。
-            // 加班不再从打卡时间估算：只认「加班申请」审批通过后累加的时长，这里不动 OvertimeHours。
-            // 出差/节假日当天工时已经由审批流程/定时任务定好（标准工时/0），不能被这里顺手打的下班卡
-            // 覆盖掉（打卡流水本身照常记，仅作审计）。请假不再整天排除在外：半天假当天如果还有真实
-            // 打卡，按"标准工时 − 已批准的请假小时数"封顶结算，全天假（LeaveHours≥标准工时）上限
-            // 自动变成 0，跟原来"请假当天工时恒为 0"的效果一致（2026-09-17 支持半天请假）。
-            if (record.ClockInTime.HasValue
-                && record.AttendanceStatus is not (AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday))
-            {
-                var computedHours = await ComputeDailyWorkHoursAsync(
-                    record, workDate, record.ClockInTime.Value, punchTime, shift, user.AttendanceGroupId);
-                record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
-                    ? ApplyLeaveHoursCap(computedHours, record.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
-                    : computedHours;
             }
         }
 
@@ -440,6 +454,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var today = DateOnly.FromDateTime(DateTime.Today);
         var dates = new List<DateOnly>();
         for (var d = start; d <= end; d = d.AddDays(1)) dates.Add(d);
+        var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
 
         // 范围 = 现在在职的人 ∪ 这段周期里有考勤记录的人——这份表是给发工资用的，
         // 如果只按"现在是否在职"筛选，员工在这个薪资周期里离职、导出报表时已经被停用，
@@ -511,7 +526,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             decimal totalWork = 0, businessTripHours = 0, nightShiftHours = 0;
             decimal totalOtHours = 0, weekdayOtHours = 0, restOtHours = 0, holidayOtHours = 0;
-            int actualDays = 0, restDays = 0, absentDays = 0, missingIn = 0, missingOut = 0;
+            decimal actualDays = 0, leaveDays = 0;
+            int restDays = 0, absentDays = 0, missingIn = 0, missingOut = 0;
             int lateMin = 0, earlyMin = 0, lateCnt = 0, earlyCnt = 0;
 
             foreach (var date in dates)
@@ -550,8 +566,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                         dayHours = FloorToHalf(rec.ActualWorkHours);       // 每日格子和月度合计统一按"半小时"取整口径
                         totalWork += FloorToHalf(rec.ActualWorkHours);     // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
                         if (isNightShift) nightShiftHours += FloorToHalf(rec.ActualWorkHours);   // 夜班总工时：当天算夜班才计入，取整口径和总工时一致
-                        actualDays++;
                     }
+                    // 出勤天数/请假天数跟 GenerateMonthlySummaryAsync 共用同一个公式（ResolveAttendanceDayCredit），
+                    // 不能只看"有没有工时"——半天假当天可能 ActualWorkHours>0（上午上班），整天假是 0，
+                    // 两种都要正确记到"出勤"和"请假"里，不能像以前那样只用 ActualWorkHours>0 判断出勤、
+                    // 完全没有"请假天数"这个概念，导致这份发工资用的报表和月度汇总页对不上
+                    // （发现于 2026-09-18 数据核查）。
+                    var dailyStdHours = assign?.ShiftSchedule.StandardWorkHours ?? defaultDailyHours;
+                    actualDays += ResolveAttendanceDayCredit(rec, dailyStdHours);
+                    if (rec.AttendanceStatus == AttendanceStatus.OnLeave)
+                        leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);
                     if (rec.AttendanceStatus == AttendanceStatus.Absent) absentDays++;
                     if (rec.ClockInTime is null && rec.ClockOutTime is not null) missingIn++;    // 有下班卡没上班卡
@@ -589,6 +613,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             // 各项工时在上面累加时就已经按"半小时"取整过了，这里直接赋值（合计只会是整数或 x.5）
             row.ActualWorkdays          = actualDays;
+            row.LeaveDays               = leaveDays;
             row.RestDays                = restDays;
             row.RegularWorkHours        = totalWork;              // 正班工时：不含加班，口径不变
             row.TotalWorkHours          = totalWork + totalOtHours;  // 工作时长合计：正班 + 加班
@@ -767,11 +792,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 实际出勤 = 打了上班卡的天数 + 已批准出差的天数（旷工/未打卡都不算出勤）；
             // 请假当天如果也有真实打卡（半天假），只算"1 − 请假占比"那一部分出勤，不再跟 LeaveDays
             // 重复记满整天——不然半天假的人会变成"出勤 1 天 + 请假 0.5 天"，一天算出 1.5 天（发现于
-            // 2026-09-18 发工资前的数据核查）。
-            summary.ActualWorkdays = records.Sum(r => !IsPresent(r) ? 0m
-                : r.AttendanceStatus == AttendanceStatus.OnLeave
-                    ? Math.Max(0m, 1m - ResolveLeaveDaysFraction(r.LeaveHours, ResolveDailyStandardHours(shiftByDate.GetValueOrDefault(r.WorkDate), defaultDailyHours)))
-                    : 1m);
+            // 2026-09-18 发工资前的数据核查）。跟 GenerateTemplateReportAsync 共用 ResolveAttendanceDayCredit。
+            summary.ActualWorkdays = records.Sum(r =>
+                ResolveAttendanceDayCredit(r, ResolveDailyStandardHours(shiftByDate.GetValueOrDefault(r.WorkDate), defaultDailyHours)));
             // 迟到/早退按「状态」统计（钉钉同步只写状态、不写分钟数，按分钟数会漏算）
             summary.LateCount         = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);
             summary.EarlyLeaveCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.EarlyLeave);
@@ -828,6 +851,21 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
     /// <summary>判断某天算不算“出勤”：打了上班卡，或者当天已批准出差（出差无需打卡也算全勤）。</summary>
     private static bool IsPresent(AttendanceRecord r) => r.ClockInTime.HasValue || r.AttendanceStatus == AttendanceStatus.BusinessTrip;
+
+    /// <summary>
+    /// 这一天该算多少"出勤天数"：完全没到岗（含整天请假）算 0；请假当天如果也有真实打卡（半天假），
+    /// 按"1 − 请假占比"算部分出勤，不再跟请假天数重复记满整天；其余（含出差全勤）算 1 整天。
+    /// ★ 全系统唯一口径：<see cref="GenerateMonthlySummaryAsync"/>（月度汇总/我的记录页）和
+    /// <see cref="GenerateTemplateReportAsync"/>（模板汇总表，发工资用的那份导出）必须共用这一个方法，
+    /// 不能各写一份——之前就是因为两处各算各的，同一个人同一个月两份报表的出勤天数对不上
+    /// （发现于 2026-09-18 数据核查）。
+    /// </summary>
+    public static decimal ResolveAttendanceDayCredit(AttendanceRecord r, decimal standardHours)
+    {
+        if (!IsPresent(r)) return 0m;
+        if (r.AttendanceStatus != AttendanceStatus.OnLeave) return 1m;
+        return Math.Max(0m, 1m - ResolveLeaveDaysFraction(r.LeaveHours, standardHours));
+    }
 
     /// <summary>
     /// 看板下钻：某统计类别对应的具体人员名单。分类口径和 <see cref="GetTodayStatsAsync"/> 完全一致
@@ -911,9 +949,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// "法定节假日/公司休息"的判断——那两类调用方各自按自己的场景处理（调班日通常要覆盖这个结果，
     /// 法定节假日/公司休息则是完全独立的另一个概念，见 IsHolidayAsync）。
     /// ★ 全系统唯一口径：<see cref="CountExpectedWorkdaysAsync"/>、<see cref="GenerateTemplateReportAsync"/>、
-    /// <see cref="IsNonCompRestDayAsync"/> 都调这一个，避免同一条"是不是休息日"的规则散落成好几份、
-    /// 以后改规则漏改一处（AttendanceBackgroundService.MarkAbsentAsync 用的是另一套"周六周日一律跳过"
-    /// 的粗口径，跟这里"按这个班次自己的配置判断"不完全等价，没有并进来，见该方法注释）。
+    /// <see cref="IsNonCompRestDayAsync"/>、AttendanceBackgroundService.MarkAbsentAsync 都调这一个，
+    /// 避免同一条"是不是休息日"的规则散落成好几份、以后改规则漏改一处（MarkAbsentAsync 以前用的是
+    /// "周六周日一律跳过"的粗口径，没有并进来，导致六天倒班、周六照常排班的员工周六没来也没请假会
+    /// 被漏判旷工，"应出勤"却仍然算这天——2026-09-21 已经统一）。
     /// </summary>
     public static bool IsShiftWeeklyRestDay(DateOnly date, ShiftSchedule? shift) =>
         shift is not null ? shift.IsRestDay(date.DayOfWeek) : date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
@@ -1060,16 +1099,19 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 // 请假时长只算落在"这一天"里的那一段——跨天请假的第一天/最后一天可能不是整天
                 // （比如 09-09 14:00 请假到 09-11 12:00，09-09 当天只算 14:00~24:00 这一段），
                 // 用 ComputeLeaveHoursForDay 取交集再扣午休/晚餐，并封顶在这天的标准工时。
-                // 先算这个再判断要不要处理这一天：如果结束时间恰好卡在午夜 0 点（比如请假到
-                // 9-11 00:00），区间最后一天（9-11）跟请假时段其实没有任何交集，算出来是 0——
-                // 这种天直接跳过，不新建记录、不标"请假"状态，让这天照正常规则走（打卡/旷工都行），
-                // 不会出现"状态是请假、时长却是 0"这种对不上的记录（发现于 2026-09-18 发工资前的
-                // 数据核查）。
+                // 要不要处理这一天，用"是否有真实交集"判断（HasLeaveOverlapForDay），不能用
+                // "算出来的小时数是不是 0"判断——如果结束时间恰好卡在午夜 0 点（比如请假到
+                // 9-11 00:00），区间最后一天（9-11）跟请假时段确实没有任何交集，这种天才该跳过、
+                // 不新建记录、不标"请假"状态；但如果只是交集很短（比如请假 20 分钟，取整成 0 小时），
+                // 这一天仍然有真实交集，应该照常标记"请假"，只是 LeaveHours 恰好是 0——不然会把
+                // 短时长请假误判成没有交集直接跳过，这天没打卡的话会被后台旷工任务误标成旷工
+                // （发现于 2026-09-18：这是 09-18 那次"无交集跳过"修复自身遗留的边界缺陷）。
+                if (!HasLeaveOverlapForDay(d, approval.LeaveStartTime.Value, leaveEnd)) continue;
+
                 var dailyCap = leaveShiftsInRange.TryGetValue(d, out var leaveShift)
                     ? leaveShift.StandardWorkHours : defaultDailyHours;
                 var leaveHoursToday = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd,
                     leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30, dailyCap);
-                if (leaveHoursToday <= 0) continue;
 
                 // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
                 // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
@@ -1096,6 +1138,24 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 // 跟"管理员手动补卡"复用同一个函数，两条路径的"请假封顶"口径自动保持一致；
                 // 状态本身不会被这个函数改回正常/迟到/早退，上面设的 OnLeave 会保留。
                 await RecalcWorkHoursAfterManualPunchAsync(record, approval.ApplicantUserId);
+
+                // 半天假最常见的场景是"上午上班、下午请假"——员工打了上班卡，但因为下午走了，
+                // 通常不会再打下班卡。上面那个 RecalcWorkHoursAfterManualPunchAsync 要求同时有
+                // 上下班卡才会重算，这种情况下会直接跳过不处理，ActualWorkHours 停在上面设的
+                // 占位值 0，上午真实工作的工时就永久丢失了、也没有任何自愈机制能补回来。
+                // 这里用"上班卡 → 这天请假开始的时间点"估算这一段真实工作时长，按标准工时封顶
+                // （发现于 2026-09-18 数据核查）。
+                if (record.ClockInTime is { } workedCi && record.ClockOutTime is null)
+                {
+                    var dayStart      = d.ToDateTime(TimeOnly.MinValue);
+                    var leaveSegStart = approval.LeaveStartTime.Value > dayStart ? approval.LeaveStartTime.Value : dayStart;
+                    if (workedCi < leaveSegStart)
+                    {
+                        var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart,
+                            leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30);
+                        record.ActualWorkHours = ApplyLeaveHoursCap(estimatedWork, record.LeaveHours, dailyCap);
+                    }
+                }
 
                 // 备注带上这一天的请假时长，跟加班审批的备注格式一致（"加班已审批通过（单号），9 小时"）
                 AppendApprovalNote(record, $"请假审批通过（{approval.RequestNo}），{leaveHoursToday:0.##} 小时");
@@ -1526,6 +1586,23 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (segEnd <= segStart) return 0;
         var raw = ComputeWorkHours(segStart, segEnd, lunchBreak, dinnerBreak);
         return Math.Min(raw, dailyCapHours);
+    }
+
+    /// <summary>
+    /// 这一天跟请假区间是不是有真实交集（不管时长多少，哪怕只有几分钟也算有）。
+    /// 跟 <see cref="ComputeLeaveHoursForDay"/> 算出来是不是 0 小时是两回事：后者的 0 可能是
+    /// "这一天跟请假区间根本没交集"（比如请假结束时间恰好卡在午夜），也可能是"确实有交集，
+    /// 但时长不足半小时、被 <see cref="ComputeWorkHours"/> 最后一步取整成了 0"（比如请假 20 分钟）——
+    /// 只有前一种才应该跳过这一天不标记"请假"，后一种如果也跳过，会导致"请了假但没打卡"的短时长
+    /// 请假被误判成旷工（发现于 2026-09-18 数据核查，是 09-18 那次"无交集跳过"修复自身的边界缺陷）。
+    /// </summary>
+    public static bool HasLeaveOverlapForDay(DateOnly day, DateTime leaveStart, DateTime leaveEnd)
+    {
+        var dayStart = day.ToDateTime(TimeOnly.MinValue);
+        var dayEnd   = day.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var segStart = leaveStart > dayStart ? leaveStart : dayStart;
+        var segEnd   = leaveEnd   < dayEnd   ? leaveEnd   : dayEnd;
+        return segEnd > segStart;
     }
 
     /// <summary>这个人这天的"标准工时"：有排班用排的那个班次自己的标准工时，没排班用公司默认标准工时——

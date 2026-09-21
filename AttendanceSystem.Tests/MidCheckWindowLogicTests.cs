@@ -193,4 +193,28 @@ public class MidCheckWindowLogicTests
         var effOut = AttendanceService.ClampEffectiveClockOut(WorkDate, lateClockOut, shift);
         Assert.Equal(WorkDate.ToDateTime(new TimeOnly(20, 0)), effOut);
     }
+
+    // ── 复现 "GA 员工白班/夜班配置重复窗口导致整天工时清零" 的真实场景（2026-09-18）───────
+    [Fact]
+    public void 配置里重复的午间窗口会被去重()
+    {
+        // 同一段时间窗口手滑配了两次——去重前会被"取最晚一段""排除最后一段"这些按下标区分窗口的
+        // 逻辑误当成两段独立窗口，导致上班时间被顺延到窗口结束、下班时间又被同一窗口收窄到窗口开始，
+        // 两边一起收缩到同一个点，整天工时变成 0（489 名 GA 员工受影响的真实生产 bug）。
+        var shift = new ShiftSchedule { MidCheckWindows = "12:00-13:00,12:00-13:00" };
+        var windows = shift.ParseMidCheckWindows();
+        Assert.Single(windows);
+        Assert.Equal((new TimeOnly(12, 0), new TimeOnly(13, 0)), windows[0]);
+    }
+
+    [Fact]
+    public void 冻结在记录里的重复窗口字符串也会被去重()
+    {
+        // ParseMidCheckWindows 管的是"实时读班次配置"这条路；已经写进历史记录、冻结下来的
+        // MidCheckResults 字符串走的是另一个解析方法（ParseMidCheckResults），两边都要去重，
+        // 不然月度报表"自愈"重算老记录时，读到的还是冻结下来的重复窗口字符串，一样会清零工时。
+        var results = "12:00-13:00=;12:00-13:00=".ParseMidCheckResults();
+        Assert.Single(results);
+        Assert.False(results[0].IsSatisfied);
+    }
 }

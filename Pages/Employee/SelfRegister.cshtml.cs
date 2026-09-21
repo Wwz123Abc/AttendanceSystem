@@ -103,7 +103,7 @@ public class SelfRegisterModel(
         var header = new byte[12];
         await using (var headerStream = IdCardPhoto.OpenReadStream())
             await headerStream.ReadExactlyAsync(header.AsMemory(0, (int)Math.Min(12, IdCardPhoto.Length)));
-        if (!IsValidImageHeader(ext, header))
+        if (!ImageValidationHelper.IsValidImageHeader(ext, header))
             throw new InvalidOperationException("身份证照片文件内容与格式不符，请重新选择图片文件");
 
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
@@ -117,16 +117,4 @@ public class SelfRegisterModel(
 
         return $"/{uploadPath}/idcards/registrations/{Phone.Trim()}/{fileName}";
     }
-
-    /// <summary>按文件头魔数校验内容是不是真的是对应格式的图片：JPEG=FF D8 FF；PNG=89 50 4E 47 0D 0A 1A 0A；
-    /// WEBP=开头 "RIFF"、第 8-11 字节 "WEBP"。</summary>
-    private static bool IsValidImageHeader(string ext, byte[] header) => ext switch
-    {
-        ".jpg" or ".jpeg" => header.Length >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF,
-        ".png" => header.Length >= 8 && header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47
-                                      && header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A,
-        ".webp" => header.Length >= 12 && header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F'
-                                        && header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P',
-        _ => false
-    };
 }

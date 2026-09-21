@@ -97,9 +97,10 @@ public class AttendanceRecord
 
     /// <summary>
     /// 请假时长（小时）：请假审批通过后按当天落在请假区间内的那一段时长算（用跟工时一样的
-    /// 「超 6/9 小时扣一次午休/晚餐」公式，口径和 ActualWorkHours 一致），只是纯展示/统计用，
-    /// 不会加回 ActualWorkHours——请假当天工时照常按"整天二选一"清零，见
-    /// AttendanceService.UpdateAttendanceAfterApprovalAsync 的请假分支。
+    /// 「超 6/9 小时扣一次午休/晚餐」公式，口径和 ActualWorkHours 一致）。半天假当天如果也有真实
+    /// 打卡，ActualWorkHours 按"标准工时 − LeaveHours"封顶结算（不是无条件清零）；全天假
+    /// （LeaveHours 达到标准工时）封顶后自动变成 0，效果上等价于旧版"整天二选一清零"，
+    /// 见 AttendanceService.UpdateAttendanceAfterApprovalAsync 的请假分支（2026-09-17 支持半天请假）。
     /// </summary>
     public decimal LeaveHours { get; set; } = 0;
 

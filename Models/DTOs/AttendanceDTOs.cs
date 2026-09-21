@@ -168,7 +168,8 @@ public class TemplateReportRowDto
     /// 下标和 DailyHours/TemplateReportResultDto.Dates 一一对应。</summary>
     public List<bool> DailyIsNightShift { get; set; } = [];
 
-    public int     ActualWorkdays  { get; set; }   // 出勤天数
+    public decimal ActualWorkdays  { get; set; }   // 出勤天数（半天假的那天算 0.5 天，跟 MonthlySummaryDto 同一口径）
+    public decimal LeaveDays       { get; set; }   // 请假天数（按小时折算，半天假算 0.5 天）
     public int     RestDays        { get; set; }   // 休息天数（周末/法定节假日/公司休息日，不含调班补班日）
 
     /// <summary>工作时长（合计）＝ 正班工时 + 加班总时长，按小时算钱用这个数字。</summary>

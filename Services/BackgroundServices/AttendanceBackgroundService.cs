@@ -6,6 +6,7 @@ using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
+using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Services.BackgroundServices;
@@ -118,7 +119,6 @@ public class AttendanceBackgroundService(
             h.HolidayType == HolidayType.CompensatoryWorkDay &&
             (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
 
-        var isWeekend = today.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
         int marked = 0;
 
         foreach (var user in users)
@@ -126,16 +126,20 @@ public class AttendanceBackgroundService(
             // 没办入职（没填入职日期、或入职日期还没到）的人不处理——跟 AttendanceService.PunchAsync
             // 里"没办入职不让打卡"的判断保持一致，不然还没入职的人会被莫名其妙标记旷工、还收到提醒。
             if (user.HireDate is null || user.HireDate.Value > today) continue;
-            if (IsRestDay(user.AttendanceGroupId)) continue;                          // 休息日不处理
+            if (IsRestDay(user.AttendanceGroupId)) continue;                          // 法定/公司休息日不处理
             var isCompDay = IsCompensatoryWorkday(user.AttendanceGroupId);
-            if (isWeekend && !isCompDay) continue;                                    // 普通周末不处理
 
-            // 补班日之外，如果今天排的班次自己配了"每周休息日"、命中了今天，也当休息处理
-            // （比如三班倒可能休二、三，不是标准的周六周日；但补班日是公司统一要求上班，优先级更高，不受这个影响）
-            if (!isCompDay &&
-                todayAssignmentByUser.TryGetValue(user.Id, out var todayAssignment) &&
-                todayAssignment.ShiftSchedule.IsRestDay(today.DayOfWeek))
-                continue;
+            // 今天是不是"这个人的休息日"：优先看他自己排的班次配置了每周哪几天休息（比如三班倒可能休
+            // 二、三，不是标准的周六周日；六天倒班可能周六照常上班），没排班时才退回到按自然周末判断——
+            // 跟 AttendanceService.CountExpectedWorkdays/IsNonCompRestDayAsync 用同一个判断
+            // （AttendanceService.IsShiftWeeklyRestDay），不再是"周六周日一律跳过"的粗口径。之前先判
+            // 自然周末、周末直接跳过，六天倒班的人周六没来也没请假会被漏判旷工，"应出勤"却仍然算这天
+            // （发现于 2026-09-18 数据核查）。补班日是公司统一要求上班，优先级最高，不受这个影响。
+            if (!isCompDay)
+            {
+                todayAssignmentByUser.TryGetValue(user.Id, out var todayAssignment);
+                if (AttendanceService.IsShiftWeeklyRestDay(today, todayAssignment?.ShiftSchedule)) continue;
+            }
 
             recordByUser.TryGetValue(user.Id, out var record);   // 取这个人今天的考勤记录（可能没有）
 

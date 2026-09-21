@@ -92,8 +92,10 @@ public static class ExcelExportHelper
             SetCell(totalRow, 8,  summaries.Sum(s => s.EarlyLeaveCount),                     headerStyle);
             SetCell(totalRow, 9,  summaries.Sum(s => s.AbsentDays),                          headerStyle);
             SetCell(totalRow, 10, summaries.Sum(s => s.NotPunchedCount),                     headerStyle);
+            SetCell(totalRow, 11, (double)summaries.Sum(s => s.LeaveDays),                   headerStyle);
             SetCell(totalRow, 12, (double)summaries.Sum(s => s.TotalOvertimeHours),          headerStyle);
             SetCell(totalRow, 13, (double)summaries.Sum(s => s.TotalWorkHours),              headerStyle);
+            SetCell(totalRow, 14, summaries.Sum(s => s.ApprovedCount),                       headerStyle);
         }
 
         return ToBytes(wb);   // 把 Excel 转成字节数组返回（供下载）
@@ -182,7 +184,7 @@ public static class ExcelExportHelper
 
         var dayCount  = result.Dates.Count;
         var fixedCols = 6;                       // 姓名/考勤组/部门/工号/职位/合同公司
-        var tailCols  = 19;                       // 出勤天数..节假日加班（含夜班次数/夜班总工时/正班工时）
+        var tailCols  = 20;                       // 出勤天数..节假日加班（含请假天数/夜班次数/夜班总工时/正班工时）
         var totalCols = fixedCols + dayCount + tailCols;
 
         // 第 0 行：大标题（统计日期区间）
@@ -205,7 +207,7 @@ public static class ExcelExportHelper
         if (dayCount > 1) sheet.AddMergedRegion(new CellRangeAddress(2, 2, fixedCols, fixedCols + dayCount - 1));
         string[] tailHeaders =
         [
-            "出勤天数", "休息天数", "总工时", "正班工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
+            "出勤天数", "请假天数", "休息天数", "总工时", "正班工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长", "夜班次数", "夜班总工时",
             "加班总时长", "工作日加班", "休息日加班", "节假日加班"
         ];
@@ -252,7 +254,8 @@ public static class ExcelExportHelper
             }
 
             var c = fixedCols + dayCount;
-            SetCell(xRow, c++, row.ActualWorkdays, baseStyle);
+            SetCell(xRow, c++, (double)row.ActualWorkdays, baseStyle);
+            SetCellIfNonZero(xRow, c++, (double)row.LeaveDays, baseStyle);
             SetCellIfNonZero(xRow, c++, row.RestDays, baseStyle);
             SetCell(xRow, c++, (double)row.TotalWorkHours, baseStyle);
             SetCell(xRow, c++, (double)row.RegularWorkHours, baseStyle);

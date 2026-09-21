@@ -1,3 +1,5 @@
+using AttendanceSystem.Models.Entities;
+using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Implementations;
 using Xunit;
 
@@ -137,5 +139,84 @@ public class LeaveHoursTests
         var afternoonLeave = 4.5m;
         var accumulated = morningLeave + afternoonLeave;   // 模拟 record.LeaveHours += 两次
         Assert.Equal(1m, AttendanceService.ResolveLeaveDaysFraction(accumulated, StandardHours));
+    }
+
+    [Fact]
+    public void 短时长请假不足半小时被取整成0小时_但这一天仍算有真实交集()
+    {
+        // 请假 20 分钟——ComputeLeaveHoursForDay 会因为 FloorToHalf 取整成 0 小时，
+        // 但 HasLeaveOverlapForDay 要能识别出这一天确实有交集，不能被当成"没交集"直接跳过
+        // （发现于 2026-09-18：09-18 那次"无交集跳过"修复，把这种情况和真没交集混为一谈）。
+        var day   = new DateOnly(2026, 9, 10);
+        var start = new DateTime(2026, 9, 10, 9, 0, 0);
+        var end   = new DateTime(2026, 9, 10, 9, 20, 0);
+
+        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, Lunch, Dinner, StandardHours);
+        Assert.Equal(0m, hours);   // 取整后确实是 0
+
+        Assert.True(AttendanceService.HasLeaveOverlapForDay(day, start, end));   // 但这一天不该被跳过
+    }
+
+    [Fact]
+    public void 请假结束时间恰好卡在午夜_区间最后一天真的没有交集()
+    {
+        // 请假到 9-11 00:00——区间最后一天（9-11）跟请假时段完全没有交集，
+        // 这种天才应该被跳过，不新建记录、不标"请假"状态。
+        var lastDay = new DateOnly(2026, 9, 11);
+        var start   = new DateTime(2026, 9, 10, 20, 0, 0);
+        var end     = new DateTime(2026, 9, 11, 0, 0, 0);
+
+        Assert.False(AttendanceService.HasLeaveOverlapForDay(lastDay, start, end));
+    }
+
+    // ── 覆盖 ResolveAttendanceDayCredit：出勤天数 + 请假天数必须恰好加起来是 1 天，不能重复计满 ──
+    // GenerateMonthlySummaryAsync 和 GenerateTemplateReportAsync（模板汇总表/发工资用的那份导出）
+    // 共用这一个方法，2026-09-21 发现两处以前各算各的，同一个人同一个月两份报表出勤天数对不上。
+    [Fact]
+    public void 半天假当天出勤算0点5天_跟请假天数加起来正好1天()
+    {
+        var record = new AttendanceRecord
+        {
+            ClockInTime      = new DateTime(2026, 9, 10, 8, 30, 0),
+            AttendanceStatus = AttendanceStatus.OnLeave,
+            LeaveHours       = 4m   // 标准工时 8 小时的一半
+        };
+        var dayCredit = AttendanceService.ResolveAttendanceDayCredit(record, StandardHours);
+        Assert.Equal(0.5m, dayCredit);
+        Assert.Equal(1m, dayCredit + AttendanceService.ResolveLeaveDaysFraction(record.LeaveHours, StandardHours));
+    }
+
+    [Fact]
+    public void 整天请假没打卡_出勤算0天_全部记到请假天数()
+    {
+        var record = new AttendanceRecord
+        {
+            ClockInTime      = null,
+            AttendanceStatus = AttendanceStatus.OnLeave,
+            LeaveHours       = 8m
+        };
+        Assert.Equal(0m, AttendanceService.ResolveAttendanceDayCredit(record, StandardHours));
+    }
+
+    [Fact]
+    public void 正常出勤且不请假_算满1天()
+    {
+        var record = new AttendanceRecord
+        {
+            ClockInTime      = new DateTime(2026, 9, 10, 8, 30, 0),
+            AttendanceStatus = AttendanceStatus.Normal
+        };
+        Assert.Equal(1m, AttendanceService.ResolveAttendanceDayCredit(record, StandardHours));
+    }
+
+    [Fact]
+    public void 旷工没打卡_出勤算0天()
+    {
+        var record = new AttendanceRecord
+        {
+            ClockInTime      = null,
+            AttendanceStatus = AttendanceStatus.Absent
+        };
+        Assert.Equal(0m, AttendanceService.ResolveAttendanceDayCredit(record, StandardHours));
     }
 }

@@ -368,7 +368,6 @@ function escapeHtml(s) {
 }
 
 function showAttachments(urls) {
-    const html = urls.map(u => `<a href="${u}" target="_blank" class="d-block">${u.split('/').pop()}</a>`).join('');
     alert('附件：\n' + urls.join('\n'));
 }
 </script>
