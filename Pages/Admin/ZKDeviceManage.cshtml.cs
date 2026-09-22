@@ -11,7 +11,7 @@ namespace AttendanceSystem.Pages.Admin;
 
 /// <summary>考勤机管理页：维护熵基（ZKTeco）考勤机的序列号白名单，替代原来改 appsettings.json 的方式。</summary>
 [Authorize(Policy = "ManagePolicy")]
-public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService) : PageModel
+public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService, ILogger<ZKDeviceManageModel> logger) : PageModel
 {
     public List<ZKDevice>    Devices { get; set; } = [];
     public List<Department>  AssignableDepts { get; set; } = [];   // "归属部门"下拉框数据源，已按范围过滤
@@ -95,14 +95,22 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
                     // 停用这台设备时，把它还没确认执行的旧命令一并清掉——不然万一以后同一个 SN
                     // 又被重新启用（或者序列号被挪给另一台新设备复用），这些过时的命令会被当成
                     // 新命令重新投递给它，内容可能早就不对了（比如"新增某个早就又改过资料的员工"）。
-                    // 同上面删除操作一样，ExecuteDeleteAsync 立即执行、跟下面的 SaveChangesAsync
-                    // 是两次独立操作，这里也包一层事务保证要么都成功、要么都不生效。
+                    // ExecuteDeleteAsync 立即执行、跟下面的 SaveChangesAsync 是两次独立操作，这里
+                    // 包一层事务保证要么都成功、要么都不生效。
+                    // ★ 必须通过 CreateExecutionStrategy().ExecuteAsync 包一层：MySql 连接配置了失败
+                    // 自动重试（Program.cs 的 EnableRetryOnFailure），这种"重试策略"不允许用户自己
+                    // BeginTransactionAsync，否则一律直接抛 InvalidOperationException——
+                    // ApprovalService.cs:221-225 就是同一个坑当初踩过一次的记录，这里照抄同一个写法。
                     if (wasActive && !IsActive)
                     {
-                        await using var tx = await db.Database.BeginTransactionAsync();
-                        await db.ZKDeviceCommands.Where(c => c.SN == oldSn && !c.Confirmed).ExecuteDeleteAsync();
-                        await db.SaveChangesAsync();
-                        await tx.CommitAsync();
+                        var strategy = db.Database.CreateExecutionStrategy();
+                        await strategy.ExecuteAsync(async () =>
+                        {
+                            await using var tx = await db.Database.BeginTransactionAsync();
+                            await db.ZKDeviceCommands.Where(c => c.SN == oldSn && !c.Confirmed).ExecuteDeleteAsync();
+                            await db.SaveChangesAsync();
+                            await tx.CommitAsync();
+                        });
                     }
                 }
             }
@@ -123,16 +131,30 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
             if (!await deptScopeService.CanAccessDeptAsync(cu, d.DepartmentId))
             { ErrorMessage = "无权删除该设备"; await LoadAsync(); return Page(); }
 
-            // 考勤机命令表跟设备表之间没有建外键关联（SN 是纯字符串关联，不是真正的外键），
-            // 删除设备不会自动连带删掉它名下还没确认执行的命令，这里手动清一下，理由同上面停用的注释。
-            // ExecuteDeleteAsync 是立即执行、不走 SaveChanges 的，跟下面 Remove+SaveChangesAsync
-            // 是两次独立的数据库操作——包一个事务，避免中间断连导致"命令清掉了、设备却还在"这种半成品状态。
-            await using var tx = await db.Database.BeginTransactionAsync();
-            await db.ZKDeviceCommands.Where(c => c.SN == d.SN && !c.Confirmed).ExecuteDeleteAsync();
-            db.ZKDevices.Remove(d);
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
-            SuccessMessage = "已删除";
+            try
+            {
+                // 考勤机命令表跟设备表之间没有建外键关联（SN 是纯字符串关联，不是真正的外键），
+                // 删除设备不会自动连带删掉它名下还没确认执行的命令，这里手动清一下，理由同上面停用的注释。
+                // ExecuteDeleteAsync 是立即执行、不走 SaveChanges 的，跟下面 Remove+SaveChangesAsync
+                // 是两次独立的数据库操作——包一个事务，避免中间断连导致"命令清掉了、设备却还在"这种半成品状态。
+                // ★ 必须通过 CreateExecutionStrategy().ExecuteAsync 包一层，理由同上（EnableRetryOnFailure
+                // 配了重试策略后不允许用户自己 BeginTransactionAsync，见 ApprovalService.cs:221-225）。
+                var strategy = db.Database.CreateExecutionStrategy();
+                await strategy.ExecuteAsync(async () =>
+                {
+                    await using var tx = await db.Database.BeginTransactionAsync();
+                    await db.ZKDeviceCommands.Where(c => c.SN == d.SN && !c.Confirmed).ExecuteDeleteAsync();
+                    db.ZKDevices.Remove(d);
+                    await db.SaveChangesAsync();
+                    await tx.CommitAsync();
+                });
+                SuccessMessage = "已删除";
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "删除设备失败，Id={Id}", id);
+                ErrorMessage = "删除失败，请稍后重试";
+            }
         }
         else
         {
