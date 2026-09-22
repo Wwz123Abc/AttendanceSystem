@@ -547,15 +547,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
             foreach (var date in dates)
             {
-                // 入职日之前的日子不算这个人的考勤范围——没有这一条，新员工入职前那几天会因为
-                // "当天没有考勤记录、又不是休息日"被误判成旷工，把刚入职的人旷工天数算多
-                if (user.HireDate is { } hireDate && date < hireDate)
-                {
-                    row.DailyHours.Add(null);
-                    row.DailyIsNightShift.Add(false);
-                    continue;
-                }
-
+                // 原来这里有一条"入职日之前的日子不算这个人的考勤范围"的跳过逻辑，是为了防止
+                // "当天没有考勤记录、又不是休息日"被误判成旷工；但 2026-09-22 统一旷工口径之后，
+                // 没有记录的日子本来就不会再被算成旷工了（只认后台任务真正标记的 Absent 记录），
+                // 这条跳过逻辑的原始目的已经不存在。而它还有一个没被注意到的副作用：如果入职日期
+                // 是后补录/改晚的，员工入职日之前如果真的有考勤记录（打卡本身是真实发生的），
+                // 这条记录会被整天跳过、不计入出勤天数/工时/缺卡统计——跟 GenerateMonthlySummaryAsync
+                // （只用 HireDate 调整"应出勤天数"，从不过滤已有记录）不一致，数据核查时发现过实际案例。
+                // 现在改成跟月度汇总一样：有记录就正常处理，HireDate 不再在这里过滤任何一天。
                 recByDate.TryGetValue(date, out var rec);
                 assignByDate.TryGetValue(date, out var assign);
                 var holiday      = myHolidays.FirstOrDefault(h => h.HolidayDate == date);
