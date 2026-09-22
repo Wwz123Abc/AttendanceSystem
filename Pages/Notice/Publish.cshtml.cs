@@ -15,7 +15,7 @@ namespace AttendanceSystem.Pages.Notice;
 /// 分公司管理员（受部门范围限定）不能选"全公司"，"按部门/按考勤组"也只能选自己范围内的。
 /// </summary>
 [Authorize(Policy = "ApprovePolicy")]
-public class PublishModel(IAnnouncementService announcementService, IDeptScopeService deptScopeService, AttendanceDbContext db) : AppPageModel
+public class PublishModel(IAnnouncementService announcementService, IDeptScopeService deptScopeService, AttendanceDbContext db, ILogger<PublishModel> logger) : AppPageModel
 {
     public List<AnnouncementPublishedItemDto> MyPublished  { get; set; } = [];
     public List<AnnouncementScopeOptionDto>   DeptOptions  { get; set; } = [];
@@ -102,7 +102,12 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
             });
             SuccessMessage = "公告已发布";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "发布公告失败");
+            ErrorMessage = "保存失败，请稍后重试";
+        }
 
         await LoadAsync();
         return Page();

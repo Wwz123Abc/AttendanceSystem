@@ -181,6 +181,9 @@ public static class ExcelExportHelper
         var dataStyle    = DataStyle(wb);
         var nightShiftStyle = NightShiftStyle(wb);   // 夜班当天的格子：黄底
         var redStyle     = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);
+        // 提前建好、循环里直接复用，不然每行每个字段都调一次 ColorStyle 新建样式对象，
+        // 这份报表最多 2000+ 行、每行 7 个可能标色的字段，累计下来会新建上万个样式对象
+        var orangeCellStyle = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index);
 
         var dayCount  = result.Dates.Count;
         var fixedCols = 6;                       // 姓名/考勤组/部门/工号/职位/合同公司
@@ -207,8 +210,8 @@ public static class ExcelExportHelper
         if (dayCount > 1) sheet.AddMergedRegion(new CellRangeAddress(2, 2, fixedCols, fixedCols + dayCount - 1));
         string[] tailHeaders =
         [
-            "出勤天数", "请假天数", "休息天数", "总工时", "正班工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
-            "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "外出时长", "夜班次数", "夜班总工时",
+            "出勤天数", "请假天数", "休息天数", "正班工时", "迟到时长", "早退次数", "迟到次数", "早退时长",
+            "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长", "夜班次数", "夜班总工时",
             "加班总时长", "工作日加班", "休息日加班", "节假日加班"
         ];
         for (var i = 0; i < tailHeaders.Length; i++) SetCell(headerRow, fixedCols + dayCount + i, tailHeaders[i], headerStyle);
@@ -257,7 +260,8 @@ public static class ExcelExportHelper
             SetCell(xRow, c++, (double)row.ActualWorkdays, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.LeaveDays, baseStyle);
             SetCellIfNonZero(xRow, c++, row.RestDays, baseStyle);
-            SetCell(xRow, c++, (double)row.TotalWorkHours, baseStyle);
+            // 总工时（正班+加班）跟正班工时统一口径后两列数值完全相同，删掉这一列，只保留"正班工时"
+            // （加班已经单独有"加班总时长"及其细分列），避免同一张表里出现两列数字永远一样的困惑
             SetCell(xRow, c++, (double)row.RegularWorkHours, baseStyle);
             SetCellIfNonZero(xRow, c++, row.LateMinutes, orangeOrRed(row.LateMinutes));
             SetCellIfNonZero(xRow, c++, row.EarlyLeaveCount, orangeOrRed(row.EarlyLeaveCount));
@@ -268,7 +272,6 @@ public static class ExcelExportHelper
             SetCellIfNonZero(xRow, c++, row.AbsentDays, redIfPositive(row.AbsentDays));
             if (row.BusinessTripHours > 0) SetCell(xRow, c, (double)row.BusinessTripHours, baseStyle);
             c++;
-            c++;   // 外出时长：系统没有这个概念，恒不写值（留空）
             SetCellIfNonZero(xRow, c++, row.NightShiftDays, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.NightShiftHours, baseStyle);
             SetCellIfNonZero(xRow, c++, (double)row.TotalOvertimeHours, baseStyle);
@@ -279,7 +282,7 @@ public static class ExcelExportHelper
 
         return ToBytes(wb);
 
-        ICellStyle orangeOrRed(int v) => v > 0 ? ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index) : dataStyle;
+        ICellStyle orangeOrRed(int v) => v > 0 ? orangeCellStyle : dataStyle;
         ICellStyle redIfPositive(int v) => v > 0 ? redStyle : dataStyle;
     }
 
@@ -288,6 +291,10 @@ public static class ExcelExportHelper
         List<DateOnly> dates,
         List<(string RealName, string EmployeeNo, string GroupName, string? DeptName, List<string?> DailyShiftName, List<bool> DailyMissing, int MissingCount)> rows)
     {
+        // dates 为空时 dates.First()/dates.Last() 会抛出没什么信息量的 InvalidOperationException，
+        // 这里提前判断，抛出一个说得清楚原因的异常
+        if (dates.Count == 0) throw new ArgumentException("dates 不能为空", nameof(dates));
+
         using var wb = new XSSFWorkbook();
         var sheet = wb.CreateSheet("排班记录");
 

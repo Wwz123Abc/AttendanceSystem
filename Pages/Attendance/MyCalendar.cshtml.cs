@@ -30,6 +30,13 @@ public class MyCalendarModel(IAttendanceService attendanceService) : AppPageMode
         // 这里跟"没传"一样兜底成当前年月，而不是校验失败就 500
         Year  = year  is >= 2000 and <= 2100 ? year.Value : DateTime.Today.Year;
         Month = month is >= 1 and <= 12 ? month.Value : DateTime.Today.Month;
+        // 年月合法（比如 2000~2100 内）不代表可以随便查——任何登录员工改网址上的年月一路遍历，
+        // 每个没生成过汇总的月份都会触发一次 EnsureMonthlySummaryFreshAsync 重算+写库。
+        // 这里只放开"最近 24 个月以内（含下个月）"，超出范围一律退回当前年月，跟上面越界兜底同一套处理。
+        var requested = new DateTime(Year, Month, 1);
+        var earliest  = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-24);
+        var latest    = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(1);
+        if (requested < earliest || requested > latest) { Year = DateTime.Today.Year; Month = DateTime.Today.Month; }
         var userId  = CurrentUserId;
         var groupId = CurrentGroupId;
 

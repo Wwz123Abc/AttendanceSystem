@@ -270,6 +270,7 @@
             <form method="post" asp-page-handler="SaveShift">
                 @Html.Raw(ctxGroupsHidden)
                 <input type="hidden" asp-for="ShiftId" id="shiftId" />
+                <input type="hidden" asp-for="EarliestIn" id="fEI" />
                 <div class="modal-header">
                     <h5 class="modal-title" id="shiftModalTitle">新增班次</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -375,6 +376,7 @@ function openAddShift() {
     document.getElementById('fWE').value = '18:00';
     document.getElementById('fLT').value = 5;
     document.getElementById('fET').value = 5;
+    document.getElementById('fEI').value = 60;
     document.getElementById('fOT').value = 30;
     document.getElementById('fSH').value = 8;
     document.getElementById('fCross').checked = false;
@@ -394,6 +396,7 @@ function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, 
     document.getElementById('fWE').value = we;
     document.getElementById('fLT').value = lt;
     document.getElementById('fET').value = et;
+    document.getElementById('fEI').value = ei;
     document.getElementById('fOT').value = ot;
     document.getElementById('fSH').value = sh;
     document.getElementById('fCross').checked = cross;

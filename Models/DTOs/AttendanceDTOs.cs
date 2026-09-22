@@ -172,8 +172,6 @@ public class TemplateReportRowDto
     public decimal LeaveDays       { get; set; }   // 请假天数（按小时折算，半天假算 0.5 天）
     public int     RestDays        { get; set; }   // 休息天数（周末/法定节假日/公司休息日，不含调班补班日）
 
-    /// <summary>工作时长（合计）＝ 正班工时 + 加班总时长，按小时算钱用这个数字。</summary>
-    public decimal TotalWorkHours  { get; set; }
     /// <summary>正班工时（不含加班）：跟每日打卡格子、"考勤机/打卡/审批回写"那套算法算出来的是同一个数字，
     /// 只是这里单独拆出来展示，方便区分"正常上班的时长"和"另外走加班申请批的时长"。</summary>
     public decimal RegularWorkHours { get; set; }
@@ -187,7 +185,6 @@ public class TemplateReportRowDto
     public int AbsentDays          { get; set; }   // 旷工天数
 
     public decimal BusinessTripHours { get; set; }   // 出差时长
-    public decimal OutHours          { get; set; }   // 外出时长（系统目前没有“外出”这个概念，恒为 0）
 
     // 注意：这四列单位是"小时"，跟 TotalWorkHours（工作时长）同一个单位口径，不是分钟——
     // 参考模板里这几列的数值大小和"工作时长"是同一量级（比如整月工作 235 小时、加班 110 小时这种），

@@ -35,6 +35,9 @@ public class AdminController(
         [FromQuery] UserRole? role, [FromQuery] string? keyword,
         [FromQuery] int pageIndex = 1, [FromQuery] int pageSize = 20)
     {
+        // 不钳制的话 pageIndex<=0 会让 Skip 传负数抛异常，pageSize 传很大的值能一次拉全表（两张表 join）
+        pageIndex = Math.Max(1, pageIndex);
+        pageSize  = Math.Clamp(pageSize, 1, 200);
         deptId = await deptScopeService.ResolveEffectiveDeptIdAsync(Cu, deptId);
         var (users, total) = await userService.GetUsersAsync(deptId, groupId, role, keyword, pageIndex, pageSize);
         // 只挑前端需要的字段返回（不直接返回整个实体，避免泄露密码哈希等）
@@ -77,7 +80,7 @@ public class AdminController(
             Role              = req.Role,
             AttendanceGroupId = req.AttendanceGroupId,
             SupervisorUserId  = req.SupervisorUserId,
-            Phone             = req.Phone,
+            Phone             = string.IsNullOrWhiteSpace(req.Phone) ? null : req.Phone.Trim(),
             Email             = req.Email,
             // 归一化跟 UserManage 页面 BuildUser() 一致（大写、去空格），黑名单身份证查重
             // （CreateUserAsync 里 u.IdNumber == user.IdNumber 是精确匹配）才不会因为大小写/空格对不上
@@ -106,6 +109,10 @@ public class AdminController(
         if (req.DeviceIds is not null && !await ValidateDeviceScopeAsync(req.DeviceIds))
             return Forbid();
 
+        // UpdateUserRequest 不含这几个字段，但 UserService.UpdateUserAsync 会无条件覆盖它们——
+        // 这里先取数据库里的现值再原样带回去，避免接口调用把住址/紧急联系人/身份证照片/合同公司/
+        // 远程打卡权限静默清空（跟下面 Email 不在这里赋值是同一个道理）。
+        var current = await userService.GetUserByIdAsync(id);
         var user = new User
         {
             Id                = id,
@@ -116,10 +123,16 @@ public class AdminController(
             Role              = req.Role,
             AttendanceGroupId = req.AttendanceGroupId,
             SupervisorUserId  = req.SupervisorUserId,
-            Phone             = req.Phone,
+            Phone             = string.IsNullOrWhiteSpace(req.Phone) ? null : req.Phone.Trim(),
             Email             = req.Email,
             IdNumber          = string.IsNullOrWhiteSpace(req.IdNumber) ? null : req.IdNumber.Trim().ToUpperInvariant(),
-            HireDate          = req.HireDate
+            HireDate          = req.HireDate,
+            ContractCompany        = current?.ContractCompany,
+            HomeAddress             = current?.HomeAddress,
+            EmergencyContactName    = current?.EmergencyContactName,
+            EmergencyContactPhone   = current?.EmergencyContactPhone,
+            IdCardPhotoUrl          = current?.IdCardPhotoUrl,
+            AllowRemotePunch        = current?.AllowRemotePunch ?? false
         };
         var ok = await userService.UpdateUserAsync(user);
         if (ok)
@@ -185,6 +198,9 @@ public class AdminController(
     /// 总部管理员才能把角色设成管理员——跟 UserManage 页面用的是同一套规则。</summary>
     private async Task<bool> ValidateUserScopeAsync(int? deptId, int? supervisorUserId, UserRole role, int? groupId = null)
     {
+        // 枚举值本身要合法——JSON 反序列化不会拦截超出定义范围的整数（比如 {"role":99}），
+        // 不挡住的话会静默落库成一个显示不出中文名、权限判断全部落空的脏角色
+        if (!Enum.IsDefined(role)) return false;
         if (!await deptScopeService.CanAccessDeptAsync(Cu, deptId)) return false;
         // 考勤组归属校验：原来只校验了部门/上级/角色/设备，唯独漏了考勤组——受限管理员能通过这个接口
         // 把员工挂到任意考勤组（含别的分公司的组），套用对方的班次时间/休息日/扣时规则，

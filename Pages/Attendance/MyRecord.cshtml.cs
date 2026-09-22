@@ -20,6 +20,12 @@ public class MyRecordModel(IAttendanceService attendanceService) : AppPageModel
         // year/month 直接来自 URL，跟"我的日历"同样的兜底（非法值一律当成没传，退回当前年月）
         Year  = year  is >= 2000 and <= 2100 ? year.Value : DateTime.Today.Year;
         Month = month is >= 1 and <= 12 ? month.Value : DateTime.Today.Month;
+        // 只放开"最近 24 个月以内（含下个月）"，超出范围退回当前年月——跟"我的日历"同一套限制，
+        // 避免遍历任意合法年月触发大量 EnsureMonthlySummaryFreshAsync 重算/写库
+        var requested = new DateTime(Year, Month, 1);
+        var earliest  = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-24);
+        var latest    = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(1);
+        if (requested < earliest || requested > latest) { Year = DateTime.Today.Year; Month = DateTime.Today.Month; }
         var userId = CurrentUserId;
 
         Records = await attendanceService.GetPersonalAttendanceAsync(new PersonalAttendanceQueryDto

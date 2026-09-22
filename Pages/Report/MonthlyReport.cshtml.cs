@@ -189,11 +189,13 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         var target = await attendanceService.GetMonthlySummaryAsync(userId, year, month);
         if (target is null) return NotFound();
 
-        // 补上这个人的每日明细（汇总列表里默认不带明细）
-        var records = await attendanceService.GetPersonalAttendanceAsync(new PersonalAttendanceQueryDto
+        // 补上这个人的每日明细（汇总列表里默认不带明细）。GetPersonalAttendanceAsync 默认按日期倒序
+        // （给"我的记录"页面用的，最近的排前面），但这份导出要跟 API 的 ReportController.ExportDailyStatus
+        // 保持同一个顺序（按日期正序），这里重新排一下，不改 GetPersonalAttendanceAsync 本身的默认顺序。
+        var records = (await attendanceService.GetPersonalAttendanceAsync(new PersonalAttendanceQueryDto
         {
             UserId = userId, Year = year, Month = month
-        });
+        })).OrderBy(r => r.WorkDate).ToList();
         target.DailyRecords = records;
 
         var bytes = ExcelExportHelper.ExportDailyStatusReport(target);

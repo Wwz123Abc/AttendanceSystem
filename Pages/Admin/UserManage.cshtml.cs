@@ -24,7 +24,8 @@ public class UserManageModel(
     IDeptScopeService deptScopeService,
     IOptions<AppSettingsOptions> appOptions,
     IWebHostEnvironment env,                    // 用来定位 wwwroot 目录存身份证照片
-    AttendanceDbContext db) : PageModel
+    AttendanceDbContext db,
+    ILogger<UserManageModel> logger) : PageModel
 {
     public List<User>            Users       { get; set; } = [];
     public List<AttendanceGroup> Groups      { get; set; } = [];
@@ -204,7 +205,12 @@ public class UserManageModel(
     public async Task<IActionResult> OnPostRejectRegistrationAsync(int id)
     {
         try { await registrationService.RejectAsync(id, RejectReason, HttpContext.GetCurrentUser()!); SuccessMessage = "已驳回该登记"; }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "驳回扫码登记失败，Id={Id}", id);
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -253,11 +259,18 @@ public class UserManageModel(
 
             SuccessMessage = $"员工 {RealName} 创建成功！初始密码：{initialPwd}";
         }
-        catch (Exception ex)
+        catch (InvalidOperationException ex)
         {
             ErrorMessage = ex.Message;
             // 认领登记之后，建号中途任何一步失败，都要把登记状态退回"待确认"——不然这条登记既没建成号，
             // 状态又不再是 Pending，会从列表里消失，只能让员工重新扫码提交
+            if (RegistrationId.HasValue)
+                await registrationService.RevertClaimAsync(RegistrationId.Value);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "新建员工失败，EmployeeNo={EmployeeNo}", EmployeeNo);
+            ErrorMessage = "保存失败，请稍后重试";
             if (RegistrationId.HasValue)
                 await registrationService.RevertClaimAsync(RegistrationId.Value);
         }
@@ -293,7 +306,12 @@ public class UserManageModel(
             }
             SuccessMessage = ok ? "员工信息更新成功！" : "更新失败：用户不存在";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "更新员工失败，EditUserId={EditUserId}", EditUserId);
+            ErrorMessage = "保存失败，请稍后重试";
+        }
         await ReloadAsync();
         return Page();
     }
@@ -310,7 +328,12 @@ public class UserManageModel(
             await userService.DeactivateUserAsync(id);
             SuccessMessage = "已停用该账号（无法登录）";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "停用员工失败，Id={Id}", id);
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -321,7 +344,12 @@ public class UserManageModel(
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await userService.ActivateUserAsync(id); SuccessMessage = "已启用该账号";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "启用员工失败，Id={Id}", id);
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -332,7 +360,12 @@ public class UserManageModel(
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await userService.BlacklistUserAsync(id); SuccessMessage = "已拉黑该员工（禁止登录，工号永不再用）";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "拉黑员工失败，Id={Id}", id);
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -343,7 +376,12 @@ public class UserManageModel(
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await userService.RemoveFromBlacklistAsync(id); SuccessMessage = "已移出黑名单（当前为“已停用”，如需恢复请再点“启用”）";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "移出黑名单失败，Id={Id}", id);
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -355,7 +393,12 @@ public class UserManageModel(
             await userService.DeleteUserAsync(id);
             SuccessMessage = "已彻底删除该员工";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "删除员工失败，Id={Id}", id);
+            ErrorMessage = "删除失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -366,7 +409,12 @@ public class UserManageModel(
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             var pwd = await userService.ResetPasswordAsync(id, ResetPasswordValue); SuccessMessage = $"密码已重置为：{pwd}";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "重置密码失败，Id={Id}", id);
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -378,7 +426,12 @@ public class UserManageModel(
         try { var ids = await FilterAccessibleUserIdsAsync(ParseIds(BatchIds));
               var n = await userService.SetActiveBatchAsync(ids, true);
               SuccessMessage = $"已启用 {n} 名员工（黑名单员工已跳过）"; }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "批量启用员工失败");
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 
@@ -387,7 +440,12 @@ public class UserManageModel(
         try { var ids = await FilterAccessibleUserIdsAsync(ParseIds(BatchIds));
               var n = await userService.SetActiveBatchAsync(ids, false);
               SuccessMessage = $"已停用 {n} 名员工"; }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "批量停用员工失败");
+            ErrorMessage = "操作失败，请稍后重试";
+        }
         await ReloadAsync(); return Page();
     }
 

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Enums;
@@ -15,6 +16,7 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
 {
     /// <summary>员工提交审批申请。</summary>
     [HttpPost("submit")]
+    [EnableRateLimiting("ApprovalSubmitPolicy")]
     public async Task<IActionResult> Submit([FromBody] SubmitApprovalDto dto)
     {
         var request = await approvalService.SubmitApprovalAsync(CurrentUserId, dto);

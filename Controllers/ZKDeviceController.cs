@@ -280,7 +280,10 @@ public class ZKDeviceController(
 
         var bodyBytes = await ReadBodyBytesAsync();
         var text = Gbk.GetString(bodyBytes);
-        logger.LogInformation("考勤机 {SN} 命令执行结果：{Result}", SN, text);
+        // 设备回执内容不可控、也没有长度上限，整段打进日志有把日志文件灌爆、或者靠内嵌换行做
+        // 日志注入的风险——跟上面 Upload() 里"不认识的 table 类型"那处一样，只留前 200 字符方便排查
+        var preview = text.Length > 200 ? text[..200] + "...(截断)" : text;
+        logger.LogInformation("考勤机 {SN} 命令执行结果：{Result}", SN, preview);
 
         try
         {

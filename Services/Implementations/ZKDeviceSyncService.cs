@@ -101,9 +101,7 @@ public class ZKDeviceSyncService(
         // 这里不拒绝设备推上来的原始打卡（那样会丢数据），改成节假日当天不结算工时、
         // 状态标成"休假"，跟本地打卡"节假日不用打卡"的语义对齐；调班补班日不算节假日，照常结算。
         var holidays = await db.Holidays.Where(h => dates.Contains(h.HolidayDate)).ToListAsync(ct);
-        bool IsHoliday(DateOnly date, int? groupId) => holidays.Any(h =>
-            h.HolidayDate == date && h.HolidayType != HolidayType.CompensatoryWorkDay &&
-            (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
+        bool IsHoliday(DateOnly date, int? groupId) => AttendanceService.IsHolidayDate(date, groupId, holidays);
 
         var punchSet = (await db.AttendancePunches
                 .Where(p => uids.Contains(p.UserId) && dates.Contains(DateOnly.FromDateTime(p.PunchTime)))
@@ -194,7 +192,7 @@ public class ZKDeviceSyncService(
             if (type == PunchType.ClockIn && (record.ClockInTime is null || r.Time < record.ClockInTime))
             {
                 record.ClockInTime = r.Time;
-                var status = AttendanceService.CalcClockInStatus(r.Time, shift, isRestDay, out var lateMin);
+                var status = AttendanceService.CalcClockInStatus(workDate, r.Time, shift, isRestDay, out var lateMin);
                 // 旷工可以被真的打了上班卡这件事纠正回来（不管是不是迟到，只要打了卡就不算旷工了），
                 // 但出差/节假日这两个由审批流程/定时任务设置的状态，不能被这里的上班打卡同步顺手覆盖掉。
                 // 之前只在"迟到"时才更新状态，导致旷工的人如果准点打卡（不迟到）反而不会被纠正回来，

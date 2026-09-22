@@ -14,7 +14,7 @@ namespace AttendanceSystem.Pages.Admin;
 /// "仅对自己范围内考勤组生效"的假期；不挂考勤组的全公司通用假期只有总部管理员能新增/删除，
 /// 但所有人都能看到（跟考勤组管理页"关联部门在自己范围内"的口径一致）。</summary>
 [Authorize(Policy = "ManagePolicy")]
-public class HolidayManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService) : PageModel
+public class HolidayManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService, ILogger<HolidayManageModel> logger) : PageModel
 {
     public List<Holiday>         Holidays    { get; set; } = [];   // 当年的假期列表
     public List<AttendanceGroup> Groups      { get; set; } = [];   // 考勤组（用于“仅对某组生效”）
@@ -61,11 +61,21 @@ public class HolidayManageModel(AttendanceDbContext db, IDeptScopeService deptSc
                 throw new InvalidOperationException("假期名称不能超过 100 个字");
             if (!DateOnly.TryParse(HolidayDate, out var date))
                 throw new InvalidOperationException("请选择正确的日期");
-            if (!Enum.TryParse<Models.Enums.HolidayType>(HolidayType, out var type))
+            if (date.Year != Year)
+                throw new InvalidOperationException($"日期年份（{date.Year}）跟当前筛选的年份（{Year}）不一致，请先把年份下拉切到 {date.Year} 年再添加，不然加完在列表里看不到");
+            if (!Enum.TryParse<Models.Enums.HolidayType>(HolidayType, out var type) || !Enum.IsDefined(type))
                 throw new InvalidOperationException("请选择正确的假期类型");
             var desc = string.IsNullOrWhiteSpace(Description) ? null : Description.Trim();
             if (desc?.Length > 500)
                 throw new InvalidOperationException("备注不能超过 500 个字");
+
+            // 同一天、同一个考勤组范围（或都是"全公司通用"）不允许重复配置——不然"是不是节假日"和
+            // "算不算应出勤"这两处判断可能因为命中不同记录而互相矛盾（同一天既是法定节假日又是调班补班日）。
+            var conflict = await db.Holidays.AnyAsync(h => h.HolidayDate == date && h.AttendanceGroupId == GroupId);
+            if (conflict)
+                throw new InvalidOperationException(GroupId.HasValue
+                    ? "该考勤组这天已经配置过假期/调班，不能重复添加，请先删除原有的再重新添加"
+                    : "全公司这天已经配置过假期/调班，不能重复添加，请先删除原有的再重新添加");
 
             var holiday = new Holiday
             {
@@ -80,7 +90,12 @@ public class HolidayManageModel(AttendanceDbContext db, IDeptScopeService deptSc
             await db.SaveChangesAsync();
             SuccessMessage = "假期添加成功";
         }
-        catch (Exception ex) { ErrorMessage = $"添加失败：{ex.Message}"; }
+        catch (InvalidOperationException ex) { ErrorMessage = $"添加失败：{ex.Message}"; }   // 自己抛的中文校验提示，可以直接给用户看
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "新增假期失败");
+            ErrorMessage = "添加失败，请稍后重试";   // 数据库层面的原始报错不直接展示给用户（可能带表名/约束名等技术细节）
+        }
 
         await LoadAsync();
         return Page();

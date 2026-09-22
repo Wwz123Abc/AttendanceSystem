@@ -85,6 +85,12 @@ public class UserService(
         user.FailedLoginCount = 0;      // 登录成功，失败计数清零
         user.LockedUntil      = null;
         user.LastLoginAt      = DateTime.Now;   // 记录这次登录时间
+
+        // 老格式哈希（迭代次数只有新格式的 1/60）登录成功就顺手升级成新格式，不用等管理员重置密码
+        // ——用户完全无感知，密码本身不变，只是重新用更高强度的迭代次数存一遍
+        if (IsLegacyHash(user.PasswordHash))
+            user.PasswordHash = HashPassword(password);
+
         await db.SaveChangesAsync();
         return user;
     }
@@ -129,12 +135,17 @@ public class UserService(
         {
             await db.SaveChangesAsync();
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
             // 上面那个"存不存在"的检查和这里真正插入之间有个时间差：两个管理员几乎同时新建员工、
             // 自动生成到了同一个工号的话，先查的时候都还没冲突，插的时候后到的这个会撞数据库的
-            // 唯一索引报错。这里捕获成友好提示，不让admin看到一句看不懂的原始数据库错误。
-            throw new InvalidOperationException($"工号 {user.EmployeeNo} 刚被别人抢先用掉了，请重新生成工号或换一个再试");
+            // 唯一索引报错。但 SaveChangesAsync 失败的原因不止这一种（别的字段超长、非空校验等），
+            // 先把真实异常记下来，方便真出问题时排查；只有能从数据库报错信息里认出确实是 EmployeeNo
+            // 唯一索引冲突时，才对外报这个具体原因，否则一律用不误导人的通用提示。
+            logger.LogWarning(ex, "新建员工 {EmployeeNo} 保存失败", user.EmployeeNo);
+            if (ex.InnerException?.Message.Contains("EmployeeNo") == true)
+                throw new InvalidOperationException($"工号 {user.EmployeeNo} 刚被别人抢先用掉了，请重新生成工号或换一个再试");
+            throw new InvalidOperationException("保存失败，请稍后重试");
         }
 
         // 注意：这里不下发考勤机推送——新建的这一刻员工还没被分配任何设备（UserZKDevice 关联记录
@@ -366,7 +377,8 @@ public class UserService(
     }
 
     /// <summary>批量启用/停用。启用时会跳过黑名单员工（黑名单需先移出）。返回实际处理条数。
-    /// 批量停用的员工，和单个停用一样会顺带从考勤机上删掉。</summary>
+    /// 批量停用的员工，和单个停用一样会顺带从考勤机上删掉；批量启用的员工，和单个启用（ActivateUserAsync）
+    /// 一样要顺带补发一次下发，不然设备上刷不了脸。</summary>
     public async Task<int> SetActiveBatchAsync(IEnumerable<int> userIds, bool active)
     {
         var ids   = userIds.Distinct().ToList();
@@ -374,6 +386,7 @@ public class UserService(
 
         var changed = 0;
         var deactivatedEmployeeNos = new List<(string EmployeeNo, int UserId)>();
+        var activatedUsers = new List<User>();
         foreach (var u in users)
         {
             if (active && u.IsBlacklisted) continue;   // 黑名单不参与批量启用
@@ -382,11 +395,14 @@ public class UserService(
             u.IsActive  = active;
             u.UpdatedAt = DateTime.Now;
             if (!active) deactivatedEmployeeNos.Add((u.EmployeeNo, u.Id));
+            else activatedUsers.Add(u);
             changed++;
         }
         if (changed > 0) await db.SaveChangesAsync();
         foreach (var (employeeNo, userId) in deactivatedEmployeeNos)
             await TryDeleteFromZKDeviceAsync(employeeNo, userId);
+        foreach (var u in activatedUsers)
+            await TryPushToZKDeviceAsync(u);
         return changed;
     }
 
@@ -629,20 +645,28 @@ public class UserService(
         var parts = storedHash.Split(':');
         int iterations;
         byte[] salt, expectedHash;
-        if (parts.Length == 3)          // 新格式："迭代次数:盐:哈希"
+        try
         {
-            if (!int.TryParse(parts[0], out iterations)) return false;
-            salt         = Convert.FromBase64String(parts[1]);
-            expectedHash = Convert.FromBase64String(parts[2]);
+            if (parts.Length == 3)          // 新格式："迭代次数:盐:哈希"
+            {
+                if (!int.TryParse(parts[0], out iterations)) return false;
+                salt         = Convert.FromBase64String(parts[1]);
+                expectedHash = Convert.FromBase64String(parts[2]);
+            }
+            else if (parts.Length == 2)     // 老格式："盐:哈希"，没有迭代次数字段，按老次数算
+            {
+                iterations   = LegacyIterations;
+                salt         = Convert.FromBase64String(parts[0]);
+                expectedHash = Convert.FromBase64String(parts[1]);
+            }
+            else
+            {
+                return false;
+            }
         }
-        else if (parts.Length == 2)     // 老格式："盐:哈希"，没有迭代次数字段，按老次数算
+        catch (FormatException)
         {
-            iterations   = LegacyIterations;
-            salt         = Convert.FromBase64String(parts[0]);
-            expectedHash = Convert.FromBase64String(parts[1]);
-        }
-        else
-        {
+            // 存储的哈希损坏/不是合法 Base64——按"密码不匹配"处理，不能让这里抛出去变成登录接口的 500
             return false;
         }
 
@@ -650,6 +674,10 @@ public class UserService(
             Encoding.UTF8.GetBytes(password), salt, iterations, HashAlgorithmName.SHA256, 32);
         return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);  // 安全比对
     }
+
+    /// <summary>判断存储的哈希是不是老格式（两段式"盐:哈希"，没有迭代次数字段）。登录成功后用来
+    /// 决定要不要顺手把它升级成新格式（新格式迭代次数是老格式的 60 倍）。</summary>
+    private static bool IsLegacyHash(string storedHash) => storedHash.Split(':').Length == 2;
 
     /// <summary>登录时序侧信道防护用的假哈希：工号根本不存在时，也拿它跑一遍完整的哈希校验计算，
     /// 让"工号不存在"和"工号存在但密码错"这两种失败在响应耗时上没有可观测的差别。</summary>

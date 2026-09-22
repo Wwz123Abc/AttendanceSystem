@@ -20,7 +20,8 @@ namespace AttendanceSystem.Pages.Employee;
 public class SelfRegisterModel(
     IEmployeeRegistrationService registrationService,
     IWebHostEnvironment env,                    // 用来定位 wwwroot 目录存身份证照片
-    IOptions<AppSettingsOptions> appOptions) : PageModel
+    IOptions<AppSettingsOptions> appOptions,
+    ILogger<SelfRegisterModel> logger) : PageModel
 {
     [BindProperty] public string  RealName              { get; set; } = string.Empty;
     [BindProperty] public string  Phone                 { get; set; } = string.Empty;
@@ -49,6 +50,10 @@ public class SelfRegisterModel(
     /// <summary>点"提交"时执行。</summary>
     public async Task<IActionResult> OnPostAsync()
     {
+        // 只跟踪"这次请求自己刚保存的照片"是哪个物理路径——如果下面 SubmitAsync 的业务校验
+        // （姓名/身份证号格式等）后失败，要把这次刚落盘的照片删掉，不然匿名接口反复提交、
+        // 每次都能在 SubmitAsync 失败前留下一张最大 10MB 的孤儿照片，白白占用磁盘
+        string? savedPhotoPath = null;
         try
         {
             if (IdCardPhoto is null || IdCardPhoto.Length == 0)
@@ -61,6 +66,7 @@ public class SelfRegisterModel(
             if (string.IsNullOrWhiteSpace(Phone) || !System.Text.RegularExpressions.Regex.IsMatch(Phone.Trim(), @"^1[3-9]\d{9}$"))
                 throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
             var photoUrl = await SaveIdCardPhotoAsync();
+            savedPhotoPath = photoUrl is null ? null : Path.Combine(PrivateFileStorage.GetRoot(env), photoUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
             await registrationService.SubmitAsync(new SubmitRegistrationDto
             {
                 RealName              = RealName,
@@ -78,7 +84,22 @@ public class SelfRegisterModel(
         }
         catch (Exception ex)
         {
-            ErrorMessage = ex.Message;
+            // 照片已经落盘了，但后面的 SubmitAsync 校验没通过——把刚保存的这张删掉，不留孤儿文件；
+            // 删除失败也只是记日志，不能让"清理失败"盖过用户本来该看到的原始错误提示
+            if (savedPhotoPath is not null)
+            {
+                try { System.IO.File.Delete(savedPhotoPath); }
+                catch (Exception delEx) { logger.LogWarning(delEx, "自助登记提交失败后清理孤儿照片失败：{Path}", savedPhotoPath); }
+            }
+            if (ex is InvalidOperationException)
+            {
+                ErrorMessage = ex.Message;
+            }
+            else
+            {
+                logger.LogError(ex, "自助登记提交失败");
+                ErrorMessage = "提交失败，请稍后重试";
+            }
         }
         return Page();
     }

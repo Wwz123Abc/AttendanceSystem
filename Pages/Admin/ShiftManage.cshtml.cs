@@ -18,7 +18,7 @@ namespace AttendanceSystem.Pages.Admin;
 /// 分公司管理员只能选自己范围内的考勤组。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService) : PageModel
+public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService, ILogger<ShiftManageModel> logger) : PageModel
 {
     public List<AttendanceGroup> Groups           { get; set; } = [];   // 所有考勤组（多选用）
     public List<int>             SelectedGroupIds  { get; set; } = [];   // 当前选中的考勤组
@@ -289,6 +289,9 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             // 午间必打卡窗口：每一行两个都留空就跳过；填了就必须成对、且开始早于结束
             // （不同班次时间不一样，由管理员按这个班次自己的上下班时间去设置对应的中段窗口，
             //  比如 8-18 点的班配 12-13 点；下午班/晚班配各自班次中段的时间；可以配多段）
+            // 数量给个上限：ShiftSchedule.MidCheckWindows / AttendanceRecord.MidCheckResults 都是
+            // [MaxLength(500)] 的字符串列，配太多段序列化后会超长，要么被截断要么存库时直接报错
+            if (MidCheckWindowInputs.Count > 10) throw new Exception("午间必打卡窗口最多只能配置 10 段");
             var midCheckWindows = new List<(TimeOnly Start, TimeOnly End)>();
             foreach (var w in MidCheckWindowInputs)
             {
@@ -306,6 +309,12 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                 DateTime Resolve(TimeOnly t) =>
                     CrossDay && t < ws ? DateOnly.MinValue.ToDateTime(t).AddDays(1) : DateOnly.MinValue.ToDateTime(t);
                 if (Resolve(me) <= Resolve(ms)) throw new Exception("午间必打卡窗口的结束时间要晚于开始时间");
+                // 窗口还必须落在这个班次自己的上下班时间范围内——不然对跨天（夜班）班次来说，
+                // 一个比班次上班时间还早的钟点会被上面同一套 Resolve 规则当成"下一天"，
+                // 直接被换算到班次区间之外，实际排班后这段窗口永远不会被真实打卡命中
+                // （工时会因为"必打卡窗口没打上卡"被误判、白白扣掉）
+                if (Resolve(ms) < Resolve(ws) || Resolve(me) > Resolve(we))
+                    throw new Exception("午间必打卡窗口必须落在班次的上下班时间范围内");
                 if (midCheckWindows.Contains((ms, me))) throw new Exception("午间必打卡窗口不能配置两段完全相同的时间");
                 midCheckWindows.Add((ms, me));
             }
@@ -356,10 +365,22 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                     s.RestDaysOfWeek             = restDaysCsv;
                     s.MidCheckWindows            = midCheckWindowsCsv;
                     s.UpdatedAt                  = DateTime.Now;
+                    SuccessMessage = $"班次「{ShiftName}」已更新";
                 }
-                SuccessMessage = $"班次「{ShiftName}」已更新";
+                else
+                {
+                    ErrorMessage = "更新失败：找不到该班次";
+                }
             }
             await db.SaveChangesAsync();
+        }
+        // 这个方法里前面一大段校验用的都是 throw new Exception("中文提示")（不是 InvalidOperationException），
+        // 所以不能像别的页面那样按异常类型拆分；这里改成只单独拦截 DbUpdateException（真正的数据库层面
+        // 报错，可能带字段名/约束名等技术细节），其余（本方法自己抛出的校验提示）维持原样把 ex.Message 给用户看。
+        catch (DbUpdateException ex)
+        {
+            logger.LogError(ex, "保存班次失败");
+            ErrorMessage = "保存失败，请稍后重试";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
 
@@ -500,6 +521,11 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
 
             // 带上刚排的日期区间，确保新排班在展示窗口内可见
             return RedirectToSelf(start.ToString("yyyy-MM-dd"), end.ToString("yyyy-MM-dd"));
+        }
+        catch (DbUpdateException ex)
+        {
+            logger.LogError(ex, "批量排班失败");
+            ErrorMessage = "保存失败，请稍后重试";
         }
         catch (Exception ex) { ErrorMessage = ex.Message; }
 

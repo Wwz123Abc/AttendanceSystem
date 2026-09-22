@@ -169,7 +169,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (record.ClockInTime is null || punchTime < record.ClockInTime)
             {
                 record.ClockInTime = punchTime;
-                status = CalcClockInStatus(punchTime, shift, isRestDay, out var lateMin);   // 算是否迟到
+                status = CalcClockInStatus(workDate, punchTime, shift, isRestDay, out var lateMin);   // 算是否迟到
                 // 只在当天状态还是由打卡本身决定的（正常/迟到/早退/未打卡/旷工）时才更新——
                 // 旷工可以被真的打了上班卡这件事纠正回来（人确实来了），但请假/出差/节假日
                 // 这些由审批流程或定时任务设置的状态，不能被一次上班打卡顺手覆盖掉
@@ -467,7 +467,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// </summary>
     public async Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds)
     {
-        var today = DateOnly.FromDateTime(DateTime.Today);
         var dates = new List<DateOnly>();
         for (var d = start; d <= end; d = d.AddDays(1)) dates.Add(d);
         var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
@@ -594,12 +593,18 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                         leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);
                     if (rec.AttendanceStatus == AttendanceStatus.Absent) absentDays++;
-                    if (rec.ClockInTime is null && rec.ClockOutTime is not null) missingIn++;    // 有下班卡没上班卡
-                    if (rec.ClockInTime is not null && rec.ClockOutTime is null) missingOut++;   // 有上班卡没下班卡
+                    // 缺卡/迟到/早退次数的判定口径统一改成跟 GenerateMonthlySummaryAsync 一样按"状态"算
+                    // （不再按分钟数/裸打卡时间判断），并排除旷工/请假/节假日/出差——不然半天假当天上午
+                    // 迟到、或旷工那天"当然两次都没打"，会被这份表额外多算一次迟到/缺卡，跟月度汇总的
+                    // 结论对不上（2026-09-22 统一口径，见 docs/项目审查与问题总表.md #3/#4）。
+                    var excludedFromMissing = rec.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.OnLeave
+                        or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip;
+                    if (!excludedFromMissing && rec.ClockInTime is null && rec.ClockOutTime is not null) missingIn++;    // 有下班卡没上班卡
+                    if (!excludedFromMissing && rec.ClockInTime is not null && rec.ClockOutTime is null) missingOut++;   // 有上班卡没下班卡
                     lateMin  += rec.LateMinutes;
                     earlyMin += rec.EarlyLeaveMinutes;
-                    if (rec.LateMinutes > 0) lateCnt++;
-                    if (rec.EarlyLeaveMinutes > 0) earlyCnt++;
+                    if (rec.AttendanceStatus == AttendanceStatus.Late) lateCnt++;
+                    if (rec.AttendanceStatus == AttendanceStatus.EarlyLeave) earlyCnt++;
 
                     if (rec.OvertimeHours > 0)
                     {
@@ -613,15 +618,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                         else weekdayOtHours += ot;
                     }
                 }
-                else if (!isHolidayOff && !isShiftRest && date <= today)
-                {
-                    // 完全没有考勤记录，又不是休息/节假日 → 算旷工（和后台旷工判定的口径一致）。
-                    // 必须加 date <= today 这个限制：这份报表的统计周期是"上月26号至本月25号"，
-                    // 只要在 25 号之前导出，周期里就会包含"还没到的未来几天"——这些天当然不会有考勤记录，
-                    // 但它们不是旷工，是"还没发生"，不加这个判断会把每个人都算出一堆莫名其妙的旷工天数。
-                    absentDays++;
-                }
-
+                // 注意：这里不再对"完全没有考勤记录"的日子额外判定旷工——跟 GenerateMonthlySummaryAsync
+                // 统一口径，只认后台任务（AttendanceBackgroundService.MarkAbsentAsync）真正生成的
+                // AttendanceStatus.Absent 记录。旧逻辑会把"没填入职日期""中途停用后"这类日子也误判成
+                // 旷工；MarkAbsentAsync 本身已经正确跳过了未入职（HireDate 为空/未到）和非在职用户，
+                // 两份报表统一改成只信它生成的结果，不用各自再猜一遍"这天算不算旷工"（2026-09-22 统一口径）。
                 if (isHolidayOff || isShiftRest) restDays++;
 
                 row.DailyHours.Add(dayHours);
@@ -631,8 +632,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             row.ActualWorkdays          = actualDays;
             row.LeaveDays               = leaveDays;
             row.RestDays                = restDays;
-            row.RegularWorkHours        = totalWork;              // 正班工时：不含加班，口径不变
-            row.TotalWorkHours          = totalWork + totalOtHours;  // 工作时长合计：正班 + 加班
+            // 正班工时：不含加班。以前这里还有一个"总工时=正班+加班"的字段，跟 GenerateMonthlySummaryAsync/
+            // "我的记录"统一口径后变成跟正班工时数值完全相同，2026-09-22 直接删掉了那个重复字段和对应的列
+            // （加班单独看 TotalOvertimeHours），不用两处都留着同一个数字。
+            row.RegularWorkHours        = totalWork;
             row.LateMinutes             = lateMin;
             row.EarlyLeaveMinutes       = earlyMin;
             row.LateCount               = lateCnt;
@@ -979,11 +982,33 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>判断某天是否节假日（调班补班日不算节假日）。</summary>
-    public Task<bool> IsHolidayAsync(DateOnly date, int? groupId = null)
-        => db.Holidays.AnyAsync(h =>
-            h.HolidayDate == date &&
-            h.HolidayType != HolidayType.CompensatoryWorkDay &&
-            (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
+    public async Task<bool> IsHolidayAsync(DateOnly date, int? groupId = null)
+    {
+        var candidates = await db.Holidays
+            .Where(h => h.HolidayDate == date && (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId))
+            .ToListAsync();
+        return IsHolidayDate(date, groupId, candidates);
+    }
+
+    /// <summary>从命中的假期记录里按优先级选出唯一生效的一条：考勤组专属记录优先于全公司通用记录；
+    /// 同一层级内，调班补班日优先于法定节假日/公司休息（调班补班的语义就是"这天虽然按惯例放假，
+    /// 但这个组/全公司被要求照常上班"，应该覆盖默认安排）。IsHolidayAsync、CountExpectedWorkdays、
+    /// ZKDeviceSyncService 里"这天算不算节假日/该不该出勤"的判断都要走这一个方法，不能分别各写一套
+    /// Any/FirstOrDefault，否则同一天同时配了"公司法定节假日"和"考勤组调班补班日"时会互相矛盾。</summary>
+    internal static Holiday? ResolveEffectiveHoliday(DateOnly date, int? groupId, IEnumerable<Holiday> holidays)
+    {
+        var onDate = holidays.Where(h => h.HolidayDate == date && (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId)).ToList();
+        if (onDate.Count == 0) return null;
+        var scoped = onDate.Where(h => h.AttendanceGroupId == groupId).ToList();
+        var pool = scoped.Count > 0 ? scoped : onDate;
+        return pool.FirstOrDefault(h => h.HolidayType == HolidayType.CompensatoryWorkDay) ?? pool[0];
+    }
+
+    internal static bool IsHolidayDate(DateOnly date, int? groupId, IEnumerable<Holiday> holidays)
+    {
+        var h = ResolveEffectiveHoliday(date, groupId, holidays);
+        return h is not null && h.HolidayType != HolidayType.CompensatoryWorkDay;
+    }
 
     /// <summary>
     /// 这天是不是排的班次自己配置的每周休息日；没排班时按全局周六周日兜底。不含"调班补班日"和
@@ -1006,10 +1031,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// </summary>
     public static async Task<bool> IsNonCompRestDayAsync(AttendanceDbContext db, DateOnly date, ShiftSchedule? shift, int? groupId)
     {
-        var isCompDay = await db.Holidays.AnyAsync(h =>
-            h.HolidayDate == date &&
-            h.HolidayType == HolidayType.CompensatoryWorkDay &&
-            (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
+        // 跟 IsHolidayAsync/CountExpectedWorkdays 用同一套 ResolveEffectiveHoliday 判优先级
+        // （考勤组专属 > 全公司通用），不再自己单独 Any 一遍——不然"公司级调班补班 + 考勤组级法定
+        // 节假日"同时存在这种冲突数据下，这里跟 IsHolidayAsync 会算出不一样的结论（2026-09-22 统一）。
+        var candidates = await db.Holidays
+            .Where(h => h.HolidayDate == date && (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId))
+            .ToListAsync();
+        var isCompDay = ResolveEffectiveHoliday(date, groupId, candidates)?.HolidayType == HolidayType.CompensatoryWorkDay;
         return !isCompDay && IsShiftWeeklyRestDay(date, shift);
     }
 
@@ -1342,7 +1370,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         // 不然管理员把一条迟到记录的上班时间改准点了，LateMinutes 还留着旧的迟到分钟数、
         // 状态也可能继续显示"迟到"。出差/节假日这两个审批流程/定时任务设置的状态不受影响。
         var isRestDay      = await IsNonCompRestDayAsync(db, record.WorkDate, shift, applicant?.AttendanceGroupId);
-        var clockInStatus  = CalcClockInStatus(ci, shift, isRestDay, out var lateMin);
+        var clockInStatus  = CalcClockInStatus(record.WorkDate, ci, shift, isRestDay, out var lateMin);
         var clockOutStatus = CalcClockOutStatus(record.WorkDate, co, shift, isRestDay, out var earlyMin);
         if (!blocksWorkHours)
         {
@@ -1362,13 +1390,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 休息日（<paramref name="isRestDay"/>，不管有没有批加班——休息日没有"应上班时间"可比，
     /// 谈不上迟到）一律算正常。out lateMinutes 把迟到分钟数“带出去”给调用者。
     /// </summary>
+    /// ★ "应上班时刻"以 <paramref name="workDate"/>（这条考勤记录归属的那一天）为基准推算，不能用
+    /// clockIn 打卡那一刻的日期——跨天夜班在次日凌晨打卡/补卡时，打卡当天的日期已经不是 workDate，
+    /// 会把应上班时刻算成"次日"，导致差值为负、永远判不出迟到。用法对齐 <see cref="CalcClockOutStatus"/>。
     internal static AttendanceStatus CalcClockInStatus(
-        DateTime clockIn, ShiftSchedule? shift, bool isRestDay, out int lateMinutes)
+        DateOnly workDate, DateTime clockIn, ShiftSchedule? shift, bool isRestDay, out int lateMinutes)
     {
         lateMinutes = 0;
         if (shift is null || isRestDay) return AttendanceStatus.Normal;
-        var scheduled = DateOnly.FromDateTime(clockIn).ToDateTime(shift.WorkStartTime);   // 应上班时刻
-        var diff      = (int)(clockIn - scheduled).TotalMinutes;                          // 晚了几分钟
+        var scheduled = workDate.ToDateTime(shift.WorkStartTime);   // 应上班时刻
+        var diff      = (int)(clockIn - scheduled).TotalMinutes;   // 晚了几分钟
         if (diff > shift.LateToleranceMinutes) { lateMinutes = diff; return AttendanceStatus.Late; }
         return AttendanceStatus.Normal;
     }
@@ -1750,8 +1781,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var count = 0;
         for (var d = start; d <= end; d = d.AddDays(1))
         {
-            var holiday = holidaysInRange.FirstOrDefault(h => h.HolidayDate == d
-                && (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
+            var holiday = ResolveEffectiveHoliday(d, groupId, holidaysInRange);
             if (holiday?.HolidayType == HolidayType.CompensatoryWorkDay) { count++; continue; }
             if (holiday?.HolidayType is HolidayType.LegalHoliday or HolidayType.CompanyRestDay) continue;
 

@@ -496,6 +496,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
 
         var groupApproverIds = await db.AttendanceGroupApprovers
             .Where(a => a.AttendanceGroupId == applicant.AttendanceGroupId)
+            .Include(a => a.Approver).Where(a => a.Approver.IsActive)   // 过滤掉已停用的审批人，避免审批节点指派给一个永远登不了录的账号，导致申请卡死
             .Select(a => a.UserId)
             .ToListAsync();
 

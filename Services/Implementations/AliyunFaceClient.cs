@@ -94,7 +94,7 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
         }
         catch (Exception ex)
         {
-            RecordFailureAndLogIfBreakerJustOpened("活体检测");
+            if (ShouldCountForCircuitBreaker(ex)) RecordFailureAndLogIfBreakerJustOpened("活体检测");
             logger.LogWarning(ex, "活体检测接口调用失败");
             // 不把 ex.Message 拼进抛给上层/最终展示给员工的提示里——那是阿里云 SDK 原始的报错文本，
             // 可能带内部域名/请求 ID 等技术细节，不该让普通员工看到；完整异常已经记进上面的日志，
@@ -138,7 +138,7 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
         }
         catch (Exception ex)
         {
-            RecordFailureAndLogIfBreakerJustOpened("人脸比对");
+            if (ShouldCountForCircuitBreaker(ex)) RecordFailureAndLogIfBreakerJustOpened("人脸比对");
             logger.LogWarning(ex, "人脸比对接口调用失败");
             throw new AliyunFaceApiException("人脸比对接口调用失败，请稍后重试");
         }
@@ -222,11 +222,25 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
         }
         catch (Exception ex)
         {
-            RecordFailureAndLogIfBreakerJustOpened("人脸检测");
+            if (ShouldCountForCircuitBreaker(ex)) RecordFailureAndLogIfBreakerJustOpened("人脸检测");
             logger.LogWarning(ex, "人脸检测接口调用失败");
             throw new AliyunFaceApiException("人脸检测接口调用失败，请稍后重试");
         }
     }
+
+    /// <summary>只有"服务端/网络类"的失败才计入熔断（5xx、限流、超时、连接失败）；4xx 参数错误
+    /// （比如某个员工传了畸形/超大图片）说明是这一次请求本身有问题，跟阿里云服务是否健康无关，
+    /// 不该被算进熔断计数——否则单个员工连续传错几次图，就能把全公司的远程打卡熔断掉。</summary>
+    private static bool ShouldCountForCircuitBreaker(Exception ex) => ex switch
+    {
+        TeaException te => te.StatusCode >= 500
+                         || (te.Code?.Contains("Throttling", StringComparison.OrdinalIgnoreCase) ?? false),
+        TaskCanceledException                => true,
+        TimeoutException                     => true,
+        System.Net.Http.HttpRequestException => true,
+        System.Net.Sockets.SocketException   => true,
+        _                                     => false
+    };
 
     /// <summary>记一次熔断失败；如果这一下正好把熔断打开了，额外用 LogError 记一条——熔断打开意味着
     /// "接下来一段时间所有人都用不了远程打卡"，这种程度的问题不该跟普通的单次调用失败一样只是 Warning。</summary>

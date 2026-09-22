@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
@@ -17,7 +18,7 @@ namespace AttendanceSystem.Pages.Admin;
 /// 范围内的员工补卡。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeService deptScopeService, AttendanceDbContext db) : PageModel
+public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeService deptScopeService, AttendanceDbContext db, ILogger<PunchAdjustModel> logger) : PageModel
 {
     [BindProperty] public int      UserId       { get; set; }
     [BindProperty] public DateOnly WorkDate     { get; set; } = DateOnly.FromDateTime(DateTime.Today);
@@ -36,6 +37,16 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
 
     public async Task<IActionResult> OnPostAdjustAsync()
     {
+        // WorkDate 是不可为空的 DateOnly，日期框提交空值时模型绑定对非空值类型会静默失败——只在
+        // ModelState 里记一条错误，属性本身还是保持字段初始值（今天）。不检查的话，管理员把日期
+        // 清空提交，会被无声当成"就是要补今天的卡"处理，而不是提示"请选择日期"。
+        if (ModelState.GetFieldValidationState(nameof(WorkDate)) != ModelValidationState.Valid)
+        {
+            ErrorMessage = "请选择正确的日期";
+            await LoadRecentLogAsync();
+            return Page();
+        }
+
         try
         {
             if (UserId <= 0) throw new InvalidOperationException("请先选择员工");
@@ -43,8 +54,18 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
             if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, user.DepartmentId))
                 throw new InvalidOperationException("无权给该员工补卡");
 
-            var clockIn  = string.IsNullOrWhiteSpace(ClockInTime)  ? (DateTime?)null : DateTime.Parse(ClockInTime);
-            var clockOut = string.IsNullOrWhiteSpace(ClockOutTime) ? (DateTime?)null : DateTime.Parse(ClockOutTime);
+            DateTime? clockIn = null;
+            if (!string.IsNullOrWhiteSpace(ClockInTime))
+            {
+                if (!DateTime.TryParse(ClockInTime, out var ci)) throw new InvalidOperationException("打卡时间格式不正确");
+                clockIn = ci;
+            }
+            DateTime? clockOut = null;
+            if (!string.IsNullOrWhiteSpace(ClockOutTime))
+            {
+                if (!DateTime.TryParse(ClockOutTime, out var co)) throw new InvalidOperationException("打卡时间格式不正确");
+                clockOut = co;
+            }
             if (clockIn is null && clockOut is null)
                 throw new InvalidOperationException("上班/下班打卡时间至少要填一个");
 
@@ -52,7 +73,12 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
             await attendanceService.AdminAdjustPunchAsync(UserId, WorkDate, clockIn, clockOut, Remark, operatorName);
             SuccessMessage = $"已为 {user.RealName}（{user.EmployeeNo}）补录 {WorkDate:yyyy-MM-dd} 的打卡记录";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "管理员手动补卡失败，UserId={UserId}", UserId);
+            ErrorMessage = "保存失败，请稍后重试";
+        }
         await LoadRecentLogAsync();
         return Page();
     }

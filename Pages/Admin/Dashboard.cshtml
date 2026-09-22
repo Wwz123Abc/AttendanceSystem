@@ -170,6 +170,9 @@ async function openDrilldown(category, title) {
     document.getElementById('drilldownLoading').classList.remove('d-none');
     document.getElementById('drilldownTableWrap').classList.add('d-none');
     document.getElementById('drilldownEmpty').classList.add('d-none');
+    // 每次打开都先把"暂无人员"这个空状态的内容复位，防止上一次请求失败时把它永久改写成
+    // "加载失败，请重试"之后，这次哪怕是正常的"查到 0 人"也会显示成上次的失败文案
+    document.getElementById('drilldownEmpty').innerHTML = '<i class="bi bi-inbox"></i>暂无人员';
     document.getElementById('drilldownBody').innerHTML = '';
     drilldownModal.show();
 

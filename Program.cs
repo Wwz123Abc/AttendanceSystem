@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
@@ -186,12 +187,6 @@ builder.Services.AddControllers()
             System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
     });
 
-builder.Services.AddDistributedMemoryCache();
-builder.Services.AddSession(o =>           // 会话（临时存一些用户相关数据）
-{
-    o.IdleTimeout     = TimeSpan.FromMinutes(30);
-    o.Cookie.HttpOnly = true;
-});
 builder.Services.AddHttpContextAccessor();
 
 // 后台定时任务（旷工标记 + 月度汇总）
@@ -202,6 +197,9 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
 {
     o.MultipartBodyLengthLimit = 50 * 1024 * 1024;
 });
+// Kestrel 自己的请求体上限默认约 28.6MB，比上面 FormOptions 的 50MB 更低——不放开的话，
+// 28.6MB~50MB 之间的请求还没轮到 FormOptions 校验，就已经被 Kestrel 直接拒绝了
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 50 * 1024 * 1024);
 
 // ── 按 IP 的请求限流：登录、匿名自助登记这两个入口没有账号锁定之外的保护，
 // 一个 IP 可以对着大量不同工号做密码喷洒、或者匿名反复刷传登记照片占存储——这里按来源 IP 兜底限速
@@ -222,6 +220,12 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("SelfRegisterPolicy", httpContext => RateLimitPartition.GetFixedWindowLimiter(
         httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+
+    // 提交审批申请：登录用户账号已经保证了身份，这里限流只是为了挡脚本刷单——每次提交都会触发一条
+    // 给审批人的通知，30/分钟对正常手动操作足够宽松，只拦真正的批量脚本
+    options.AddPolicy("ApprovalSubmitPolicy", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 // ── 以上是“注册阶段”，下面 Build 之后进入“运行阶段”────────────────────────────────
@@ -293,7 +297,10 @@ static async Task SeedAdminAsync(AttendanceDbContext db)
 // 扫码登记二维码等地方拼的 URL 会一直生成 http:// 开头的链接，跟现在网站已经是 HTTPS-only 对不上。
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    // nginx 和本程序在同一台机器上，转发来源固定是回环地址——这两行只是把 ASP.NET Core
+    // 默认就信任回环地址的隐式规则显式写出来，不是新增信任范围
+    KnownProxies = { IPAddress.Loopback, IPAddress.IPv6Loopback }
 });
 
 app.UseSerilogRequestLogging();   // 记录每个请求的日志
@@ -350,7 +357,6 @@ app.Use(async (context, next) =>
 app.UseStaticFiles();                          // 静态文件(css/js/图片)
 app.UseRouting();                              // 路由（决定请求交给谁处理）
 app.UseRateLimiter();                          // 按 IP 限流（必须在 UseRouting 之后，这样才能按匹配到的 endpoint 找到对应策略）
-app.UseSession();                              // 会话
 app.UseAuthentication();                       // 认证（你是谁）
 app.UseAuthorization();                        // 授权（你有没有权限）
 app.UseMiddleware<CurrentUserMiddleware>();    // 自定义关卡：停用账号踢下线 + 记录当前用户

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Options;
+using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
@@ -22,7 +23,8 @@ public class FaceEnrollModel(
     IWebHostEnvironment env,
     IAliyunFaceClient faceClient,
     IOptions<AppSettingsOptions> appOptions,
-    IOptions<AliyunFaceOptions> faceOptions) : AppPageModel
+    IOptions<AliyunFaceOptions> faceOptions,
+    ILogger<FaceEnrollModel> logger) : AppPageModel
 {
     [BindProperty] public IFormFile? FacePhoto { get; set; }
     [BindProperty] public bool       AgreeConsent { get; set; }
@@ -56,9 +58,16 @@ public class FaceEnrollModel(
 
             SuccessMessage = "人脸照片已录入，之后打卡时会用这张照片做比对";
         }
-        catch (Exception ex)
+        // AliyunFaceApiException 也是给用户看的安全提示（阿里云调用失败/图片不合格等），
+        // 跟自己抛的 InvalidOperationException 一样可以直接展示，不属于要隐藏的原始报错
+        catch (Exception ex) when (ex is InvalidOperationException or AliyunFaceApiException)
         {
             ErrorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "录入人脸参考照片失败，UserId={UserId}", CurrentUserId);
+            ErrorMessage = "操作失败，请稍后重试";
         }
         CurrentPhotoUrl = await db.Users.Where(u => u.Id == CurrentUserId)
             .Select(u => u.FaceReferencePhotoUrl).FirstOrDefaultAsync();

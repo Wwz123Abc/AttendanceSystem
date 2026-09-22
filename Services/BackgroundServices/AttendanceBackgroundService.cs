@@ -127,13 +127,13 @@ public class AttendanceBackgroundService(
         // 这里是在“循环里对每个员工都要判断一次”，如果每次都去查数据库，
         // 几百个员工就要查几百次（也就是前面注释说的 N+1 问题）。
         // 所以这里改成先把"今天的假期"整批查一次（todayHolidays），后面循环里直接从内存里判断，不再查库。
-        bool IsRestDay(int? groupId) => todayHolidays.Any(h =>
-            h.HolidayType != HolidayType.CompensatoryWorkDay &&
-            (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
+        // 跟 AttendanceService.IsHolidayAsync/IsNonCompRestDayAsync 用同一套 ResolveEffectiveHoliday
+        // 判优先级（考勤组专属 > 全公司通用；同层内调班补班 > 休息），不再自己单独 Any 一遍
+        // （2026-09-22 统一，避免同一天冲突配置时这里跟别处判断结论不一致）
+        bool IsRestDay(int? groupId) => AttendanceService.IsHolidayDate(today, groupId, todayHolidays);
         // 这个考勤组今天是不是调班补班日（哪怕是周末也要上班）
-        bool IsCompensatoryWorkday(int? groupId) => todayHolidays.Any(h =>
-            h.HolidayType == HolidayType.CompensatoryWorkDay &&
-            (h.AttendanceGroupId == null || h.AttendanceGroupId == groupId));
+        bool IsCompensatoryWorkday(int? groupId) =>
+            AttendanceService.ResolveEffectiveHoliday(today, groupId, todayHolidays)?.HolidayType == HolidayType.CompensatoryWorkDay;
 
         int marked = 0;
 

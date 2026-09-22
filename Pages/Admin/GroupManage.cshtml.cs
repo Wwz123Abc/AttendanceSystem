@@ -22,7 +22,8 @@ public class GroupManageModel(
     AttendanceDbContext db,
     IAttendanceGroupService groupService,
     IDeptScopeService deptScopeService,
-    IOptions<AMapOptions> amapOptions) : PageModel
+    IOptions<AMapOptions> amapOptions,
+    ILogger<GroupManageModel> logger) : PageModel
 {
     /// <summary>高德地图 Web端(JS API) Key（配置了才会在页面上加载地图选点功能）。</summary>
     public string AMapJsKey => amapOptions.Value.JsApiKey;
@@ -252,8 +253,12 @@ public class GroupManageModel(
                     g.DinnerBreakMinutes  = DinnerBreak;
                     g.ApprovalLevel       = approvalLevel;
                     g.UpdatedAt           = DateTime.Now;
+                    SuccessMessage = $"考勤组「{GroupName}」已更新";
                 }
-                SuccessMessage = $"考勤组「{GroupName}」已更新";
+                else
+                {
+                    ErrorMessage = "更新失败：找不到该考勤组";
+                }
             }
 
             if (g is not null)
@@ -293,7 +298,11 @@ public class GroupManageModel(
                 if (moved > 0) SuccessMessage += $"，同步归组 {moved} 名员工";
             }
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "保存考勤组失败");
+            ErrorMessage = "保存失败，请稍后重试";
+        }
 
         return RedirectToPage();
     }
@@ -332,7 +341,12 @@ public class GroupManageModel(
                 SuccessMessage = $"考勤组「{name}」已删除" + (userCount > 0 ? $"，原有 {userCount} 名员工已解除该考勤组归属" : "");
             }
         }
-        catch (Exception ex) { ErrorMessage = "删除失败：" + ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = "删除失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "删除考勤组失败，Id={Id}", id);
+            ErrorMessage = "删除失败，请稍后重试";
+        }
         return RedirectToPage();
     }
 }

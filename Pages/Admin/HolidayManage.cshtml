@@ -28,7 +28,7 @@
         <form method="get" class="d-flex align-items-center gap-3">
             <label class="fw-semibold mb-0">年份</label>
             <select name="year" class="form-select form-select-sm" style="width:100px">
-                @for (int y = DateTime.Today.Year + 1; y >= DateTime.Today.Year - 1; y--)
+                @for (int y = DateTime.Today.Year + 2; y >= DateTime.Today.Year - 8; y--)
                 {
                     <option value="@y" selected="@(y == Model.Year)">@y 年</option>
                 }

@@ -12,7 +12,7 @@ namespace AttendanceSystem.Pages.Admin;
 /// <summary>部门管理页：单页树形表格，支持增删改、批量删除、添加子部门。分公司管理员只能在自己的
 /// 管理范围内新建/编辑子部门，看不到、动不了其他分公司或总部顶层的部门。</summary>
 [Authorize(Policy = "ManagePolicy")]
-public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService) : PageModel
+public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService, ILogger<DepartmentManageModel> logger) : PageModel
 {
     /// <summary>树形展开后的扁平行（已按父子顺序排好，带层级深度）。</summary>
     public List<DeptRow> Rows { get; set; } = [];
@@ -66,34 +66,47 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
             .ToDictionary(g => g.Key, g => g.ToList());
 
         // 成员数 = 本部门直属 + 所有下级部门累加（父部门显示整条线的总人数，而不只是直属）
+        // 三个递归函数都带一个 visited 集合防环（写法照抄 DeptScopeService.GetSubtreeIdsAsync 里
+        // 已经用的同一套模式）：正常的部门树不会有环，但万一数据库被直接改出了环（ParentId 兜圈子），
+        // 不防的话会一路递归到 StackOverflowException，直接崩掉整个进程且无法被 try/catch 兜住。
+        // 用可选参数而不是共享字段，是因为下面同一个 deptId 会从不同的顶层入口被合理地重复调用
+        // （比如 Rollup(kid.Id) 先单独调一次，再通过 Rollup(rootId) 内部递归调一次）——如果用一个
+        // 贯穿整个 LoadAsync 的全局 visited，第二次会被误判成"已访问"直接跳过，把总数算错；
+        // 可选参数保证每次顶层调用都拿到一个全新的 visited，只在同一条递归链内生效，只挡真正的环。
         var total = new Dictionary<int, int>();
-        int Rollup(int deptId)
+        int Rollup(int deptId, HashSet<int>? visited = null)
         {
+            visited ??= [];
+            if (!visited.Add(deptId)) return 0;   // 已经在本次递归链里出现过，说明成环，不再往下钻
             var sum = direct.GetValueOrDefault(deptId);
             if (byParent.TryGetValue(deptId, out var kids))
-                foreach (var k in kids) sum += Rollup(k.Id);
+                foreach (var k in kids) sum += Rollup(k.Id, visited);
             total[deptId] = sum;
             return sum;
         }
         // 考勤机数同样按"本部门 + 所有下级部门"累加，口径跟上面的成员数一致
         var totalDevices = new Dictionary<int, int>();
-        int RollupDevices(int deptId)
+        int RollupDevices(int deptId, HashSet<int>? visited = null)
         {
+            visited ??= [];
+            if (!visited.Add(deptId)) return 0;
             var sum = directDevices.GetValueOrDefault(deptId);
             if (byParent.TryGetValue(deptId, out var kids))
-                foreach (var k in kids) sum += RollupDevices(k.Id);
+                foreach (var k in kids) sum += RollupDevices(k.Id, visited);
             totalDevices[deptId] = sum;
             return sum;
         }
 
         Rows = [];
-        void Walk(int parentKey, int depth)
+        void Walk(int parentKey, int depth, HashSet<int>? visited = null)
         {
+            visited ??= [];
             if (!byParent.TryGetValue(parentKey, out var kids)) return;
             foreach (var d in kids)
             {
+                if (!visited.Add(d.Id)) continue;   // 已经在本次递归链里出现过，说明成环，跳过不再往下钻
                 Rows.Add(new DeptRow(d, depth, total.GetValueOrDefault(d.Id), totalDevices.GetValueOrDefault(d.Id), byParent.ContainsKey(d.Id)));
-                Walk(d.Id, depth + 1);   // 递归处理它的子部门
+                Walk(d.Id, depth + 1, visited);   // 递归处理它的子部门
             }
         }
         if (cu.IsScoped)
@@ -150,7 +163,12 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
 
             SuccessMessage = $"部门「{DeptName.Trim()}」创建成功";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "创建部门失败");
+            ErrorMessage = "保存失败，请稍后重试";
+        }
 
         await LoadAsync();
         return Page();
@@ -204,7 +222,12 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
 
             SuccessMessage = "部门信息已更新";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "编辑部门失败，EditId={EditId}", EditId);
+            ErrorMessage = "保存失败，请稍后重试";
+        }
 
         await LoadAsync();
         return Page();
@@ -240,7 +263,12 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
 
             SuccessMessage = $"已删除 {depts.Count} 个部门（其员工已转为“未分配”，子部门已提升为顶级）";
         }
-        catch (Exception ex) { ErrorMessage = ex.Message; }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "删除部门失败，DeleteIds={DeleteIds}", DeleteIds);
+            ErrorMessage = "删除失败，请稍后重试";
+        }
 
         await LoadAsync();
         return Page();

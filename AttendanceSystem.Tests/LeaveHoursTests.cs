@@ -1,6 +1,12 @@
+using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Implementations;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace AttendanceSystem.Tests;
@@ -75,11 +81,14 @@ public class LeaveHoursTests
     // 共用的核心公式，这里直接测公式本身，覆盖验收清单里给出的具体算例。
 
     [Fact]
-    public void 验收1_全天请假无打卡_工时0()
+    public void 验收1_请假小时数异常超过标准工时_封顶不会被顶成负数()
     {
-        // 没有真实打卡时，ActualWorkHours 在写入时就直接置 0，不会走到 ApplyLeaveHoursCap，
-        // 这里验证的是"即使有人手滑传了 0 小时的打卡工时进来"，封顶公式本身也会算出 0
-        Assert.Equal(0m, AttendanceService.ApplyLeaveHoursCap(0m, leaveHours: 8m, standardHours: 8m));
+        // 原写法传的 computedHours 本身就是 0，min(0, 任何数) 恒等于 0，就算封顶公式整个写错
+        // 也测不出来；改成 leaveHours(10) 超过 standardHours(8) 这种异常数据——上限公式
+        // Math.Max(0, standardHours - leaveHours) 算出的是负数(-2)，必须被夹在 0，
+        // 不能让 Math.Min(computedHours, 负数) 把工时算成负数，这里 computedHours 传 3（大于
+        // 封顶后的上限 0），真正验证了封顶逻辑本身。
+        Assert.Equal(0m, AttendanceService.ApplyLeaveHoursCap(3m, leaveHours: 10m, standardHours: 8m));
     }
 
     [Fact]
@@ -143,14 +152,62 @@ public class LeaveHoursTests
     }
 
     [Fact]
-    public void 验收7_同一天两张假单_请假小时数累加_折算成1天不是0点5天()
+    public async Task 验收7_同一天两张假单先后审批通过_数据库里的LeaveHours真的是累加不是覆盖()
     {
-        // 上午一张 3.5 小时假 + 下午一张 4.5 小时假，同一天 LeaveHours 应该是累加（+=）后的 8 小时，
-        // 不是后一张覆盖前一张变成 4.5 小时——覆盖的话这里会折算成 0.5 天，累加才是 1 天
-        var morningLeave = 3.5m;
-        var afternoonLeave = 4.5m;
-        var accumulated = morningLeave + afternoonLeave;   // 模拟 record.LeaveHours += 两次
-        Assert.Equal(1m, AttendanceService.ResolveLeaveDaysFraction(accumulated, StandardHours));
+        // 原写法只是在测试代码里手算 3.5m + 4.5m 再喂给 ResolveLeaveDaysFraction，根本没有走到
+        // AttendanceService.UpdateAttendanceAfterApprovalAsync 里 record.LeaveHours += leaveHoursToday
+        // 这行真正做累加的生产代码——就算哪天有人把 += 手滑改回 =，这个假测试也测不出来。
+        // 这里改成真的连续跑两次审批回写（用 Sqlite 内存库 + 真实 AttendanceDbContext，
+        // 跟 ApprovalStepGenerationTests 同一套写法），断言数据库里的 AttendanceRecord.LeaveHours
+        // 是不是两张假单真正累加的结果。
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        connection.Open();
+        var dbOptions = new DbContextOptionsBuilder<AttendanceDbContext>().UseSqlite(connection).Options;
+        var appOptions = Options.Create(new AppSettingsOptions());
+        var day = new DateOnly(2026, 9, 10);
+
+        using (var seed = new AttendanceDbContext(dbOptions))
+        {
+            seed.Database.EnsureCreated();
+            seed.Users.Add(new User { Id = 1, EmployeeNo = "E001", RealName = "测试员工", PasswordHash = "x" });
+            seed.SaveChanges();
+        }
+
+        int morningId, afternoonId;
+        using (var db = new AttendanceDbContext(dbOptions))
+        {
+            var morning = new ApprovalRequest
+            {
+                RequestNo = "QJ0001", ApplicantUserId = 1, ApprovalType = ApprovalType.Leave,
+                ApprovalStatus = ApprovalStatus.Approved,
+                LeaveStartTime = day.ToDateTime(new TimeOnly(9, 0)),
+                LeaveEndTime   = day.ToDateTime(new TimeOnly(12, 30))   // 上午一张，3.5 小时
+            };
+            var afternoon = new ApprovalRequest
+            {
+                RequestNo = "QJ0002", ApplicantUserId = 1, ApprovalType = ApprovalType.Leave,
+                ApprovalStatus = ApprovalStatus.Approved,
+                LeaveStartTime = day.ToDateTime(new TimeOnly(13, 0)),
+                LeaveEndTime   = day.ToDateTime(new TimeOnly(17, 30))   // 下午一张，4.5 小时
+            };
+            db.ApprovalRequests.AddRange(morning, afternoon);
+            db.SaveChanges();
+            morningId = morning.Id;
+            afternoonId = afternoon.Id;
+        }
+
+        using (var db = new AttendanceDbContext(dbOptions))
+        {
+            var svc = new AttendanceService(db, appOptions, NullLogger<AttendanceService>.Instance);
+            await svc.UpdateAttendanceAfterApprovalAsync(morningId);
+            await svc.UpdateAttendanceAfterApprovalAsync(afternoonId);
+        }
+
+        using var verify = new AttendanceDbContext(dbOptions);
+        var record = await verify.AttendanceRecords.SingleAsync(r => r.UserId == 1 && r.WorkDate == day);
+        // 累加后是 8 小时，不是后一张覆盖前一张变成 4.5 小时——覆盖的话这里会是 4.5，折算成 0.5 天
+        Assert.Equal(8m, record.LeaveHours);
+        Assert.Equal(1m, AttendanceService.ResolveLeaveDaysFraction(record.LeaveHours, StandardHours));
     }
 
     [Fact]

@@ -110,7 +110,9 @@ public class RemotePunchModel(
                 if (lastSuccessAt.HasValue && (DateTime.Now - lastSuccessAt.Value).TotalSeconds < faceOptions.Value.MinSecondsBetweenVerifications)
                 {
                     await LogBlockedAsync("间隔未到");
-                    throw new InvalidOperationException("刚刚已打卡成功，无需重复打卡");
+                    // 措辞不能断言"已打卡成功"——这里判断的只是"上次人脸比对成功"，如果那次比对成功后
+                    // 打卡本身其实失败了（比如撞上了别的业务规则），这句话就会跟事实不符
+                    throw new InvalidOperationException($"距离上次识别未满 {faceOptions.Value.MinSecondsBetweenVerifications} 秒，请稍后再试");
                 }
             }
 
@@ -174,6 +176,8 @@ public class RemotePunchModel(
                 throw new InvalidOperationException("人脸识别服务暂时不可用，请稍后重试");
             }
 
+            // 这里记的是"人脸是否比对成功"，不是"打卡是否成功"——下面即使 PunchAsync 因为业务原因
+            // （比如重复打卡）失败，人脸比对本身成功这个事实也不会变，两者是两码事，别看名字像混着看
             await LogAttemptAsync(result.IsMatch, result.IsMatch ? null : result.FailReason);
 
             if (!result.IsMatch)
