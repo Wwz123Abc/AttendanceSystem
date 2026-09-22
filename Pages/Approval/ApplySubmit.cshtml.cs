@@ -175,6 +175,12 @@ public class ApplySubmitModel(
                         return $"请假开始时间不能选在班次的午间/中段时间窗口内（{w.Start:HH\\:mm}–{w.End:HH\\:mm}），请选窗口之前或之后的时间点";
                     if (endTime > w.Start && endTime <= w.End)
                         return $"请假结束时间不能选在班次的午间/中段时间窗口内（{w.Start:HH\\:mm}–{w.End:HH\\:mm}），请选窗口之前或之后的时间点";
+                    // 起止点都不落在窗口内，但整段区间"跨过"了窗口（比如窗口 12:00-13:00，填 11:00-14:00）
+                    // 也不行——区间跨度这么短（3 小时）够不着 ComputeWorkHours 的 6 小时扣午休阈值，
+                    // 窗口内这一小时会被整段计入请假时长，多算 1 小时，跟端点落在窗口内是同一个问题，
+                    // 只是触发面更窄（2026-09-21 代码审查发现，B14）
+                    if (startTime < w.Start && endTime > w.End)
+                        return $"请假时间不能跨过班次的午间/中段时间窗口（{w.Start:HH\\:mm}–{w.End:HH\\:mm}），请拆成两段分别提交，或按整天/半天假填写";
                 }
             }
         }

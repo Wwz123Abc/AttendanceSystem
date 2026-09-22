@@ -42,27 +42,12 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
         MyPublished = await announcementService.GetMyPublishedAsync(CurrentUserId);
         if (IsManager)
         {
+            // 范围裁剪现在下沉到服务层（GetDepartmentOptionsAsync/GetAttendanceGroupOptionsAsync 自己按
+            // visibleDeptIds 过滤），这里只管传参，不用自己再重复一遍过滤逻辑（2026-09-21 代码审查发现：
+            // 以前裁剪只写在这一个调用点，服务方法本身仍返回全集团，以后新增调用方很容易忘了裁剪）
             var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
-            var depts  = await announcementService.GetDepartmentOptionsAsync();
-            var groups = await announcementService.GetAttendanceGroupOptionsAsync();
-            if (visibleIds is null)
-            {
-                DeptOptions  = depts;
-                GroupOptions = groups;
-            }
-            else
-            {
-                // 受限管理员：部门候选按自己范围过滤；考勤组候选按"关联部门都在自己范围内（或完全没关联，
-                // 当全公司通用组）"过滤——必须是 All，不能是 Any，否则下拉框里能选中一个跨分公司共用的组、
-                // 点"发布"却会被 OnPostAsync 的服务端校验（同一口径）拒绝，出现"看得到却发不出"的体验问题
-                // （2026-09-17 复审发现：这里漏了跟着提交校验一起从 Any 改成 All）
-                DeptOptions = depts.Where(d => visibleIds.Contains(d.Id)).ToList();
-                var groupDeptMap = (await db.Departments.Where(d => d.AttendanceGroupId != null)
-                        .Select(d => new { d.Id, d.AttendanceGroupId }).ToListAsync())
-                    .GroupBy(x => x.AttendanceGroupId!.Value).ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList());
-                GroupOptions = groups.Where(g => !groupDeptMap.TryGetValue(g.Id, out var deptIds)
-                    || deptIds.All(visibleIds.Contains)).ToList();
-            }
+            DeptOptions  = await announcementService.GetDepartmentOptionsAsync(visibleIds);
+            GroupOptions = await announcementService.GetAttendanceGroupOptionsAsync(visibleIds);
         }
         else
         {

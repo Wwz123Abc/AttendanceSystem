@@ -218,7 +218,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
     public Task<int> CountDirectReportsAsync(int userId)
         => db.Users.CountAsync(u => u.IsActive && u.SupervisorUserId == userId);
 
-    public async Task<List<AnnouncementScopeOptionDto>> GetDepartmentOptionsAsync()
+    public async Task<List<AnnouncementScopeOptionDto>> GetDepartmentOptionsAsync(HashSet<int>? visibleDeptIds = null)
     {
         var depts = await db.Departments.Where(d => d.IsActive)
             .OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
@@ -235,13 +235,25 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         }
         foreach (var root in depts.Where(d => !d.ParentId.HasValue || !byId.ContainsKey(d.ParentId.Value)))
             Add(root, 0);
-        return result;
+
+        return visibleDeptIds is null ? result : result.Where(d => visibleDeptIds.Contains(d.Id)).ToList();
     }
 
-    public Task<List<AnnouncementScopeOptionDto>> GetAttendanceGroupOptionsAsync()
-        => db.AttendanceGroups.Where(g => g.IsActive).OrderBy(g => g.GroupName)
+    public async Task<List<AnnouncementScopeOptionDto>> GetAttendanceGroupOptionsAsync(HashSet<int>? visibleDeptIds = null)
+    {
+        var groups = await db.AttendanceGroups.Where(g => g.IsActive).OrderBy(g => g.GroupName)
             .Select(g => new AnnouncementScopeOptionDto { Id = g.Id, Name = g.GroupName })
             .ToListAsync();
+        if (visibleDeptIds is null) return groups;
+
+        // 受限管理员：只保留"关联部门都在自己范围内（All，不是 Any）或完全没关联部门（全公司通用组）"的组，
+        // 跟 IsAnnouncementInScopeAsync/发布时的服务端校验同一套口径（2026-09-17 代码审查发现的口径统一）
+        var groupDeptMap = (await db.Departments.Where(d => d.AttendanceGroupId != null)
+                .Select(d => new { d.Id, d.AttendanceGroupId }).ToListAsync())
+            .GroupBy(x => x.AttendanceGroupId!.Value).ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList());
+        return groups.Where(g => !groupDeptMap.TryGetValue(g.Id, out var deptIds)
+            || deptIds.All(visibleDeptIds.Contains)).ToList();
+    }
 
     /// <summary>按发布范围算出这次公告实际要发给哪些（在职）员工的 Id 列表。</summary>
     private async Task<List<int>> ResolveAudienceAsync(int publisherUserId, AnnouncementScopeType scopeType, int? scopeId)
