@@ -298,7 +298,14 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                 if (!hasStart || !hasEnd) throw new Exception("午间必打卡窗口要么都填，要么都留空");
                 if (!TimeOnly.TryParse(w.Start, out var ms) || !TimeOnly.TryParse(w.End, out var me))
                     throw new Exception("午间必打卡窗口时间格式不正确");
-                if (me <= ms) throw new Exception("午间必打卡窗口的结束时间要晚于开始时间");
+                // 跨天班次（夜班）的窗口本身也可能跨过午夜（比如 23:30-00:30）——不能简单看
+                // "结束时间是不是比开始时间还早的钟点"，要跟 AttendanceService.ResolveShiftTime
+                // 用同一套规则：钟点比这个班次的上班时间还早，就说明已经过了午夜、算第二天。
+                // 用固定的锚点日期分别换算再比较，不受真实业务日期影响，只看相对先后顺序
+                // （2026-09-22 用户反馈：夜班配 23:30-00:30 会被误判成"结束时间早于开始时间"）。
+                DateTime Resolve(TimeOnly t) =>
+                    CrossDay && t < ws ? DateOnly.MinValue.ToDateTime(t).AddDays(1) : DateOnly.MinValue.ToDateTime(t);
+                if (Resolve(me) <= Resolve(ms)) throw new Exception("午间必打卡窗口的结束时间要晚于开始时间");
                 if (midCheckWindows.Contains((ms, me))) throw new Exception("午间必打卡窗口不能配置两段完全相同的时间");
                 midCheckWindows.Add((ms, me));
             }
