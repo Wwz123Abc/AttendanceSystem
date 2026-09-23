@@ -100,6 +100,11 @@ public class User
 
     public bool IsActive { get; set; } = true;              // 是否在职（false=已停用，不能登录）
 
+    /// <summary>停用/离职时间：点"停用"（含拉黑，拉黑必然同时停用）那一刻的时间戳；重新启用会清空。
+    /// 不能用 UpdatedAt 代替——停用之后如果又编辑过这个人的其它资料，UpdatedAt 会被那次编辑覆盖，
+    /// 就看不出真正的停用时间了。</summary>
+    public DateTime? DeactivatedAt { get; set; }
+
     /// <summary>是否在黑名单（永不录用）。拉黑时同时把 IsActive 置 false，禁止登录。</summary>
     public bool IsBlacklisted { get; set; } = false;
 

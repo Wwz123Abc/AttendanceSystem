@@ -458,7 +458,7 @@ public static class ExcelExportHelper
         string[] headers =
         [
             "工号", "姓名", "角色", "用工性质", "状态", "部门", "考勤组", "岗位",
-            "手机号", "身份证号", "合同公司", "入职日期", "家庭住址",
+            "手机号", "身份证号", "合同公司", "入职日期", "停用/离职时间", "家庭住址",
             "紧急联系人", "紧急联系人电话"
         ];
 
@@ -494,9 +494,10 @@ public static class ExcelExportHelper
             SetCell(row, 9,  u.IdNumber ?? "", baseStyle);
             SetCell(row, 10, u.ContractCompany ?? "", baseStyle);
             SetCell(row, 11, u.HireDate?.ToString("yyyy-MM-dd") ?? "", baseStyle);
-            SetCell(row, 12, u.HomeAddress ?? "", baseStyle);
-            SetCell(row, 13, u.EmergencyContactName ?? "", baseStyle);
-            SetCell(row, 14, u.EmergencyContactPhone ?? "", baseStyle);
+            SetCell(row, 12, u.DeactivatedAt?.ToString("yyyy-MM-dd HH:mm") ?? "", baseStyle);
+            SetCell(row, 13, u.HomeAddress ?? "", baseStyle);
+            SetCell(row, 14, u.EmergencyContactName ?? "", baseStyle);
+            SetCell(row, 15, u.EmergencyContactPhone ?? "", baseStyle);
         }
 
         return ToBytes(wb);

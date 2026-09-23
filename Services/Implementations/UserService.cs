@@ -283,8 +283,9 @@ public class UserService(
         var user = await db.Users.FindAsync(userId);
         if (user is null) return false;
 
-        user.IsActive  = false;
-        user.UpdatedAt = DateTime.Now;
+        user.IsActive      = false;
+        user.DeactivatedAt = DateTime.Now;
+        user.UpdatedAt     = DateTime.Now;
         await db.SaveChangesAsync();
         await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
         return true;
@@ -299,8 +300,9 @@ public class UserService(
         if (user.IsBlacklisted)
             throw new InvalidOperationException("该员工在黑名单中，请先「移出黑名单」再启用");
 
-        user.IsActive  = true;
-        user.UpdatedAt = DateTime.Now;
+        user.IsActive      = true;
+        user.DeactivatedAt = null;   // 重新启用，清空停用时间
+        user.UpdatedAt     = DateTime.Now;
         await db.SaveChangesAsync();
         await TryPushToZKDeviceAsync(user);
         return true;
@@ -315,6 +317,7 @@ public class UserService(
 
         user.IsBlacklisted = true;
         user.IsActive      = false;   // 黑名单必然禁止登录
+        user.DeactivatedAt = DateTime.Now;
         user.UpdatedAt     = DateTime.Now;
         await db.SaveChangesAsync();
         await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
@@ -392,8 +395,9 @@ public class UserService(
             if (active && u.IsBlacklisted) continue;   // 黑名单不参与批量启用
             if (u.IsActive == active) continue;
 
-            u.IsActive  = active;
-            u.UpdatedAt = DateTime.Now;
+            u.IsActive      = active;
+            u.DeactivatedAt = active ? null : DateTime.Now;
+            u.UpdatedAt     = DateTime.Now;
             if (!active) deactivatedEmployeeNos.Add((u.EmployeeNo, u.Id));
             else activatedUsers.Add(u);
             changed++;
