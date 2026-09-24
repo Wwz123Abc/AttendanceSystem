@@ -36,8 +36,12 @@ public class UserService(
         // trim 掉再校验，跟建号/重置密码那边"最终存的密码"本来就不带空格的口径对齐。
         // 另一个同类的手机输入法坑：中文输入法有时会切到全角模式，打出来的"123456"其实是"１２３４５６"
         // 这种全角数字，打码的密码框里肉眼完全看不出来，但对计算机是完全不同的字符——这里一并转成半角。
-        employeeNo = NormalizeFullWidthDigits(employeeNo.Trim());
-        password   = NormalizeFullWidthDigits(password.Trim());
+        // 2026-09-24 补充：上面只处理了全角"数字"，全角字母和符号（比如中文输入法下打出来的"！"）
+        // 还是会对不上——随机重置密码里有 @#! 这类符号，员工用手机中文输入法输入时"!"会变成全角"！"，
+        // 肉眼几乎看不出区别。现在统一把整个全角 ASCII 区段转成半角，见 NormalizeInput。
+        employeeNo = NormalizeInput(employeeNo);
+        var passwordCandidates = PasswordCandidates(password);
+        password = passwordCandidates[0];
 
         // 故意不在查询里过滤“在职”，好让下面能对"停用账号"单独记一条日志（对外仍然统一按失败处理）
         var user = await db.Users
@@ -52,7 +56,14 @@ public class UserService(
         // 工号存在但密码错才要等哈希算完，两种情况的响应时间会有明显差异，能被人拿来批量探测哪些工号
         // 是真实存在的账号（时序侧信道）。账号已经被锁定时同样要跑这一遍，不能提前 return，否则"被锁定"
         // 又会变成一种新的、能靠响应时间区分出来的信号。
-        var passwordOk = VerifyPassword(password, user?.PasswordHash ?? DummyPasswordHashForTimingSafety);
+        // 候选明文不止一个（规范化后的、以及老版本可能存下来的两种写法），但所有候选无论如何都会全部算一遍，
+        // 工号不存在时（拿假哈希）也是同样的次数——不然"输入里带全角字符时，存在的工号更慢"又会变成一个
+        // 能靠响应时间探测工号是否存在的信号。
+        var matchedCandidate = MatchCandidate(passwordCandidates, user?.PasswordHash ?? DummyPasswordHashForTimingSafety);
+        var passwordOk = matchedCandidate >= 0;
+        if (user is not null && (passwordCandidates.Count > 1 || matchedCandidate > 0))
+            logger.LogInformation("账号 {EmployeeNo} 登录输入里含全角字符，已自动转成半角后比对（命中候选={Matched}，{Result}）",
+                employeeNo, matchedCandidate, passwordOk ? "成功" : "失败");
 
         // 连续输错密码次数太多，账号被临时锁定期间——不管这次密码对不对，一律按失败处理
         if (user is not null && user.LockedUntil > DateTime.Now)
@@ -87,8 +98,10 @@ public class UserService(
         user.LastLoginAt      = DateTime.Now;   // 记录这次登录时间
 
         // 老格式哈希（迭代次数只有新格式的 1/60）登录成功就顺手升级成新格式，不用等管理员重置密码
-        // ——用户完全无感知，密码本身不变，只是重新用更高强度的迭代次数存一遍
-        if (IsLegacyHash(user.PasswordHash))
+        // ——用户完全无感知，密码本身不变，只是重新用更高强度的迭代次数存一遍。
+        // 靠老写法（全角字符原样存下来的）候选才对上的账号（matchedCandidate>0）也顺手改存成规范化后的半角，
+        // 以后不管是全角还是半角输入都能登录。
+        if (IsLegacyHash(user.PasswordHash) || matchedCandidate > 0)
             user.PasswordHash = HashPassword(password);
 
         await db.SaveChangesAsync();
@@ -187,8 +200,9 @@ public class UserService(
         // 跟登录同样的道理：先 trim 掉输入法/浏览器可能带出来的首尾空格、把全角数字转成半角，
         // 不然一旦真存进一个带空格/全角字符的新密码，员工自己根本没法发现（密码框打码），
         // 下次登录不管怎么输都对不上，只能再找管理员重置
-        oldPassword = NormalizeFullWidthDigits(oldPassword.Trim());
-        newPassword = NormalizeFullWidthDigits(newPassword.Trim());
+        // 原密码同样按"候选"比对（兼容老版本存下来的写法），新密码统一存成规范化后的半角
+        var oldCandidates = PasswordCandidates(oldPassword);
+        newPassword = NormalizeInput(newPassword);
 
         // 新密码长度校验：页面上已经卡了"不少于 6 位"，但直接调这个方法（比如走 API）能绕开页面校验，
         // 这里补上权威兜底，不然能设出 1 位密码
@@ -196,7 +210,7 @@ public class UserService(
             throw new InvalidOperationException("新密码不能少于 6 位");
 
         var user = await db.Users.FindAsync(userId);
-        if (user is null || !VerifyPassword(oldPassword, user.PasswordHash))   // 原密码不对就拒绝
+        if (user is null || MatchCandidate(oldCandidates, user.PasswordHash) < 0)   // 原密码不对就拒绝
             return false;
 
         user.PasswordHash       = HashPassword(newPassword);
@@ -222,7 +236,11 @@ public class UserService(
         }
         else
         {
-            password = newPassword.Trim();
+            // 管理员在中文输入法全角模式下手打的密码（比如"１２３４５６"）以前会原样存成全角，而员工登录时
+            // 输入的"123456"会被转成半角去比对，永远对不上；页面上显示的"密码已重置为：１２３４５６"
+            // 肉眼又跟半角几乎没区别，很难发现。这里跟登录/改密码统一先转成半角再存，返回给页面显示的
+            // 也是转换后的写法（2026-09-24）。
+            password = NormalizeInput(newPassword);
             if (password.Length < 6)
                 throw new InvalidOperationException("新密码不能少于 6 位");
         }
@@ -619,6 +637,43 @@ public class UserService(
             if (chars[i] is >= '０' and <= '９')   // "０"(FF10) ~ "９"(FF19)，比对应半角数字大 0xFEE0
                 chars[i] = (char)(chars[i] - 0xFEE0);
         return new string(chars);
+    }
+
+    /// <summary>登录/改密码/重置密码统一用的输入规范化：整个全角 ASCII 区段（U+FF01～U+FF5E，即全角的
+    /// 数字、字母、标点符号，比如"！""＠""＃""Ａ"）转成对应的半角字符，全角空格（U+3000）转成普通空格，
+    /// 最后去掉首尾空白。只处理数字不够——随机重置密码里有 @#! 这类符号，员工用手机中文输入法输入时
+    /// "!"会变成全角"！"，肉眼几乎看不出区别，但对系统是不同字符，会一直提示"工号或密码错误"。</summary>
+    public static string NormalizeInput(string s)
+    {
+        var chars = s.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (chars[i] is >= '！' and <= '～') chars[i] = (char)(chars[i] - 0xFEE0);
+            else if (chars[i] == '　')               chars[i] = ' ';
+        }
+        return new string(chars).Trim();
+    }
+
+    /// <summary>拿一个用户输入的密码，生成用来比对已存哈希的"候选明文"列表：第 0 个是规范化后的（现在
+    /// 新存的密码都是这个写法），后面跟着老版本可能存下来的两种写法——只转了全角数字的（旧版改密码
+    /// 存的）、原样只去空白的（旧版管理员手动重置密码存的，全角字符没转换过）。这样已经存在的账号不会因为
+    /// 这次统一规范化而突然登录不上；候选完全相同（绝大多数纯半角输入的情况）时只有 1 个，没有额外开销。</summary>
+    public static List<string> PasswordCandidates(string raw)
+    {
+        var list = new List<string> { NormalizeInput(raw) };
+        foreach (var legacy in new[] { NormalizeFullWidthDigits(raw.Trim()), raw.Trim() })
+            if (!list.Contains(legacy)) list.Add(legacy);
+        return list;
+    }
+
+    /// <summary>返回第一个能对上已存哈希的候选下标（-1 = 都对不上）。故意不提前返回、每个候选都算一遍——
+    /// 耗时只取决于候选个数，不取决于"命中了哪个/有没有命中"，避免被人拿响应时间做文章。</summary>
+    public static int MatchCandidate(List<string> candidates, string storedHash)
+    {
+        var matched = -1;
+        for (var i = 0; i < candidates.Count; i++)
+            if (VerifyPassword(candidates[i], storedHash) && matched < 0) matched = i;
+        return matched;
     }
 
     /// <summary>
