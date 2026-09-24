@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -55,6 +56,19 @@ var appSettings = builder.Configuration.GetSection(AppSettingsOptions.SectionNam
 if (!string.Equals(appSettings.UploadPath.Trim('/', '\\'), "uploads", StringComparison.Ordinal))
     throw new InvalidOperationException(
         $"AppSettings:UploadPath 目前只能是 \"uploads\"（当前是 \"{appSettings.UploadPath}\"）：私有文件读取接口的路由和目录是写死的，改了会导致所有照片/附件打不开。如需修改请同时改 PrivateFilesController。");
+
+// ── 登录加密密钥：存到磁盘，重启/部署后大家不会被踢下线 ─────────────────────────
+// 登录票据(Cookie)和防跨站令牌(Antiforgery)都是用 DataProtection 的密钥加解密的。不配置时密钥只在内存里，
+// 每次重启都重新生成——所有人的登录票据、已打开页面里的表单令牌一起作废，日志里还会刷"key not found in key ring"。
+// 这里把密钥写到 content root 下的 PrivateUploads/dp-keys：跟身份证照同一个（程序本来就要能写的）目录，
+// 在 wwwroot 之外、不会被静态文件下发；部署是"解压覆盖"，不会动这个目录。密钥文件是明文 XML，
+// 保护方式跟 appsettings.Production.json 里的数据库密码一样——靠服务器文件权限，所以不要把它复制到别处或提交进仓库。
+// 必须固定 ApplicationName，否则密钥会跟着"程序所在路径"走，换目录部署就等于换了一套密钥。
+var dataProtectionKeysDir = Path.Combine(PrivateFileStorage.GetRoot(builder.Environment), "dp-keys");
+Directory.CreateDirectory(dataProtectionKeysDir);   // 建不出来/没写权限就在启动时直接报错，而不是等第一个人登录才炸
+builder.Services.AddDataProtection()
+    .SetApplicationName("AttendanceSystem")
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysDir));
 
 // 高德地图 Web端(JS API) 配置：考勤组管理页"打卡地点"用来做地址搜索/地图选点
 builder.Services.Configure<AMapOptions>(

@@ -6,6 +6,8 @@ publish-*.tar.gz
 .vs/
 logs/
 wwwroot/uploads/
+# 私有上传文件（身份证照/人脸照/附件）和登录加密密钥（PrivateUploads/dp-keys），都不能进仓库
+PrivateUploads/
 
 # appsettings.json 里是真实的数据库密码和阿里云密钥，不能上传
 # 仓库里放的是不含真实密钥的 appsettings.Example.json，仅供参考
