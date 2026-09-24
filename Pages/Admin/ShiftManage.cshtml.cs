@@ -377,7 +377,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
         // 这个方法里前面一大段校验用的都是 throw new Exception("中文提示")（不是 InvalidOperationException），
         // 所以不能像别的页面那样按异常类型拆分；这里改成只单独拦截 DbUpdateException（真正的数据库层面
         // 报错，可能带字段名/约束名等技术细节），其余（本方法自己抛出的校验提示）维持原样把 ex.Message 给用户看。
-        catch (DbUpdateException ex)
+        catch (Exception ex) when (ex is DbUpdateException or MySqlConnector.MySqlException)   // ExecuteDeleteAsync 失败抛的是 MySqlException，不是 DbUpdateException
         {
             logger.LogError(ex, "保存班次失败");
             ErrorMessage = "保存失败，请稍后重试";
@@ -522,7 +522,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             // 带上刚排的日期区间，确保新排班在展示窗口内可见
             return RedirectToSelf(start.ToString("yyyy-MM-dd"), end.ToString("yyyy-MM-dd"));
         }
-        catch (DbUpdateException ex)
+        catch (Exception ex) when (ex is DbUpdateException or MySqlConnector.MySqlException)
         {
             logger.LogError(ex, "批量排班失败");
             ErrorMessage = "保存失败，请稍后重试";

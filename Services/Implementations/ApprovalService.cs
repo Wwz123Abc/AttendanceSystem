@@ -17,6 +17,11 @@ namespace AttendanceSystem.Services.Implementations;
 public class ApprovalService(AttendanceDbContext db, IAttendanceService attendanceService, IOptions<AppSettingsOptions> appOptions)
     : IApprovalService
 {
+    /// <summary>一张请假/出差申请最长能跨多少天。没有上限的话，能提交"结束时间=9999 年"的假单：提交时逐日循环算时长、
+    /// 审批通过后逐日回写考勤记录（单事务几百万条插入），逐日累加到 9999 年还会抛日期越界异常
+    /// （2026-09-24 审查修复）。超过的请拆成多张。</summary>
+    public const int MaxLeaveOrTripSpanDays = 366;
+
     /// <summary>
     /// 提交申请：算请假/加班时长 → 生成申请单(带单号) → 建审批节点(员工自选审批人/直属上级/兜底管理员) → 通知审批人。
     /// </summary>
@@ -62,6 +67,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException("请假开始时间最早只能选到现在往前推24小时以内");
                 if (dto.LeaveEndTime <= dto.LeaveStartTime)
                     throw new InvalidOperationException("请假结束时间必须晚于开始时间");
+                if ((dto.LeaveEndTime.Value - dto.LeaveStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
+                    throw new InvalidOperationException($"请假时间跨度不能超过 {MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交");
                 if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
                         && a.ApprovalType == ApprovalType.Leave && activeStatuses.Contains(a.ApprovalStatus)
                         && a.LeaveStartTime < dto.LeaveEndTime && dto.LeaveStartTime < a.LeaveEndTime))
@@ -86,6 +93,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException("出差开始时间不能早于现在");
                 if (dto.BusinessTripEndTime < dto.BusinessTripStartTime)
                     throw new InvalidOperationException("出差结束时间不能早于开始时间");
+                if ((dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
+                    throw new InvalidOperationException($"出差时间跨度不能超过 {MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交");
                 if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
                         && a.ApprovalType == ApprovalType.BusinessTrip && activeStatuses.Contains(a.ApprovalStatus)
                         && a.BusinessTripStartTime < dto.BusinessTripEndTime && dto.BusinessTripStartTime < a.BusinessTripEndTime))

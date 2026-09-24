@@ -571,6 +571,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     else if (rec.ClockOutTime is { } nco && nco.Date > nci.Date) isNightShift = true;
                 }
                 row.DailyIsNightShift.Add(isNightShift);
+                row.DailyIsRest.Add(isHolidayOff || isShiftRest);
 
                 decimal? dayHours = null;
                 if (rec is not null)
@@ -591,7 +592,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     if (rec.AttendanceStatus == AttendanceStatus.OnLeave)
                         leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);
-                    if (rec.AttendanceStatus == AttendanceStatus.Absent) absentDays++;
+                    if (rec.AttendanceStatus == AttendanceStatus.Absent && !user.IsAttendanceExempt) absentDays++;   // 免考勤的人不统计旷工
                     // 缺卡/迟到/早退次数的判定口径统一改成跟 GenerateMonthlySummaryAsync 一样按"状态"算
                     // （不再按分钟数/裸打卡时间判断），并排除旷工/请假/节假日/出差——不然半天假当天上午
                     // 迟到、或旷工那天"当然两次都没打"，会被这份表额外多算一次迟到/缺卡，跟月度汇总的
@@ -600,8 +601,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                         or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip;
                     if (!excludedFromMissing && rec.ClockInTime is null && rec.ClockOutTime is not null) missingIn++;    // 有下班卡没上班卡
                     if (!excludedFromMissing && rec.ClockInTime is not null && rec.ClockOutTime is null) missingOut++;   // 有上班卡没下班卡
-                    lateMin  += rec.LateMinutes;
-                    earlyMin += rec.EarlyLeaveMinutes;
+                    // 迟到/早退"分钟"和"次数"必须同一个口径：都只认"状态就是迟到/早退"的记录。以前次数按状态数、
+                    // 分钟却把所有记录的 LateMinutes 直接相加，结果"未打卡"记录（当天只有一次很晚的打卡，先被当成
+                    // 上班卡算出几百分钟迟到，后来又被后台改成"未打卡"，分钟数却没清）、半天假记录上残留的分钟
+                    // 也被加了进来——一个月的迟到合计里有近一半是这样虚出来的，还出现"迟到 1600 分钟、迟到 1 次"
+                    // 这种分钟和次数对不上的行（2026-09-24 数据核查）。
+                    lateMin  += EffectiveLateMinutes(rec);
+                    earlyMin += EffectiveEarlyLeaveMinutes(rec);
                     if (rec.AttendanceStatus == AttendanceStatus.Late) lateCnt++;
                     if (rec.AttendanceStatus == AttendanceStatus.EarlyLeave) earlyCnt++;
 
@@ -626,6 +632,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
                 row.DailyHours.Add(dayHours);
             }
+
+            // 应出勤天数：跟 GenerateMonthlySummaryAsync 同一个口径（同一个 CountExpectedWorkdays），
+            // 入职日期晚于周期开始的从入职日起算；没填入职日期的按整个周期算
+            var effStart = user.HireDate is { } hireDate && hireDate > start ? hireDate : start;
+            row.ExpectedWorkdays = effStart > end ? 0
+                : CountExpectedWorkdays(effStart, end, user.AttendanceGroupId, myHolidays,
+                    assignByDate.ToDictionary(a => a.Key, a => a.Value.ShiftSchedule));
 
             // 各项工时在上面累加时就已经按"半小时"取整过了，这里直接赋值（合计只会是整数或 x.5）
             row.ActualWorkdays          = actualDays;
@@ -690,7 +703,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var start = new DateOnly(year, month, 1);
         var end   = start.AddMonths(1).AddDays(-1);
 
-        var candidateIds = onlyUserIds is { Count: > 0 }
+        // 传了名单（哪怕是空名单）就只处理名单里的人；只有完全没传（null）才是"全公司重算"。
+        // 以前判的是 Count > 0，空名单会落到全库分支——"没设范围的非 Admin 账号"或"范围内没有员工的
+        // 分公司管理员"调用手动重算接口时，控制器传进来的是空名单，结果反而触发了全公司重算（2026-09-24 审查修复）。
+        var candidateIds = onlyUserIds is not null
             ? onlyUserIds.Distinct().ToList()
             : await db.Users.Where(u => u.IsActive).Select(u => u.Id)
                 .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
@@ -816,7 +832,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 迟到/早退按「状态」统计（钉钉同步只写状态、不写分钟数，按分钟数会漏算）
             summary.LateCount         = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);
             summary.EarlyLeaveCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.EarlyLeave);
-            summary.AbsentDays        = records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent);
+            summary.AbsentDays        = user.IsAttendanceExempt ? 0 : records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent);   // 免考勤的人不统计旷工
             // 缺卡：状态=未打卡，或“只打了上/下班其中一次”（这样钉钉数据的缺卡也能识别；出差本就不用打卡，排除）
             summary.NotPunchedCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.NotPunched
                 || ((r.ClockInTime.HasValue ^ r.ClockOutTime.HasValue)
@@ -892,6 +908,19 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         };
     }
 
+    /// <summary>
+    /// 这条记录算数的"迟到分钟"：只有状态本身就是"迟到"才算，否则一律 0。
+    /// 数据库里的 LateMinutes 是"打上班卡那一刻算出来的值"，之后当天状态可能被改成别的（后台判成"未打卡"、
+    /// 请假审批回写、补卡后重算……），分钟数不一定同步清掉，直接拿来汇总会跟"迟到次数"（按状态数）对不上。
+    /// 所有展示和汇总的迟到分钟都走这个方法，保证逐日相加 = 合计，分钟和次数同一个口径。
+    /// </summary>
+    public static int EffectiveLateMinutes(AttendanceRecord r) =>
+        r.AttendanceStatus == AttendanceStatus.Late ? r.LateMinutes : 0;
+
+    /// <summary>这条记录算数的"早退分钟"：只有状态本身就是"早退"才算，理由同 <see cref="EffectiveLateMinutes"/>。</summary>
+    public static int EffectiveEarlyLeaveMinutes(AttendanceRecord r) =>
+        r.AttendanceStatus == AttendanceStatus.EarlyLeave ? r.EarlyLeaveMinutes : 0;
+
     /// <summary>判断某天算不算“出勤”：打了上班卡，或者当天已批准出差（出差无需打卡也算全勤）。</summary>
     private static bool IsPresent(AttendanceRecord r) => r.ClockInTime.HasValue || r.AttendanceStatus == AttendanceStatus.BusinessTrip;
 
@@ -966,8 +995,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 AttendanceStatus = rec?.AttendanceStatus ?? AttendanceStatus.NotPunched,
                 StatusText       = rec is null ? "未打卡（无记录）" : StatusText(rec.AttendanceStatus),
                 StatusCssClass   = rec is null ? "f-color-red" : StatusCss(rec.AttendanceStatus),
-                LateMinutes      = rec?.LateMinutes ?? 0,
-                EarlyLeaveMinutes = rec?.EarlyLeaveMinutes ?? 0,
+                LateMinutes      = rec is null ? 0 : EffectiveLateMinutes(rec),
+                EarlyLeaveMinutes = rec is null ? 0 : EffectiveEarlyLeaveMinutes(rec),
                 ApprovalNote     = rec?.ApprovalNote,
                 LocationAbnormal     = rec?.LocationAbnormal ?? false,
                 LocationAbnormalNote = rec?.LocationAbnormalNote
@@ -1526,6 +1555,18 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// </summary>
     public const int ClockOutEligibleHoursBeforeEnd = 2;
 
+    /// <summary>
+    /// 这次打卡是不是"晚于班次下班时间"（只对当天没有任何上班卡时有意义，用来判断"当天第一次打卡"该算上班还是下班）。
+    /// 设备同步按"当天第一次算上班"处理，但如果员工漏打了早上的上班卡，当天唯一一次打卡是下班时间之后
+    /// （比如 22:01、17:30），把它当上班卡会算出几百分钟的迟到——它明显是下班卡。只对非跨天班次判断
+    /// （夜班的下班时间在第二天，晚上首次打卡本来就是上班）；没排班、休息日不判断。
+    /// </summary>
+    public static bool IsFirstPunchAfterShiftEnd(DateOnly workDate, DateTime time, ShiftSchedule? shift, bool isRestDay)
+    {
+        if (shift is null || isRestDay || shift.IsCrossDay) return false;
+        return time >= workDate.ToDateTime(shift.WorkEndTime);
+    }
+
     public static bool IsEligibleClockOutCandidate(DateTime time, DateOnly workDate, ShiftSchedule? shift)
     {
         if (shift is null) return true;
@@ -1817,8 +1858,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         AttendanceStatus = r.AttendanceStatus,
         StatusText       = StatusText(r.AttendanceStatus),
         StatusCssClass   = StatusCss(r.AttendanceStatus),
-        LateMinutes      = r.LateMinutes,
-        EarlyLeaveMinutes = r.EarlyLeaveMinutes,
+        LateMinutes      = EffectiveLateMinutes(r),
+        EarlyLeaveMinutes = EffectiveEarlyLeaveMinutes(r),
         ActualWorkHours  = r.ActualWorkHours,
         OvertimeHours    = r.OvertimeHours,
         LeaveHours       = r.LeaveHours,

@@ -40,7 +40,7 @@ public class UserManageModel(
     public bool CurrentUserIsUnscoped => IsHqSuperAdmin(HttpContext.GetCurrentUser()!);
 
     /// <summary>是不是"总部超级管理员"：角色为 Admin，且自己没有被设置管理范围。</summary>
-    private static bool IsHqSuperAdmin(CurrentUser cu) => cu.Role == UserRole.Admin && !cu.IsScoped;
+    private static bool IsHqSuperAdmin(CurrentUser cu) => cu.IsHqSuperAdmin;
 
     // 左侧部门树（扁平化，带层级深度）
     public List<DeptNode> DeptTree        { get; set; } = [];
@@ -88,6 +88,7 @@ public class UserManageModel(
     [BindProperty] public string? EmergencyContactPhone  { get; set; }
     [BindProperty] public IFormFile? IdCardPhoto         { get; set; }   // 身份证照片，不选就是不改
     [BindProperty] public bool    AllowRemotePunch { get; set; }   // 是否允许用手机定位+人脸的"远程打卡"
+    [BindProperty] public bool    IsAttendanceExempt { get; set; } // 是否免考勤（不需要打卡，不自动记旷工）
     [BindProperty] public int     EditUserId     { get; set; }
     /// <summary>这个人要推送到哪几台考勤机（多选，手动勾选，不再是无条件推给全部启用中的设备）。</summary>
     [BindProperty] public List<int> DeviceIds    { get; set; } = [];
@@ -217,6 +218,12 @@ public class UserManageModel(
     // ── 增 / 改 ───────────────────────────────────────────────────────────────
     public async Task<IActionResult> OnPostCreateAsync()
     {
+        // 只有"这次请求自己真的认领成功了"，出错时才能把认领退回——表单校验没通过、或者没抢到认领
+        // （别人/上一次点击已经在处理这条登记）时，这条登记的"已确认"状态是别人的，绝不能替人家退回，
+        // 否则会出现"A 正在建号、B 的重复提交失败却把 A 的认领退回待确认"，同一条登记就能被建出两个账号
+        // （2026-09-24 审查修复；也正是"先提示成功、又冒出已被处理"那类重复提交的后遗症）
+        var claimedByMe = false;
+        string? newPhotoUrl = null;   // 这次请求新落盘的证件照，建号失败时要补偿删除，不留孤儿文件
         try
         {
             ValidateContact(requirePhone: true, requireSupervisor: true, requireDept: true);
@@ -231,6 +238,7 @@ public class UserManageModel(
             {
                 var claimed = await registrationService.ClaimForConfirmAsync(RegistrationId.Value, HttpContext.GetCurrentUser()!);
                 if (!claimed) throw new InvalidOperationException("该登记不存在，或已经被处理过了");
+                claimedByMe = true;
             }
 
             // 如果是在"确认录入"某条扫码登记，员工自己提交时可能已经上传过身份证照片；
@@ -239,6 +247,7 @@ public class UserManageModel(
             if (RegistrationId.HasValue)
                 regPhotoUrl = (await db.EmployeeRegistrations.FindAsync(RegistrationId.Value))?.IdCardPhotoUrl;
             newUser.IdCardPhotoUrl = await SaveIdCardPhotoAsync(newUser.EmployeeNo, regPhotoUrl);
+            if (newUser.IdCardPhotoUrl != regPhotoUrl) newPhotoUrl = newUser.IdCardPhotoUrl;   // 这次真的新写了一个文件
             // 部门长期跟随了某个考勤组时，自动归入该组；部门没配跟随关系则维持表单里手动选的考勤组
             if (DeptId.HasValue)
             {
@@ -261,20 +270,26 @@ public class UserManageModel(
         catch (InvalidOperationException ex)
         {
             ErrorMessage = ex.Message;
-            // 认领登记之后，建号中途任何一步失败，都要把登记状态退回"待确认"——不然这条登记既没建成号，
-            // 状态又不再是 Pending，会从列表里消失，只能让员工重新扫码提交
-            if (RegistrationId.HasValue)
-                await registrationService.RevertClaimAsync(RegistrationId.Value);
+            await CleanupAfterFailedCreateAsync(claimedByMe, newPhotoUrl);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "新建员工失败，EmployeeNo={EmployeeNo}", EmployeeNo);
             ErrorMessage = "保存失败，请稍后重试";
-            if (RegistrationId.HasValue)
-                await registrationService.RevertClaimAsync(RegistrationId.Value);
+            await CleanupAfterFailedCreateAsync(claimedByMe, newPhotoUrl);
         }
         await ReloadAsync();
         return Page();
+    }
+
+    /// <summary>新建员工失败后的善后：① 这次请求自己认领了扫码登记的，把登记退回"待确认"——不然这条登记既没建成号、
+    /// 状态又不再是 Pending，会从列表里消失，只能让员工重新扫码提交；② 这次新写盘的证件照删掉，不留孤儿文件。
+    /// 没认领成功的请求（表单校验没过、没抢到认领）什么都不退，别人的认领不是我们的。</summary>
+    private async Task CleanupAfterFailedCreateAsync(bool claimedByMe, string? newPhotoUrl)
+    {
+        if (claimedByMe && RegistrationId.HasValue)
+            await registrationService.RevertClaimAsync(RegistrationId.Value);
+        DeleteIdCardFile(newPhotoUrl);
     }
 
     public async Task<IActionResult> OnPostUpdateAsync()
@@ -284,24 +299,40 @@ public class UserManageModel(
             ValidateContact(requirePhone: false, requireSupervisor: false, requireDept: false);
             if (!await CanAccessUserAsync(EditUserId))
                 throw new InvalidOperationException("无权编辑该员工");
+            await EnsureCanManageTargetAsync(EditUserId);   // 文员/分公司管理员不能编辑（含降级）总部管理员等更高权限账号
 
             var oldPhotoUrl = (await userService.GetUserByIdAsync(EditUserId))?.IdCardPhotoUrl;
             var user = BuildUser();
             user.Id = EditUserId;
-            await ValidateScopeForSaveAsync(user);
+            await ValidateScopeForSaveAsync(user, EditUserId);
 
+            // 证件照的顺序：先写新文件（不删旧的）→ 写库 → 成功了才删旧文件；写库失败（比如工号被别人占用）
+            // 就把刚写的新文件删掉。以前是先删旧照片再写库，写库失败后旧照片已经不可逆丢失，
+            // 库里却还指向它（2026-09-24 审查修复）
             user.IdCardPhotoUrl = await SaveIdCardPhotoAsync(user.EmployeeNo, oldPhotoUrl);
+            var wroteNewPhoto = user.IdCardPhotoUrl != oldPhotoUrl;
             // 部门长期跟随了某个考勤组时，自动归入该组；部门没配跟随关系则维持表单里手动选的考勤组
             if (DeptId.HasValue)
             {
                 var followedGroupId = await groupService.GetGroupIdForDepartmentAsync(DeptId.Value);
                 if (followedGroupId.HasValue) user.AttendanceGroupId = followedGroupId.Value;
             }
-            var ok = await userService.UpdateUserAsync(user);
+            bool ok;
+            try { ok = await userService.UpdateUserAsync(user); }
+            catch
+            {
+                if (wroteNewPhoto) DeleteIdCardFile(user.IdCardPhotoUrl);
+                throw;
+            }
             if (ok)
             {
+                if (wroteNewPhoto) DeleteIdCardFile(oldPhotoUrl);
                 await userService.SetUserDevicesAsync(EditUserId, DeviceIds);
                 await ApplyScopeAfterSaveAsync(EditUserId);
+            }
+            else if (wroteNewPhoto)
+            {
+                DeleteIdCardFile(user.IdCardPhotoUrl);
             }
             SuccessMessage = ok ? "员工信息更新成功！" : "更新失败：用户不存在";
         }
@@ -324,6 +355,7 @@ public class UserManageModel(
         try
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            await EnsureCanManageTargetAsync(id);
             await userService.DeactivateUserAsync(id);
             SuccessMessage = "已停用该账号（无法登录）";
         }
@@ -341,6 +373,7 @@ public class UserManageModel(
         try
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            await EnsureCanManageTargetAsync(id);
             await userService.ActivateUserAsync(id); SuccessMessage = "已启用该账号";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -357,6 +390,7 @@ public class UserManageModel(
         try
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            await EnsureCanManageTargetAsync(id);
             await userService.BlacklistUserAsync(id); SuccessMessage = "已拉黑该员工（禁止登录，工号永不再用）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -373,6 +407,7 @@ public class UserManageModel(
         try
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            await EnsureCanManageTargetAsync(id);
             await userService.RemoveFromBlacklistAsync(id); SuccessMessage = "已移出黑名单（当前为“已停用”，如需恢复请再点“启用”）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -389,6 +424,7 @@ public class UserManageModel(
         try
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            await EnsureCanManageTargetAsync(id);
             await userService.DeleteUserAsync(id);
             SuccessMessage = "已彻底删除该员工";
         }
@@ -406,6 +442,7 @@ public class UserManageModel(
         try
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            await EnsureCanManageTargetAsync(id);
             var pwd = await userService.ResetPasswordAsync(id, ResetPasswordValue); SuccessMessage = $"密码已重置为：{pwd}";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -458,17 +495,39 @@ public class UserManageModel(
         return await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, deptId);
     }
 
-    /// <summary>批量操作场景：从传入的 id 列表里只保留当前登录者管理范围内的那些，范围外的静默剔除
-    /// （不报错——批量操作里"只处理有权限的那部分"比"整批因为混了一个越权 id 就全部失败"更实用）。</summary>
+    /// <summary>
+    /// 角色层级校验：目标员工在我的管理范围内还不够，还得"够得着"他的角色。
+    /// 只有总部超级管理员（角色 Admin 且没有范围限制）可以操作所有人；其他人——
+    /// ① 不能动总部管理员（Admin 且没设范围）：他们的 DepartmentId 常常挂在某个分公司下，光看部门范围，
+    ///    这个分公司的文员/分公司管理员就"管得到"他，重置密码就能接管总部账号、编辑就能把总部管理员降级；
+    /// ② 文员不能动任何管理员账号；
+    /// ③ 分公司管理员之间（同范围的同级）维持原来的可操作，不影响分公司日常管理。
+    /// 目标不存在时不在这里报错，交给后面各自的逻辑按"不存在"处理。（2026-09-24 审查修复）
+    /// </summary>
+    private async Task EnsureCanManageTargetAsync(int userId)
+    {
+        var cu = HttpContext.GetCurrentUser()!;
+        if (cu.IsHqSuperAdmin) return;
+        var t = await db.Users.Where(u => u.Id == userId).Select(u => new { u.Role, u.ScopedDepartmentId }).FirstOrDefaultAsync();
+        if (t is null || cu.CanManageAccount(t.Role, t.ScopedDepartmentId)) return;
+        throw new InvalidOperationException(t.ScopedDepartmentId is null
+            ? "无权操作总部管理员账号，请联系总部管理员"
+            : "文员无权操作管理员账号");
+    }
+
+    /// <summary>批量操作场景：从传入的 id 列表里只保留当前登录者能操作的那些（管理范围内 + 角色够得着），
+    /// 其余的静默剔除（不报错——批量操作里"只处理有权限的那部分"比"整批因为混了一个越权 id 就全部失败"更实用）。</summary>
     private async Task<List<int>> FilterAccessibleUserIdsAsync(List<int> userIds)
     {
         var cu = HttpContext.GetCurrentUser()!;
-        if (!cu.IsScoped || userIds.Count == 0) return userIds;   // 不受限，或者本来就没传，直接放行
+        if (userIds.Count == 0 || IsHqSuperAdmin(cu)) return userIds;   // 本来就没传，或者是总部超级管理员，直接放行
 
-        var deptById = await db.Users.Where(u => userIds.Contains(u.Id))
-            .Select(u => new { u.Id, u.DepartmentId }).ToListAsync();
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);   // 已知 cu.IsScoped，这里不会是 null
-        return deptById.Where(u => u.DepartmentId.HasValue && visibleIds!.Contains(u.DepartmentId.Value))
+        var targets = await db.Users.Where(u => userIds.Contains(u.Id))
+            .Select(u => new { u.Id, u.DepartmentId, u.Role, u.ScopedDepartmentId }).ToListAsync();
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);   // 不受限（如不带范围的文员）时为 null
+        return targets
+            .Where(u => visibleIds is null || (u.DepartmentId.HasValue && visibleIds.Contains(u.DepartmentId.Value)))
+            .Where(u => cu.CanManageAccount(u.Role, u.ScopedDepartmentId))   // 角色层级同上
             .Select(u => u.Id).ToList();
     }
 
@@ -507,7 +566,7 @@ public class UserManageModel(
         return deptIds.Any(id => visibleIds!.Contains(id));
     }
 
-    private async Task ValidateScopeForSaveAsync(User user)
+    private async Task ValidateScopeForSaveAsync(User user, int? targetUserId = null)
     {
         var cu = HttpContext.GetCurrentUser()!;
 
@@ -533,8 +592,16 @@ public class UserManageModel(
         // 也能畅通无阻地把自己或别人提权成 Admin，是个越权漏洞
         if (!IsHqSuperAdmin(cu))
         {
-            if (user.Role == UserRole.Admin)
+            // 只拦"角色发生变化"：把别人提升为管理员、或把管理员改成别的角色都要总部来做。
+            // 以前一律拒绝 Role==Admin，而分公司管理员本身就是 Admin+范围，编辑自己（角色没变）保存必然被拒，
+            // 改不了自己的手机号/照片等资料（2026-09-24 审查修复）。谁能编辑哪个管理员账号，由 EnsureCanManageTargetAsync 管。
+            var currentRole = targetUserId.HasValue
+                ? await db.Users.Where(u => u.Id == targetUserId.Value).Select(u => (UserRole?)u.Role).FirstOrDefaultAsync()
+                : null;
+            if (user.Role == UserRole.Admin && currentRole != UserRole.Admin)
                 throw new InvalidOperationException("无权将角色设置为管理员，请联系总部管理员操作");
+            if (user.Role != UserRole.Admin && currentRole == UserRole.Admin)
+                throw new InvalidOperationException("无权修改管理员账号的角色，请联系总部管理员操作");
             if (ScopedDeptId.HasValue)
                 throw new InvalidOperationException("无权设置管理范围，请联系总部管理员操作");
         }
@@ -618,14 +685,15 @@ public class UserManageModel(
         HomeAddress            = string.IsNullOrWhiteSpace(HomeAddress)           ? null : HomeAddress.Trim(),
         EmergencyContactName   = string.IsNullOrWhiteSpace(EmergencyContactName)  ? null : EmergencyContactName.Trim(),
         EmergencyContactPhone  = string.IsNullOrWhiteSpace(EmergencyContactPhone) ? null : EmergencyContactPhone.Trim(),
-        AllowRemotePunch       = AllowRemotePunch
+        AllowRemotePunch       = AllowRemotePunch,
+        IsAttendanceExempt     = IsAttendanceExempt
         // IdCardPhotoUrl 不在这里赋值，由 SaveIdCardPhotoAsync() 上传后单独设置
         // Role/HireDate 这里用 TryParse 兜底而不是再抛异常：ValidateContact() 已经校验过一遍，正常流程走不到 fallback 分支
     };
 
     /// <summary>
     /// 保存上传的身份证照片：没选新文件就保留原地址（编辑时常常不重新上传）；
-    /// 选了新文件就存到 wwwroot/{上传目录}/idcards/{工号}/ 下，并删掉旧照片文件（避免残留占硬盘空间）。
+    /// 选了新文件就存到 PrivateUploads/{上传目录}/idcards/{工号}/ 下（不删旧文件，见方法末尾说明）。
     /// </summary>
     private async Task<string?> SaveIdCardPhotoAsync(string employeeNo, string? oldUrl)
     {
@@ -656,14 +724,28 @@ public class UserManageModel(
         await using (var fs = System.IO.File.Create(path))
             await IdCardPhoto.CopyToAsync(fs);
 
-        // 换了新照片，把旧文件删掉，避免每次改资料都留一张占硬盘空间
-        if (!string.IsNullOrEmpty(oldUrl))
-        {
-            var oldPath = Path.Combine(privateRoot, oldUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
-            if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
-        }
-
+        // 注意：这里不删旧照片。旧文件要等调用方把新地址成功写进数据库之后才能删（见 OnPostUpdateAsync），
+        // 写库失败的话还得反过来删新文件——先删旧的再写库，写库一失败旧照片就永久丢了。
         return $"/{uploadPath}/idcards/{employeeNo}/{fileName}";
+    }
+
+    /// <summary>删除一张证件照文件（只在写库成功替换掉旧照片、或写库失败要回收新文件时调用）。
+    /// 文件不存在/删除失败都只记日志，不能因为清理失败影响正常流程；"扫码登记"目录下的照片不删——
+    /// 那份同时还挂在登记记录上，留着只是占点硬盘，删了登记详情里就看不到证件照了。</summary>
+    private void DeleteIdCardFile(string? url)
+    {
+        if (string.IsNullOrEmpty(url) || url.Contains("/idcards/registrations/", StringComparison.Ordinal)) return;
+        try
+        {
+            var root = Path.GetFullPath(PrivateFileStorage.GetRoot(env));
+            var path = Path.GetFullPath(Path.Combine(root, url.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            if (path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(path))
+                System.IO.File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "清理证件照文件失败：{Url}", url);
+        }
     }
 
     private static EmployeeStatus? ParseStatus(string? s) => s switch

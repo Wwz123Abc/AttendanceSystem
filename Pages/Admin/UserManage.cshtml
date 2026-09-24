@@ -235,6 +235,7 @@
                                                         emergencyContactPhone = u.EmergencyContactPhone ?? "",
                                                         idCardPhotoUrl = u.IdCardPhotoUrl ?? "",
                                                         allowRemotePunch = u.AllowRemotePunch,
+                                                        attendanceExempt = u.IsAttendanceExempt,
                                                         deviceIds = Model.UserDeviceIdsByUser.GetValueOrDefault(u.Id, new()),
                                                         scopedDeptId = u.ScopedDepartmentId
                                                     }))">编辑</button>
@@ -513,6 +514,12 @@
                             <div class="form-check">
                                 <input asp-for="AllowRemotePunch" class="form-check-input" type="checkbox" id="fAllowRemotePunch" />
                                 <label class="form-check-label" for="fAllowRemotePunch">允许远程打卡（手机定位+人脸识别，给出差/到不了考勤机的员工用）</label>
+                            </div>
+                        </div>
+                        <div class="col-md-12">
+                            <div class="form-check">
+                                <input asp-for="IsAttendanceExempt" class="form-check-input" type="checkbox" id="fAttendanceExempt" />
+                                <label class="form-check-label" for="fAttendanceExempt">免考勤（不需要打卡的人，如管理员/文员/办公室人员：不再每天自动记旷工，报表里不统计旷工天数）</label>
                             </div>
                         </div>
                         <div class="col-md-12">
@@ -810,6 +817,7 @@ function openAdd() {
     document.getElementById('fIdCardPhoto').value = '';
     document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';   // 新建员工还没有照片，不显示预览
     document.getElementById('fAllowRemotePunch').checked = false;   // 新建员工默认不开远程打卡
+    document.getElementById('fAttendanceExempt').checked = false;   // 新建员工默认需要打卡
     document.getElementById('fRole').value = 'Employee';
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
@@ -879,6 +887,7 @@ function openConfirm(data) {
         document.getElementById('fIdCardPhotoPreviewWrap').style.display = 'none';
     }
     document.getElementById('fAllowRemotePunch').checked = false;   // 新建员工默认不开远程打卡
+    document.getElementById('fAttendanceExempt').checked = false;   // 新建员工默认需要打卡
     document.getElementById('fRole').value       = 'Employee';
     // 优先用登记本身带的意向部门（扫的哪个分公司的码就是哪个）；没有的话（旧版通用链接提交的）
     // 才退回到当前左侧筛选树选中的部门，跟原来的兜底逻辑一致
@@ -942,6 +951,7 @@ function openEdit(data) {
     document.getElementById('fEmergencyContactPhone').value = data.emergencyContactPhone || '';
     document.getElementById('fIdCardPhoto').value = '';   // 文件框永远从空开始，不选=保留原照片
     document.getElementById('fAllowRemotePunch').checked = !!data.allowRemotePunch;
+    document.getElementById('fAttendanceExempt').checked = !!data.attendanceExempt;
     if (data.idCardPhotoUrl) {
         document.getElementById('fIdCardPhotoPreviewWrap').style.display = '';
         document.getElementById('fIdCardPhotoPreview').src = data.idCardPhotoUrl;

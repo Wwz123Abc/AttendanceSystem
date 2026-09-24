@@ -2,6 +2,9 @@
 @model AttendanceSystem.Pages.Admin.ZKDeviceManageModel
 @{
     ViewData["Title"] = "考勤机管理";
+    // 传给内联 JS 的值一律先序列化成合法的 JS 字面量（引号/反斜杠/换行都会被转义），再由 Razor 做 HTML 属性编码。
+    // 以前是 '@d.SN' 这样手拼：别名里带单引号会让按钮失效，带反斜杠+引号还能执行任意脚本（2026-09-24 修复）
+    string J(object? value) => System.Text.Json.JsonSerializer.Serialize(value);
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -62,11 +65,11 @@
                             <td data-label="最近在线" class="small text-muted">@(d.LastSeenAt?.ToString("MM-dd HH:mm:ss") ?? "从未通信")</td>
                             <td class="stack-actions">
                                 <button type="button" class="btn btn-outline-primary btn-sm"
-                                        onclick="openEdit(@d.Id, '@d.SN', '@(d.Name ?? "")', @(d.IsActive ? "true" : "false"), @(d.DepartmentId?.ToString() ?? "null"))">
+                                        onclick="openEdit(@d.Id, @J(d.SN), @J(d.Name ?? ""), @(d.IsActive ? "true" : "false"), @(d.DepartmentId?.ToString() ?? "null"))">
                                     <i class="bi bi-pencil"></i>编辑
                                 </button>
                                 <form method="post" asp-page-handler="Delete" class="d-inline"
-                                      onsubmit="return confirm('确认删除设备 @d.SN？删除后该设备将无法再对接系统。')">
+                                      onsubmit="return confirm(@J($"确认删除设备 {d.SN}？删除后该设备将无法再对接系统。"))">
                                     <input type="hidden" name="id" value="@d.Id" />
                                     <button type="submit" class="btn btn-outline-danger btn-sm">
                                         <i class="bi bi-trash"></i>

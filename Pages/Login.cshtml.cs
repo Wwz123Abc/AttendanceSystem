@@ -30,8 +30,8 @@ public class LoginModel(IUserService userService, IOptions<AppSettingsOptions> a
     /// <summary>打开登录页时执行。</summary>
     public IActionResult OnGet()
     {
-        if (User.Identity?.IsAuthenticated == true)   // 已登录就直接进首页
-            return Redirect(HomeUrl(null));
+        if (User.Identity?.IsAuthenticated == true)   // 已登录就直接进首页（按角色跳，跟登录成功后的去向一致）
+            return Redirect(HomeUrl(Enum.TryParse<UserRole>(User.FindFirstValue(ClaimTypes.Role), out var role) ? role : null));
         Denied = Request.Query["denied"] == "1";
         if (Request.Query["disabled"] == "1")
             ErrorMessage = "账号已停用，无法登录，请联系管理员";

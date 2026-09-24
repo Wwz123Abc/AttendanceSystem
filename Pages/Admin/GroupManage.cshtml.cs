@@ -334,6 +334,16 @@ public class GroupManageModel(
             if (g is null) { ErrorMessage = "该考勤组不存在"; }
             else
             {
+                // 已经有过去日期的排班就不让删：删考勤组会连带删掉本组班次和全部排班（含历史），而发工资用的
+                // 月度汇总表里"标准工时/夜班天数"是按排班算的——排班一没，已经发过工资的历史月份数字会追溯变化
+                // 且不可恢复。有历史排班的组请用"停用"（2026-09-24 审查修复）
+                var today = DateOnly.FromDateTime(DateTime.Today);
+                var pastAssignments = await db.ShiftAssignments
+                    .CountAsync(a => a.ShiftSchedule.AttendanceGroupId == id && a.WorkDate < today);
+                if (pastAssignments > 0)
+                    throw new InvalidOperationException(
+                        $"该考勤组已有 {pastAssignments} 条历史排班，直接删除会连带清掉这些排班，导致已生成的历史月份工时/夜班统计发生变化且无法恢复。请改用「停用」");
+
                 var userCount = await db.Users.CountAsync(u => u.AttendanceGroupId == id);
                 var name = g.GroupName;
                 db.AttendanceGroups.Remove(g);

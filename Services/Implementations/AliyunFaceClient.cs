@@ -78,7 +78,9 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
             isLive = string.Equals(suggestion, "pass", StringComparison.OrdinalIgnoreCase);
             logger.LogInformation("活体检测调用完成，耗时 {ElapsedMs}ms，Suggestion={Suggestion}，RequestId={RequestId}",
                 sw.ElapsedMilliseconds, suggestion ?? "(空)", resp.Body?.RequestId);
-            AliyunFaceCircuitBreaker.RecordSuccess();
+            // 这里故意不调 RecordSuccess：活体→比对是串行两步，如果活体这步成功就把连续失败计数清零，
+            // 那么"只有比对接口在故障"时，每个请求都是"清零 + 记 1 次失败"，计数永远到不了阈值，熔断
+            // 就等于失效了。只在整次 VerifyAsync 都成功（比对也成功，见下面）才清零（2026-09-24 审查修复）。
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

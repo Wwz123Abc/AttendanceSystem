@@ -53,8 +53,20 @@ public class FaceEnrollModel(
             var user = await db.Users.FindAsync(CurrentUserId)
                 ?? throw new InvalidOperationException("账号不存在");
 
-            user.FaceReferencePhotoUrl = await SaveFacePhotoAsync(user.FaceReferencePhotoUrl, ct);
-            await db.SaveChangesAsync();
+            // 顺序：先写新文件（不删旧的）→ 写库 → 成功了才删旧文件；写库失败就把新文件回收掉。
+            // 以前是先删旧照片再写库，写库一失败旧照片已经没了、库里却还指向它，这个员工的远程打卡就
+            // 彻底不能用了（2026-09-24 审查修复）
+            var oldUrl = user.FaceReferencePhotoUrl;
+            var newUrl = await SaveFacePhotoAsync(oldUrl, ct);
+            var wroteNew = newUrl != oldUrl;
+            user.FaceReferencePhotoUrl = newUrl;
+            try { await db.SaveChangesAsync(); }
+            catch
+            {
+                if (wroteNew) DeleteFaceFiles(newUrl);
+                throw;
+            }
+            if (wroteNew) DeleteFaceFiles(oldUrl);
 
             SuccessMessage = "人脸照片已录入，之后打卡时会用这张照片做比对";
         }
@@ -148,15 +160,27 @@ public class FaceEnrollModel(
         await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), mainBytes, ct);
         await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, verifyFileName), verifyBytes, ct);
 
-        if (!string.IsNullOrEmpty(oldUrl))   // 换了新照片，把旧的两个文件（留档版 + 比对版）都删掉
-        {
-            var oldPath = Path.Combine(privateRoot, oldUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
-            if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
-            var oldVerifyPath = Path.Combine(Path.GetDirectoryName(oldPath)!,
-                $"{Path.GetFileNameWithoutExtension(oldPath)}{VerifySuffix}.jpg");
-            if (System.IO.File.Exists(oldVerifyPath)) System.IO.File.Delete(oldVerifyPath);
-        }
-
+        // 不在这里删旧文件：要等调用方把新地址成功写进数据库之后才能删（见 OnPostAsync）
         return $"/{uploadPath}/faces/{CurrentUserId}/{fileName}";
+    }
+
+    /// <summary>删掉一张人脸参考照的两个文件（留档版 + 比对版）。只在写库成功换掉旧照片、或写库失败要回收新文件时调用；
+    /// 文件不存在/删除失败都只记日志，不影响主流程。</summary>
+    private void DeleteFaceFiles(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return;
+        try
+        {
+            var root = Path.GetFullPath(PrivateFileStorage.GetRoot(env));
+            var path = Path.GetFullPath(Path.Combine(root, url.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return;
+            if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+            var verifyPath = Path.Combine(Path.GetDirectoryName(path)!, $"{Path.GetFileNameWithoutExtension(path)}{VerifySuffix}.jpg");
+            if (System.IO.File.Exists(verifyPath)) System.IO.File.Delete(verifyPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "清理人脸参考照文件失败：{Url}", url);
+        }
     }
 }

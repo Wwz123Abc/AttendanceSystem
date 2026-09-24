@@ -30,6 +30,9 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     {
         if (!dto.IsApproved && string.IsNullOrWhiteSpace(dto.Comment))   // 驳回必须写原因
             return BadRequest(new { Success = false, Message = "驳回时必须填写驳回原因" });
+        // 审批意见库里是 varchar(1000)，网页端已经限制了，接口这边也要拦，不然超长会写库失败、整个审批返回 500
+        if (dto.Comment is not null && dto.Comment.Trim().Length > 1000)
+            return BadRequest(new { Success = false, Message = "审批意见不能超过 1000 个字" });
         var ok = await approvalService.HandleApprovalAsync(CurrentUserId, dto);
         return Ok(new { Success = ok, Message = ok ? "处理成功" : "未找到待处理的审批记录" });
     }

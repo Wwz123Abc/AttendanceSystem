@@ -2,6 +2,9 @@
 @model AttendanceSystem.Pages.Admin.ShiftManageModel
 @{
     ViewData["Title"] = "班值排班";
+    // 传给内联 JS 的值一律先序列化成合法的 JS 字面量，再由 Razor 做 HTML 属性编码（班次名称是管理员自己填的，
+    // 不能手拼进 '...'：带单引号会让按钮失效，带反斜杠+引号还能执行任意脚本，2026-09-24 修复）
+    string J(object? value) => System.Text.Json.JsonSerializer.Serialize(value);
     // 各“提交表单”里回传的“选中考勤组”隐藏字段（保持多选上下文）
     var ctxGroupsHidden = string.Join("", Model.SelectedGroupIds.Select(id =>
         $"<input type=\"hidden\" name=\"CtxGroupIds\" value=\"{id}\" />"));
@@ -101,17 +104,17 @@
                                 </td>
                                 <td>
                                     <button class="btn btn-outline-primary btn-sm"
-                                            onclick="openEditShift(@s.Id,@s.AttendanceGroupId,'@s.ShiftName',
-                                                     '@s.WorkStartTime.ToString("HH:mm")','@s.WorkEndTime.ToString("HH:mm")',
+                                            onclick="openEditShift(@s.Id,@s.AttendanceGroupId,@J(s.ShiftName),
+                                                     @J(s.WorkStartTime.ToString("HH:mm")),@J(s.WorkEndTime.ToString("HH:mm")),
                                                      @s.LateToleranceMinutes,@s.EarlyLeaveToleranceMinutes,
                                                      @s.EarliestClockInMinutes,@s.OvertimeThresholdMinutes,
-                                                     @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,'@s.Color',
-                                                     '@System.Text.Json.JsonSerializer.Serialize(restDays.Select(d => (int)d))',
-                                                     '@System.Text.Json.JsonSerializer.Serialize(midWindows.Select(w => new { start = w.Start.ToString("HH:mm"), end = w.End.ToString("HH:mm") }))')">
+                                                     @(s.IsCrossDay ? "true" : "false"),@s.StandardWorkHours,@J(s.Color),
+                                                     @J(J(restDays.Select(d => (int)d))),
+                                                     @J(J(midWindows.Select(w => new { start = w.Start.ToString("HH:mm"), end = w.End.ToString("HH:mm") }))))">
                                         <i class="bi bi-pencil"></i>
                                     </button>
                                     <form method="post" asp-page-handler="DeleteShift" class="d-inline"
-                                          onsubmit="return confirm('确认停用班次「@s.ShiftName」？')">
+                                          onsubmit="return confirm(@J($"确认停用班次「{s.ShiftName}」？"))">
                                         @Html.Raw(ctxGroupsHidden)
                                         <input type="hidden" name="id" value="@s.Id" />
                                         <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>

@@ -80,9 +80,16 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
             return false;
         }
 
-        var employeeNo = segments[1];
-        var deptId = await db.Users.Where(u => u.EmployeeNo == employeeNo).Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
-        return await deptScopeService.CanAccessDeptAsync(cu, deptId);
+        // 按"这张照片的地址是谁的证件照"反查所属员工，再看他的部门。以前是按路径里的工号反查：
+        // ① 员工改了工号，旧路径里的工号查不到人 → 部门为空 → 分公司管理员被拒（总部不受影响，问题很隐蔽）；
+        // ② 工号被删除后可以复用，新员工占了这个工号，旧照片的可读性就由"新员工的部门"决定，
+        //    别的分公司的管理员能读到上一任员工的身份证照。地址是每张照片唯一的，不受工号变化影响。
+        // 找不到任何员工引用这张照片（孤儿文件）就不给读。
+        var url = "/uploads/" + string.Join('/', segments);
+        var owner = await db.Users.Where(u => u.IdCardPhotoUrl == url)
+            .Select(u => new { u.DepartmentId }).FirstOrDefaultAsync();
+        if (owner is null) return false;
+        return await deptScopeService.CanAccessDeptAsync(cu, owner.DepartmentId);
     }
 
     /// <summary>zkdevice（考勤机抓拍照片）：目录结构 zkdevice/{yyyyMMdd}/{SN}_{时间}_{guid}.jpg，

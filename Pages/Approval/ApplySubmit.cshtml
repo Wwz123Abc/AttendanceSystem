@@ -183,12 +183,12 @@
                                                 <button type="submit" class="btn btn-outline-danger btn-sm">撤销</button>
                                             </form>
                                         }
-                                        @if (item.AttachmentUrls.Any())
+                                        @for (var ai = 0; ai < item.AttachmentUrls.Count; ai++)
                                         {
-                                            <button class="btn btn-outline-secondary btn-sm ms-1"
-                                                    onclick="showAttachments(@Html.Raw(System.Text.Json.JsonSerializer.Serialize(item.AttachmentUrls)))">
-                                                <i class="bi bi-paperclip"></i>@item.AttachmentUrls.Count
-                                            </button>
+                                            <a class="btn btn-outline-secondary btn-sm ms-1" href="@item.AttachmentUrls[ai]"
+                                               target="_blank" rel="noopener" title="查看附件 @(ai + 1)" aria-label="查看附件 @(ai + 1)">
+                                                <i class="bi bi-paperclip"></i>@(ai + 1)
+                                            </a>
                                         }
                                     </td>
                                 </tr>
@@ -362,8 +362,5 @@ function renderFileList() {
 
 // escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 
-function showAttachments(urls) {
-    alert('附件：\n' + urls.join('\n'));
-}
 </script>
 }

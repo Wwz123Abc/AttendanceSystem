@@ -108,7 +108,8 @@ public class AttendanceBackgroundService(
         using var scope = scopeFactory.CreateScope();
         var db    = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
 
-        var users = await db.Users.Where(u => u.IsActive).ToListAsync();
+        // 免考勤的人（管理员/文员/办公室人员等不需要打卡的账号）不参与自动记旷工/未打卡
+        var users = await db.Users.Where(u => u.IsActive && !u.IsAttendanceExempt).ToListAsync();
 
         // 一次性把“今天的假期”“今天已有的考勤记录”“今天的排班”查出来放内存，循环里直接用，避免逐人查库（N+1）
         var todayHolidays = await db.Holidays.Where(h => h.HolidayDate == today).ToListAsync();
@@ -183,9 +184,42 @@ public class AttendanceBackgroundService(
                 });
                 marked++;
             }
+            else if (record.ClockInTime is null && record.ClockOutTime is not null)
+            {
+                // 只有下班卡、没有上班卡：人确实到岗了（有打卡为证），只是漏打（或没打上）上班卡——记"未打卡（缺上班卡）"，
+                // 不算旷工。这类记录以前多半来自"当天唯一一次很晚的打卡被当成上班卡"，现在设备同步会把下班时间
+                // 之后的首次打卡按下班卡处理（见 ZKDeviceSyncService），就会落到这里。已经是未打卡的不重复发提醒。
+                if (record.AttendanceStatus != AttendanceStatus.NotPunched)
+                {
+                    record.AttendanceStatus = AttendanceStatus.NotPunched;
+                    record.UpdatedAt        = DateTime.Now;
+                    db.Notifications.Add(new Notification
+                    {
+                        UserId           = user.Id,
+                        Title            = "上班未打卡提醒",
+                        Content          = $"您今日（{today:MM/dd}）未打上班卡，如有异议请提交补卡申请",
+                        NotificationType = "PunchReminder",
+                        CreatedAt        = DateTime.Now
+                    });
+                    marked++;
+                }
+            }
             else if (record.ClockInTime is null)
             {
-                // 有记录但没打上班卡 → 旷工
+                // 有记录但没打上班卡 → 旷工。跟"完全没记录"那个分支一样要发提醒（管理员只补了下班卡、
+                // 会建出这种没上班卡的记录，当晚被判旷工员工却毫不知情）；已经是旷工的记录说明之前（补跑/
+                // 重启重复执行时）已经处理过，不再重复发（2026-09-24 审查修复）
+                if (record.AttendanceStatus != AttendanceStatus.Absent)
+                {
+                    db.Notifications.Add(new Notification
+                    {
+                        UserId           = user.Id,
+                        Title            = "今日旷工提醒",
+                        Content          = $"您今日（{today:MM/dd}）未打上班卡，已被标记为旷工，如有异议请提交补卡申请",
+                        NotificationType = "PunchReminder",
+                        CreatedAt        = DateTime.Now
+                    });
+                }
                 record.AttendanceStatus = AttendanceStatus.Absent;
                 record.UpdatedAt        = DateTime.Now;
                 marked++;

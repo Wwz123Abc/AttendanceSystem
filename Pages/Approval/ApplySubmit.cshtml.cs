@@ -5,6 +5,7 @@ using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
+using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Approval;
@@ -15,7 +16,8 @@ public class ApplySubmitModel(
     IApprovalService approvalService,
     IAttendanceService attendanceService,
     IWebHostEnvironment env,                    // 用来定位 wwwroot 目录存附件
-    IOptions<AppSettingsOptions> appOptions) : AppPageModel
+    IOptions<AppSettingsOptions> appOptions,
+    ILogger<ApplySubmitModel> logger) : AppPageModel
 {
     public List<ApprovalRequestDto> MyApplications { get; set; } = [];
     /// <summary>我可以选的审批人名单（取自我所在考勤组的配置）；为空表示没配置，提交后自动退回直属上级</summary>
@@ -88,45 +90,65 @@ public class ApplySubmitModel(
             if (Attachments.Count > 0)
                 attachmentUrls = await SaveAttachmentsAsync();
 
-            var dto = new SubmitApprovalDto
+            // 附件已经落盘了，后面任何一步失败（比如"这段时间已经提交过了"这种服务层必拦的情况）都要把这批附件
+            // 删掉——以前失败后文件原样留着，每次重复提交都白白占最多 50MB 磁盘，还永久留存（2026-09-24 审查修复）
+            try
             {
-                ApprovalType   = approvalType,
-                Reason         = Reason,
-                AttachmentUrls = attachmentUrls,
-                ApproverUserId = ApproverUserId
-            };
+                var dto = new SubmitApprovalDto
+                {
+                    ApprovalType   = approvalType,
+                    Reason         = Reason,
+                    AttachmentUrls = attachmentUrls,
+                    ApproverUserId = ApproverUserId
+                };
 
-            // 按申请类型，把对应的字段填进去
-            if (ApprovalType == "Leave")
-            {
-                dto.LeaveType      = Enum.TryParse<Models.Enums.LeaveType>(LeaveType, out var lt) ? lt : Models.Enums.LeaveType.AnnualLeave;
-                dto.LeaveStartTime = string.IsNullOrEmpty(LeaveStart) ? null : DateTime.Parse(LeaveStart);
-                dto.LeaveEndTime   = string.IsNullOrEmpty(LeaveEnd)   ? null : DateTime.Parse(LeaveEnd);
-            }
-            else if (ApprovalType == "PunchReplenishment")
-            {
-                dto.PunchDate = string.IsNullOrEmpty(PunchDate) ? null : DateOnly.Parse(PunchDate);
-                dto.PunchType = Enum.TryParse<Models.Enums.PunchType>(PunchTypeVal, out var ptv) ? ptv : null;
-                dto.PunchTime = string.IsNullOrEmpty(PunchTime) ? null : TimeOnly.Parse(PunchTime);
-            }
-            else if (ApprovalType == "Overtime")
-            {
-                dto.OvertimeStartTime = string.IsNullOrEmpty(OvertimeStart) ? null : DateTime.Parse(OvertimeStart);
-                dto.OvertimeEndTime   = string.IsNullOrEmpty(OvertimeEnd)   ? null : DateTime.Parse(OvertimeEnd);
-            }
-            else if (ApprovalType == "BusinessTrip")
-            {
-                dto.BusinessTripStartTime   = string.IsNullOrEmpty(BusinessTripStart) ? null : DateTime.Parse(BusinessTripStart);
-                dto.BusinessTripEndTime     = string.IsNullOrEmpty(BusinessTripEnd)   ? null : DateTime.Parse(BusinessTripEnd);
-                dto.BusinessTripDestination = string.IsNullOrWhiteSpace(BusinessTripDestination) ? null : BusinessTripDestination.Trim();
-            }
+                // 按申请类型，把对应的字段填进去
+                if (ApprovalType == "Leave")
+                {
+                    // 假别缺失/被篡改时明确报错，不能静默记成"年假"（审批人会看到错的假别、还没有任何痕迹）
+                    if (!Enum.TryParse<Models.Enums.LeaveType>(LeaveType, out var lt) || !Enum.IsDefined(lt))
+                        throw new InvalidOperationException("请选择请假类型");
+                    dto.LeaveType      = lt;
+                    dto.LeaveStartTime = string.IsNullOrEmpty(LeaveStart) ? null : DateTime.Parse(LeaveStart);
+                    dto.LeaveEndTime   = string.IsNullOrEmpty(LeaveEnd)   ? null : DateTime.Parse(LeaveEnd);
+                }
+                else if (ApprovalType == "PunchReplenishment")
+                {
+                    dto.PunchDate = string.IsNullOrEmpty(PunchDate) ? null : DateOnly.Parse(PunchDate);
+                    dto.PunchType = Enum.TryParse<Models.Enums.PunchType>(PunchTypeVal, out var ptv) ? ptv : null;
+                    dto.PunchTime = string.IsNullOrEmpty(PunchTime) ? null : TimeOnly.Parse(PunchTime);
+                }
+                else if (ApprovalType == "Overtime")
+                {
+                    dto.OvertimeStartTime = string.IsNullOrEmpty(OvertimeStart) ? null : DateTime.Parse(OvertimeStart);
+                    dto.OvertimeEndTime   = string.IsNullOrEmpty(OvertimeEnd)   ? null : DateTime.Parse(OvertimeEnd);
+                }
+                else if (ApprovalType == "BusinessTrip")
+                {
+                    dto.BusinessTripStartTime   = string.IsNullOrEmpty(BusinessTripStart) ? null : DateTime.Parse(BusinessTripStart);
+                    dto.BusinessTripEndTime     = string.IsNullOrEmpty(BusinessTripEnd)   ? null : DateTime.Parse(BusinessTripEnd);
+                    dto.BusinessTripDestination = string.IsNullOrWhiteSpace(BusinessTripDestination) ? null : BusinessTripDestination.Trim();
+                }
 
-            await approvalService.SubmitApprovalAsync(CurrentUserId, dto);
-            SuccessMessage = "申请提交成功！" + (AttachmentWarning is null ? "" : $"（{AttachmentWarning}）");
+                await approvalService.SubmitApprovalAsync(CurrentUserId, dto);
+                SuccessMessage = "申请提交成功！" + (AttachmentWarning is null ? "" : $"（{AttachmentWarning}）");
+            }
+            catch
+            {
+                DeleteAttachmentFiles(attachmentUrls);
+                throw;
+            }
+        }
+        // 只把自己抛出来的中文校验提示给员工看；其余（数据库/格式解析等）记日志 + 通用文案，
+        // 不把 EF/MySQL 的原始报错文本展示出来（2026-09-24 审查修复）
+        catch (InvalidOperationException ex)
+        {
+            ErrorMessage = $"提交失败：{ex.Message}";
         }
         catch (Exception ex)
         {
-            ErrorMessage = $"提交失败：{ex.Message}";
+            logger.LogError(ex, "提交申请失败，UserId={UserId}", CurrentUserId);
+            ErrorMessage = "提交失败，请稍后重试";
         }
 
         MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);   // 刷新列表
@@ -153,6 +175,8 @@ public class ApplySubmitModel(
                 return "请假开始时间最早只能选到现在往前推24小时以内";
             if (end <= start)
                 return "请假结束时间必须晚于开始时间";
+            if ((end - start).TotalDays > ApprovalService.MaxLeaveOrTripSpanDays)
+                return $"请假时间跨度不能超过 {ApprovalService.MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交";
 
             // 半天假如果把午间休息时段也框进请假区间（比如下午假填 12:00 而不是 13:00），
             // 请假时长会把这段本来就不用上班的午休时间也算进去，多算出的这一小时会从当天标准工时里
@@ -214,6 +238,8 @@ public class ApplySubmitModel(
                 return "出差开始时间不能早于现在";
             if (end <= start)
                 return "出差结束时间必须晚于开始时间";
+            if ((end - start).TotalDays > ApprovalService.MaxLeaveOrTripSpanDays)
+                return $"出差时间跨度不能超过 {ApprovalService.MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交";
         }
         return null;
     }
@@ -229,7 +255,26 @@ public class ApplySubmitModel(
     private static readonly string[] AllowedAttachmentExtensions =
         [".jpg", ".jpeg", ".png", ".gif", ".pdf", ".doc", ".docx", ".xls", ".xlsx"];
 
-    /// <summary>把上传的附件存到 wwwroot 下，返回它们的访问地址列表；跳过的文件（超大/类型不对）会记下原因，最后拼进提示里。</summary>
+    /// <summary>删除刚落盘的附件（申请没提交成功时回收）；删除失败只记日志。</summary>
+    private void DeleteAttachmentFiles(IEnumerable<string> urls)
+    {
+        var root = Path.GetFullPath(PrivateFileStorage.GetRoot(env));
+        foreach (var url in urls)
+        {
+            try
+            {
+                var path = Path.GetFullPath(Path.Combine(root, url.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+                if (path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(path))
+                    System.IO.File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "清理未提交成功的附件失败：{Url}", url);
+            }
+        }
+    }
+
+    /// <summary>把上传的附件存到 PrivateUploads 下，返回它们的访问地址列表；跳过的文件（超大/类型不对）会记下原因，最后拼进提示里。</summary>
     private async Task<List<string>> SaveAttachmentsAsync()
     {
         var uid        = CurrentUserId;

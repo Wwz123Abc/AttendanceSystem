@@ -116,7 +116,13 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
             }
             if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync();
         }
-        catch (Exception ex) { ErrorMessage = $"保存失败：{ex.Message}"; }
+        // 只把自己抛出来的中文校验提示给管理员看；其余（数据库报错等）记日志 + 通用文案，不露出原始报错文本
+        catch (InvalidOperationException ex) { ErrorMessage = $"保存失败：{ex.Message}"; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "保存设备失败，Id={Id}，SN={SN}", Id, SN);
+            ErrorMessage = "保存失败，请稍后重试";
+        }
 
         await LoadAsync();
         return Page();

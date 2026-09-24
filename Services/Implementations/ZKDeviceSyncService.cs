@@ -169,7 +169,8 @@ public class ZKDeviceSyncService(
             var type = r.Status switch
             {
                 2 or 3 => PunchType.MidCheck,
-                _ => record.ClockInTime is null ? PunchType.ClockIn
+                _ => record.ClockInTime is null
+                        ? (AttendanceService.IsFirstPunchAfterShiftEnd(workDate, r.Time, shift, isRestDay) ? PunchType.ClockOut : PunchType.ClockIn)
                     : r.Time - record.ClockInTime.Value < TimeSpan.FromMinutes(MinMinutesBeforeClockOut) ? PunchType.ClockIn
                     : AttendanceService.IsEligibleClockOutCandidate(r.Time, workDate, shift) ? PunchType.ClockOut
                     : PunchType.MidCheck

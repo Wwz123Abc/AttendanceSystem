@@ -31,6 +31,20 @@ public sealed class CurrentUser
     public bool CanApprove => Role is UserRole.Admin or UserRole.Clerk  // 有没有审批权限
                                    or UserRole.Supervisor or UserRole.TeamLeader;
     public bool IsScoped   => ScopedDepartmentId.HasValue;   // 是不是"分公司管理员"（受部门范围限制）
+
+    /// <summary>是不是"总部超级管理员"：角色为 Admin，且自己没有被设置管理范围。</summary>
+    public bool IsHqSuperAdmin => Role == UserRole.Admin && !IsScoped;
+
+    /// <summary>
+    /// 角色层级：能不能操作（编辑/停用/拉黑/删除/重置密码）这个目标账号。前提是目标已经在自己的部门范围内——
+    /// 光看部门范围不够：总部管理员的 DepartmentId 常常挂在某个分公司下，这个分公司的文员/分公司管理员
+    /// "管得到"他，重置密码就能接管总部账号。规则：总部超级管理员可以操作所有人；其他人不能动
+    /// "总部管理员"（Admin 且没设范围），文员也不能动任何管理员；分公司管理员之间维持可操作。
+    /// </summary>
+    public bool CanManageAccount(UserRole targetRole, int? targetScopedDepartmentId) =>
+        IsHqSuperAdmin
+        || targetRole != UserRole.Admin
+        || (targetScopedDepartmentId.HasValue && Role == UserRole.Admin);
 }
 
 // 「中间件」= 每个网络请求都会先经过的一道“关卡”。

@@ -49,6 +49,13 @@ builder.Services.Configure<AppSettingsOptions>(
 var appSettings = builder.Configuration.GetSection(AppSettingsOptions.SectionName)
                       .Get<AppSettingsOptions>() ?? new AppSettingsOptions();
 
+// 上传目录必须叫 uploads：PrivateFilesController 的路由前缀（[Route("uploads")]）和读取时补的目录层级都是写死的
+// "uploads"，而上传（写入）那头读的是这个配置项。哪天有人把 UploadPath 改成别的，上传会落到新目录、读取仍找
+// uploads，所有身份证照/人脸照/附件全部 404（5fb8cc4 刚修过的就是这类故障）——所以启动时直接拦下来（2026-09-24 审查修复）
+if (!string.Equals(appSettings.UploadPath.Trim('/', '\\'), "uploads", StringComparison.Ordinal))
+    throw new InvalidOperationException(
+        $"AppSettings:UploadPath 目前只能是 \"uploads\"（当前是 \"{appSettings.UploadPath}\"）：私有文件读取接口的路由和目录是写死的，改了会导致所有照片/附件打不开。如需修改请同时改 PrivateFilesController。");
+
 // 高德地图 Web端(JS API) 配置：考勤组管理页"打卡地点"用来做地址搜索/地图选点
 builder.Services.Configure<AMapOptions>(
     builder.Configuration.GetSection(AMapOptions.SectionName));

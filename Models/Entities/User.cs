@@ -114,6 +114,14 @@ public class User
     /// </summary>
     public bool AllowRemotePunch { get; set; } = false;
 
+    /// <summary>
+    /// 是否免考勤（不需要打卡的账号，比如管理员、文员、办公室人员）：勾选后后台不再每天自动给他记"旷工/未打卡"，
+    /// 月度汇总和模板汇总表里也不统计他的旷工天数（他真的打了卡照常记录，不受影响）。
+    /// 以前系统给"所有在职且填了入职日期的人"自动记旷工，管理员、文员这类本来就不打卡的人整月被记满旷工
+    /// （2026-09-24 数据核查发现 28 人整月零打卡）。默认 false（需要打卡）。
+    /// </summary>
+    public bool IsAttendanceExempt { get; set; } = false;
+
     /// <summary>员工状态（由 IsActive/IsBlacklisted 推导，仅展示/筛选用，不单独存库）：在职 / 已停用 / 黑名单。</summary>
     [NotMapped]
     public EmployeeStatus Status => IsBlacklisted ? EmployeeStatus.Blacklisted

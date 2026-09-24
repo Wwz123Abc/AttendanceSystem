@@ -150,7 +150,7 @@
                             <td><span class="badge bg-secondary">@item.ApprovalTypeText</span></td>
                             <td class="small">@DetailText(item)</td>
                             <td class="small">@item.SubmittedAtText</td>
-                            <td class="small @(myStep?.Status == ApprovalStatus.Rejected ? "f-color-red" : "f-color-green")">@(myStep?.StatusText ?? "—")</td>
+                            <td class="small @(myStep?.Status == ApprovalStatus.Rejected ? "text-danger" : "text-success")">@(myStep?.StatusText ?? "—")</td>
                             <td class="small">@(myStep?.HandledAtText ?? "—")</td>
                             <td class="small text-truncate" style="max-width:160px">@(myStep?.Comment ?? "—")</td>
                             <td class="small @item.ApprovalStatusCss">@item.ApprovalStatusText</td>

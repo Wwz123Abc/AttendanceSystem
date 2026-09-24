@@ -45,7 +45,10 @@ public class ZKDeviceController(
 
     private void LogUnknownDeviceAttempt(string? sn, string endpoint)
     {
-        var key = string.IsNullOrWhiteSpace(sn) ? "(空)" : sn;
+        // 计数器的 key 就是调用方传来的 SN：随机 SN 灌注会让字典无限变大（内存线性增长）。所以 key 限长（超长的
+        // 统一记成一个），并且字典条目太多时整体清空——只是"看得见异常"的辅助计数，清了最多晚一点报警
+        var key = string.IsNullOrWhiteSpace(sn) ? "(空)" : sn.Length > 50 ? "(超长SN)" : sn;
+        if (UnknownSnAttempts.Count > 2000) UnknownSnAttempts.Clear();
         logger.LogWarning("未知/未启用设备序列号尝试访问考勤机接口 {Endpoint}：SN={SN}，来源IP={RemoteIp}",
             endpoint, key, HttpContext.Connection.RemoteIpAddress);
 

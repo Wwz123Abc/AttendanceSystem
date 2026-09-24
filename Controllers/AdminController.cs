@@ -101,7 +101,8 @@ public class AdminController(
     public async Task<IActionResult> UpdateUser(int id, [FromBody] UpdateUserRequest req)
     {
         if (!await CanAccessUserAsync(id)) return Forbid();
-        if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId))
+        var targetCurrentRole = await db.Users.Where(u => u.Id == id).Select(u => (UserRole?)u.Role).FirstOrDefaultAsync();
+        if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId, targetCurrentRole))
             return Forbid();
         var contactError = ContactValidationHelper.ValidateContactFormat(req.Phone, req.IdNumber);
         if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
@@ -131,7 +132,8 @@ public class AdminController(
             EmergencyContactName    = current?.EmergencyContactName,
             EmergencyContactPhone   = current?.EmergencyContactPhone,
             IdCardPhotoUrl          = current?.IdCardPhotoUrl,
-            AllowRemotePunch        = current?.AllowRemotePunch ?? false
+            AllowRemotePunch        = current?.AllowRemotePunch ?? false,
+            IsAttendanceExempt      = current?.IsAttendanceExempt ?? false   // 接口请求里没有这个字段，沿用库里现值
         };
         var ok = await userService.UpdateUserAsync(user);
         if (ok)
@@ -164,8 +166,11 @@ public class AdminController(
     /// <summary>目标员工是否在当前登录者的管理范围内（按目标员工的 DepartmentId 判断）。</summary>
     private async Task<bool> CanAccessUserAsync(int userId)
     {
-        var deptId = await db.Users.Where(u => u.Id == userId).Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
-        return await deptScopeService.CanAccessDeptAsync(Cu, deptId);
+        var t = await db.Users.Where(u => u.Id == userId)
+            .Select(u => new { u.DepartmentId, u.Role, u.ScopedDepartmentId }).FirstOrDefaultAsync();
+        if (!await deptScopeService.CanAccessDeptAsync(Cu, t?.DepartmentId)) return false;
+        // 再看角色层级：文员/分公司管理员不能动总部管理员，文员不能动任何管理员（跟 UserManage 页面同口径）
+        return t is null || Cu.CanManageAccount(t.Role, t.ScopedDepartmentId);
     }
 
     /// <summary>考勤机不做管理范围校验（2026-09-21 按业务要求取消隔离，方便员工借调到其他分公司时
@@ -195,7 +200,7 @@ public class AdminController(
 
     /// <summary>新建/编辑员工前的范围+权限校验：部门、直属上级必须在管理范围内；只有不受限的
     /// 总部管理员才能把角色设成管理员——跟 UserManage 页面用的是同一套规则。</summary>
-    private async Task<bool> ValidateUserScopeAsync(int? deptId, int? supervisorUserId, UserRole role, int? groupId = null)
+    private async Task<bool> ValidateUserScopeAsync(int? deptId, int? supervisorUserId, UserRole role, int? groupId = null, UserRole? currentRole = null)
     {
         // 枚举值本身要合法——JSON 反序列化不会拦截超出定义范围的整数（比如 {"role":99}），
         // 不挡住的话会静默落库成一个显示不出中文名、权限判断全部落空的脏角色
@@ -214,7 +219,9 @@ public class AdminController(
         // 只有"总部超级管理员"（角色=Admin 且自己不受范围限制）才能把别人的角色设成管理员——原来这里
         // 只判断了 Cu.IsScoped，一个"没被设置范围、但角色只是文员"的账号 IsScoped 恒为 false，
         // 光挡"受限"挡不住这种账号把自己或别人提权成 Admin
-        if (!(Cu.Role == UserRole.Admin && !Cu.IsScoped) && role == UserRole.Admin) return false;
+        // 只拦"角色发生变化"（提升为管理员 / 把管理员改成别的角色）：编辑一个本来就是管理员的账号、角色没变不算提权
+        // （谁能编辑哪个管理员账号由 CanAccessUserAsync 管），否则分公司管理员连自己的资料都改不了
+        if (!Cu.IsHqSuperAdmin && (role == UserRole.Admin) != (currentRole == UserRole.Admin)) return false;
         return true;
     }
 

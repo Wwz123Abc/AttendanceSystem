@@ -1,6 +1,10 @@
 @page
 @model AttendanceSystem.Pages.Admin.GroupManageModel
-@{ ViewData["Title"] = "考勤组管理"; }
+@{
+    ViewData["Title"] = "考勤组管理";
+    // 传给内联 JS 的值一律先序列化成合法的 JS 字面量（引号/反斜杠/换行都会被转义），再由 Razor 做 HTML 属性编码
+    string J(object? value) => System.Text.Json.JsonSerializer.Serialize(value);
+}
 
 <div class="page-header d-flex justify-content-between align-items-center">
     <h4><i class="bi bi-building me-2 text-primary"></i>考勤组管理</h4>
@@ -26,7 +30,7 @@
 
 <div class="card">
     <div class="card-body p-0">
-        <table class="table table-hover mb-0">
+        <table class="table table-hover mb-0 table-stack">
             <thead>
                 <tr>
                     <th>考勤组名称</th>
@@ -50,27 +54,27 @@
                     var deptNames     = Model.DeptTree.Where(d => deptIds.Contains(d.Id)).Select(d => d.Name).ToList();
                     var locations     = Model.GroupLocations.GetValueOrDefault(g.Id) ?? new List<AttendanceSystem.Models.Entities.AttendanceGroupLocation>();
                     <tr>
-                        <td class="fw-semibold">@g.GroupName</td>
-                        <td class="small">@(g.CompanyName ?? "-")</td>
-                        <td class="small">
+                        <td data-label="名称" class="fw-semibold">@g.GroupName</td>
+                        <td data-label="所属公司" class="small">@(g.CompanyName ?? "-")</td>
+                        <td data-label="所属部门" class="small">
                             @if (deptNames.Count > 0)
                             { @string.Join("、", deptNames) }
                             else
                             { <span class="text-muted">未关联</span> }
                         </td>
-                        <td><span class="badge bg-secondary">@cnt 人</span></td>
-                        <td class="small">
+                        <td data-label="人员数"><span class="badge bg-secondary">@cnt 人</span></td>
+                        <td data-label="审批人" class="small">
                             @if (approverNames.Count > 0)
                             { @string.Join("、", approverNames) }
                             else
                             { <span class="text-muted">未配置（默认走直属上级）</span> }
                         </td>
-                        <td class="small">
+                        <td data-label="审批层级" class="small">
                             <span class="badge @(g.ApprovalLevel == AttendanceSystem.Models.Enums.ApprovalLevelType.Level2 ? "bg-info text-dark" : "bg-light text-dark border")">
                                 @g.ApprovalLevel.ToDisplayName()
                             </span>
                         </td>
-                        <td class="small">
+                        <td data-label="打卡地点" class="small">
                             @if (!g.EnableLocationPunch)
                             {
                                 <span class="text-muted">未启用</span>
@@ -85,22 +89,25 @@
                                 <span class="text-warning">已启用但未配置地点</span>
                             }
                         </td>
-                        <td class="small">午休 @g.LunchBreakMinutes 分钟 / 晚餐 @g.DinnerBreakMinutes 分钟</td>
-                        <td>
+                        <td data-label="午休/晚餐" class="small">午休 @g.LunchBreakMinutes 分钟 / 晚餐 @g.DinnerBreakMinutes 分钟</td>
+                        <td data-label="状态">
                             @if (g.IsActive)
                             { <span class="badge bg-success">启用</span> }
                             else
                             { <span class="badge bg-secondary">停用</span> }
                         </td>
-                        <td>
+                        <td class="stack-actions">
+                            @* 以前名称用 Replace("'", "\\'") 手工转义，挡不住反斜杠：名称里带 \' 就能闭合字符串、执行任意脚本
+                               （2026-09-24 审查修复）。现在每个参数都用 J() 变成 JS 字面量；后三个参数本身是"JSON 文本"，
+                               所以是两层序列化：先变成 JSON 文本，再作为 JS 字符串传给 openEdit。 *@
                             <button class="btn btn-outline-primary btn-sm"
-                                    onclick="openEdit(@g.Id,'@g.GroupName.Replace("'","\\'")',
+                                    onclick="openEdit(@g.Id, @J(g.GroupName),
                                              @(g.EnableLocationPunch ? "true" : "false"),
-                                             @g.LunchBreakMinutes,@g.DinnerBreakMinutes,
-                                             '@System.Text.Json.JsonSerializer.Serialize(approverIds)',
-                                             '@System.Text.Json.JsonSerializer.Serialize(deptIds)',
-                                             '@System.Text.Json.JsonSerializer.Serialize(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters }))',
-                                             '@g.ApprovalLevel')">
+                                             @g.LunchBreakMinutes, @g.DinnerBreakMinutes,
+                                             @J(J(approverIds)),
+                                             @J(J(deptIds)),
+                                             @J(J(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters }))),
+                                             @J(g.ApprovalLevel.ToString()))">
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <form method="post" asp-page-handler="Toggle" class="d-inline"
@@ -111,7 +118,7 @@
                                 </button>
                             </form>
                             <form method="post" asp-page-handler="Delete" class="d-inline"
-                                  onsubmit="return confirm('确认彻底删除考勤组「@g.GroupName.Replace("'","\\'")」？\n\n将会：\n- 组内 @cnt 名在职员工的考勤组归属会被清空（需另外分配）\n- 跟随本组的部门会解除跟随关系\n- 本组的班次/排班记录、审批人名单、打卡地点会一并删除\n\n此操作不可恢复！')">
+                                  onsubmit="return confirm(@J($"确认彻底删除考勤组「{g.GroupName}」？\n\n将会：\n- 组内 {cnt} 名在职员工的考勤组归属会被清空（需另外分配）\n- 跟随本组的部门会解除跟随关系\n- 本组的班次/排班记录、审批人名单、打卡地点会一并删除\n\n此操作不可恢复！"))">
                                 <input type="hidden" name="id" value="@g.Id" />
                                 <button type="submit" class="btn btn-outline-danger btn-sm">
                                     <i class="bi bi-trash"></i>
@@ -190,7 +197,7 @@
                             <div class="form-check form-switch">
                                 <input asp-for="EnableLocation" id="fEnableLocation" class="form-check-input" type="checkbox"
                                        onchange="toggleLocation(this.checked)" />
-                                <label class="form-check-label fw-semibold" for="EnableLocation">启用定位打卡</label>
+                                <label class="form-check-label fw-semibold" for="fEnableLocation">启用定位打卡</label>
                             </div>
                         </div>
                         <div id="locationFields" class="col-12">
