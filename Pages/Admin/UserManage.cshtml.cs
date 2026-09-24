@@ -246,8 +246,7 @@ public class UserManageModel(
                 if (followedGroupId.HasValue) newUser.AttendanceGroupId = followedGroupId.Value;
             }
             // 业务确认（2026-09-03 定稿）：新建员工的初始密码统一固定为 123456，方便现场/分公司管理员
-            // 口头告知新员工，不用再一个个抄随机密码；安全性靠 MustChangePassword（首次登录强制改密）
-            // 这道闸来兜底，不是"固定密码 + 不强制改密"的组合，员工首次登录必须马上改成自己的密码。
+            // 口头告知新员工，不用再一个个抄随机密码。2026-09-24 业务决定：首次登录不再强制改密码。
             const string initialPwd = "123456";
             await userService.CreateUserAsync(newUser, initialPwd);
             await userService.SetUserDevicesAsync(newUser.Id, DeviceIds);

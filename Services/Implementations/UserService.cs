@@ -122,7 +122,7 @@ public class UserService(
     }
 
     /// <summary>创建员工（工号不能重复），对初始密码做哈希后保存，顺带把工号+姓名排进考勤机下发队列。
-    /// 初始密码是随机生成的（不再是全公司共用一个固定默认密码），首次登录后会被强制要求改密码。</summary>
+    /// 首次登录不强制改密码（2026-09-24 业务决定），员工想改可以自己在"修改密码"页改。</summary>
     public async Task<User> CreateUserAsync(User user, string plainPassword)
     {
         ValidateEmployeeNoFormat(user.EmployeeNo);
@@ -139,7 +139,7 @@ public class UserService(
             throw new InvalidOperationException("该身份证号已被拉黑（永不录用），请联系总部处理");
 
         user.PasswordHash       = HashPassword(plainPassword);   // 明文密码 → 哈希
-        user.MustChangePassword = true;
+        user.MustChangePassword = false;
         user.CreatedAt          = DateTime.Now;
         user.UpdatedAt          = DateTime.Now;
 
@@ -246,7 +246,7 @@ public class UserService(
         }
 
         user.PasswordHash       = HashPassword(password);
-        user.MustChangePassword = true;   // 管理员重置的密码，员工下次登录也要强制改成自己的
+        user.MustChangePassword = false;  // 不再强制改密码（2026-09-24 业务决定）；显式置 false 是为了清掉以前遗留的"需改密"标记
         user.FailedLoginCount   = 0;      // 重置密码顺带解除之前可能存在的登录锁定，不用等锁定自动过期
         user.LockedUntil        = null;
         user.UpdatedAt          = DateTime.Now;

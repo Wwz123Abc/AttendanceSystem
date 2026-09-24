@@ -120,8 +120,8 @@ public class User
                                   : IsActive      ? EmployeeStatus.Active
                                   :                 EmployeeStatus.Disabled;
 
-    /// <summary>是否需要在下次登录后强制修改密码：新建账号（初始密码是随机生成的）、
-    /// 或被管理员重置过密码时会置 true；员工自己成功改密后清掉。</summary>
+    /// <summary>是否需要在下次登录后强制修改密码。2026-09-24 起业务上不再强制改密，新建/重置都不再置 true，
+    /// 登录也不再检查这个字段；字段本身保留（兼容已有数据库和 App 接口返回的字段）。</summary>
     public bool MustChangePassword { get; set; } = false;
 
     /// <summary>连续登录失败次数，达到上限会临时锁定账号（见 <see cref="LockedUntil"/>）；登录成功清零。</summary>

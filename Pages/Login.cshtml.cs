@@ -68,11 +68,8 @@ public class LoginModel(IUserService userService, IOptions<AppSettingsOptions> a
                 ExpiresUtc   = DateTimeOffset.UtcNow.AddHours(appOptions.Value.TokenExpireHours)
             });
 
-        // 初始密码是随机生成的、或者密码是管理员重置过的，登录成功后先强制去改密码页，
-        // 改完才放行去正常首页——不能让人一直用系统自动生成、管理员也知道的那个密码继续用下去
-        if (user.MustChangePassword)
-            return Redirect("/Account/ChangePassword?forced=1");
-
+        // 2026-09-24 业务决定：首次登录/被重置密码后不再强制改密码，登录成功直接进首页，
+        // 想改的话自己在"修改密码"页改。
         return Redirect(HomeUrl(user.Role));   // 按角色跳首页
     }
 

@@ -88,7 +88,6 @@ public class AdminController(
             HireDate          = req.HireDate
         };
         // 初始密码统一固定为 123456，跟 UserManage 页面口径一致，不再接受调用方自定义初始密码
-        // （首次登录仍强制改密码，见 CreateUserAsync 里 MustChangePassword = true）
         const string initialPwd = "123456";
         var created = await userService.CreateUserAsync(user, initialPwd);
         await userService.SetUserDevicesAsync(created.Id, deviceIds);
