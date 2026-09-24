@@ -257,6 +257,10 @@
                                             }
                                             <button class="btn btn-outline-secondary btn-sm"
                                                     onclick="openResetPwd(@u.Id, @System.Text.Json.JsonSerializer.Serialize(u.RealName))">重置密码</button>
+                                            @if (!string.IsNullOrEmpty(u.FaceReferencePhotoUrl))
+                                            {
+                                                <button class="btn btn-outline-secondary btn-sm" onclick="doAction('ClearFacePhoto',@u.Id,'确认清除该员工的人脸照片？清除后他需要重新到「人脸信息」页录入，录入前无法远程打卡。')">清除人脸</button>
+                                            }
                                             <button class="btn btn-outline-danger btn-sm" onclick="doAction('Delete',@u.Id,'确认彻底删除该员工？将同时删除其考勤/审批/通知等全部数据，且不可恢复！')">删除</button>
                                         </div>
                                     </td>
@@ -545,8 +549,10 @@
                                 <label class="form-label">管理范围</label>
                                 <select asp-for="ScopedDeptId" class="form-select" id="fScopedDeptId">
                                     <option value="">不受限（总部超级管理员，能看/管全公司）</option>
-                                    @foreach (var d in Model.DeptTree.Where(x => x.IsActive))
-                                    { <option value="@d.Id">@(new string('　', d.Depth))@d.Name</option> }
+                                    @* 已停用的部门也要列出来（并标注）：分公司管理员的范围部门一旦被停用，下拉框里找不到这个值就会回填成空，
+                                       总部只是改个手机号点保存，提交上去的范围就是"空=不受限"，这个人立刻能看/管全公司 *@
+                                    @foreach (var d in Model.DeptTree)
+                                    { <option value="@d.Id">@(new string('　', d.Depth))@d.Name@(d.IsActive ? "" : "（已停用）")</option> }
                                 </select>
                                 <div class="form-text">只对角色是"管理员/文员"的账号有意义：选了某个部门，这个人登录后就只能看/管这个部门
                                     （含下级）范围内的数据，看不到其他分公司——这个字段只有你（不受限的总部管理员）能设置。</div>

@@ -69,6 +69,15 @@ public class UserService(
         if (user is not null && user.LockedUntil > DateTime.Now)
             return null;
 
+        // 走到这里如果 LockedUntil 还有值，说明上一轮锁定已经过期：失败次数重新从 0 算。
+        // 不清的话，过期后输错一次就是第 6 次失败、立刻又锁 15 分钟——工号是"前缀+流水号"很好猜，
+        // 外部靠很少的请求就能让一批账号一直处于锁定状态（2026-09-24 第 11 轮审查）
+        if (user is not null && user.LockedUntil is not null)
+        {
+            user.FailedLoginCount = 0;
+            user.LockedUntil      = null;
+        }
+
         // 找不到人，或密码不对 → 登录失败；工号存在的话顺便记一次失败次数，攒够次数就临时锁定
         if (user is null || !passwordOk)
         {

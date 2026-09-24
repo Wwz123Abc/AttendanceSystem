@@ -116,6 +116,11 @@ public class RemotePunchModel(
                 }
             }
 
+            // 没办入职（没填入职日期或还没到入职日）本来就打不了卡（AttendanceService.PunchAsync 会拒绝），
+            // 但那一步在人脸识别之后，会白花一次付费的阿里云调用——提前判断，措辞跟 PunchAsync 一致（2026-09-24 第 11 轮审查）
+            if (user.HireDate is null || user.HireDate.Value > DateOnly.FromDateTime(DateTime.Today))
+                throw new InvalidOperationException("您尚未办理入职（入职日期未设置或未到），暂不能打卡，请联系管理员");
+
             if (!Latitude.HasValue || !Longitude.HasValue)
                 throw new InvalidOperationException("未能获取定位，请检查浏览器定位权限后重试");
 

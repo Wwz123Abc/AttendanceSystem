@@ -3,8 +3,8 @@
   "appName": "考勤系统",
   "webDir": "www",
   "server": {
-    "url": "http://adt.colibri.com.cn:15080",
-    "cleartext": true
+    "url": "https://adt.colibri.com.cn:15080",
+    "cleartext": false
   },
   "android": {
     "allowMixedContent": false

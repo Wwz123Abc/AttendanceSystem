@@ -34,8 +34,8 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
         var summaries = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month, visibleIds);  // 取数据
         var bytes     = ExcelExportHelper.ExportMonthlySummary(summaries, year, month);                      // 生成 Excel
         var fileName  = $"月度考勤汇总_{year}年{month:D2}月.xlsx";
-        // 文件名含中文，要 UrlEncode 编码，避免浏览器下载时乱码
-        return File(bytes, XlsxContentType, System.Web.HttpUtility.UrlEncode(fileName));
+        // 文件名含中文，直接交给 File() 处理即可（它会自己按标准编码）；不能先 UrlEncode，不然下载下来是 %e5%91%98… 的乱码
+        return File(bytes, XlsxContentType, fileName);
     }
 
     /// <summary>导出某员工的每日考勤明细（报表2）。</summary>
@@ -55,7 +55,7 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
 
         var bytes    = ExcelExportHelper.ExportDailyStatusReport(summary);
         var fileName = $"{summary.RealName}_每日考勤_{year}年{month:D2}月.xlsx";
-        return File(bytes, XlsxContentType, System.Web.HttpUtility.UrlEncode(fileName));
+        return File(bytes, XlsxContentType, fileName);
     }
 
     /// <summary>手动生成某月的考勤汇总（不想等月初自动生成时用）。受限管理员只重算自己范围内的人，

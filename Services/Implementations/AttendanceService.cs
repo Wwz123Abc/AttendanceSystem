@@ -83,7 +83,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (candidate is not null)
             {
                 var yesterdayAssignment = await GetShiftAssignmentAsync(userId, yesterday);
-                if (yesterdayAssignment?.ShiftSchedule.IsCrossDay == true)
+                if (yesterdayAssignment?.ShiftSchedule is { IsCrossDay: true } ys && IsWithinNightCarryOver(yesterday, ys, now))
                 {
                     workDate            = yesterday;
                     openYesterdayRecord = candidate;
@@ -328,6 +328,15 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 就返回昨天那条——否则半夜打开"我的打卡"页面会显示"今日暂无记录"，上班按钮又变回可点，
     /// 让人误以为之前打的上班卡凭空消失了（实际上打卡数据还在，只是查询没找对记录）。
     /// </summary>
+    /// <summary>夜班下班卡最晚能晚到什么时候，还算"昨天那个夜班"的：昨天班次应下班时间之后这么多小时以内。
+    /// 超过就当新一天的打卡，不再接到昨天那条没打下班卡的记录上（否则夜班漏打一次下班卡，
+    /// 第二天晚上的上班卡会被当成昨天的下班卡，连环出错——2026-09-24 第 11 轮审查）。</summary>
+    public const int NightShiftCarryOverHours = 6;
+
+    /// <summary>这次打卡时间，是否还在"昨天那个跨天夜班"允许续接的时间窗内。</summary>
+    public static bool IsWithinNightCarryOver(DateOnly shiftDate, ShiftSchedule shift, DateTime punchTime) =>
+        punchTime <= shiftDate.ToDateTime(shift.WorkEndTime).AddDays(1).AddHours(NightShiftCarryOverHours);
+
     public async Task<AttendanceRecordDto?> GetTodayAttendanceAsync(int userId)
     {
         var today  = DateOnly.FromDateTime(DateTime.Today);
@@ -346,7 +355,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (openYesterday is not null)
             {
                 var yesterdayAssignment = await GetShiftAssignmentAsync(userId, yesterday);
-                if (yesterdayAssignment?.ShiftSchedule.IsCrossDay == true)
+                if (yesterdayAssignment?.ShiftSchedule is { IsCrossDay: true } ys && IsWithinNightCarryOver(yesterday, ys, DateTime.Now))
                     record = openYesterday;
             }
         }
@@ -1191,6 +1200,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     .ToListAsync())
                 .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
             var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+            // 事假/病假/年假/调休：休息日、节假日不算请假，所以要把这段时间的假期表一起查出来
+            var skipNonWorkdays = !LeaveCountsNaturalDays(approval.LeaveType);
+            var leaveHolidays   = skipNonWorkdays
+                ? await db.Holidays.Where(h => h.HolidayDate >= sd && h.HolidayDate <= ed).ToListAsync()
+                : [];
 
             for (var d = sd; d <= ed; d = d.AddDays(1))   // 请假区间内每一天
             {
@@ -1204,12 +1218,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 // 这一天仍然有真实交集，应该照常标记"请假"，只是 LeaveHours 恰好是 0——不然会把
                 // 短时长请假误判成没有交集直接跳过，这天没打卡的话会被后台旷工任务误标成旷工
                 // （发现于 2026-09-18：这是 09-18 那次"无交集跳过"修复自身遗留的边界缺陷）。
-                if (!HasLeaveOverlapForDay(d, approval.LeaveStartTime.Value, leaveEnd)) continue;
+                leaveShiftsInRange.TryGetValue(d, out var leaveShift);
+                if (!HasLeaveOverlapForDay(d, approval.LeaveStartTime.Value, leaveEnd, leaveShift)) continue;
+                // 休息日/节假日不算请假（婚假/产假/丧假除外）：不新建记录、不标"请假"、不覆盖原来的休假状态
+                if (skipNonWorkdays && IsNonWorkday(d, applicant?.AttendanceGroupId, leaveHolidays, leaveShift)) continue;
 
-                var dailyCap = leaveShiftsInRange.TryGetValue(d, out var leaveShift)
-                    ? leaveShift.StandardWorkHours : defaultDailyHours;
+                var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
                 var leaveHoursToday = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd,
-                    leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30, dailyCap);
+                    leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30, dailyCap, leaveShift);
 
                 // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
                 // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
@@ -1278,9 +1294,15 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 .Include(a => a.ShiftSchedule)
                 .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= sd && a.WorkDate <= ed)
                 .ToDictionaryAsync(a => a.WorkDate);
+            var tripHolidays = await db.Holidays.Where(h => h.HolidayDate >= sd && h.HolidayDate <= ed).ToListAsync();
+            var tripGroupId  = (await db.Users.FindAsync(approval.ApplicantUserId))?.AttendanceGroupId;
 
             for (var d = sd; d <= ed; d = d.AddDays(1))   // 出差区间内每一天
             {
+                // 休息日/法定节假日不算出差：不覆盖原来的休假状态，也不白给一天标准工时和出勤（2026-09-24 用户确认）
+                shiftsInRange.TryGetValue(d, out var tripShiftAssign);
+                if (IsNonWorkday(d, tripGroupId, tripHolidays, tripShiftAssign?.ShiftSchedule)) continue;
+
                 if (!recordsInRange.TryGetValue(d, out var record))
                 {
                     record = new AttendanceRecord { UserId = approval.ApplicantUserId, WorkDate = d };
@@ -1371,6 +1393,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         {
             AppendApprovalNote(record, ClockTimeInvertedNote);
         }
+        // 只补了一边卡（上班或下班）：人确实到过岗，不能继续挂"旷工"——不然月度汇总会把这天既记 1 天旷工、
+        // 又记 1 天出勤（出勤只看有没有上班卡）。跟后台任务对"只有下班卡"的处理同一口径：改成"未打卡（缺卡）"。
+        if (record.AttendanceStatus == AttendanceStatus.Absent
+            && (record.ClockInTime.HasValue ^ record.ClockOutTime.HasValue))
+            record.AttendanceStatus = AttendanceStatus.NotPunched;
         if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) return;
 
         var applicant   = await db.Users.FindAsync(userId);
@@ -1703,16 +1730,49 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 用标准工时封顶后，请一整天假最多算一天的标准工时，符合"请假时长"这个数字本来的业务含义。
     /// </summary>
     public static decimal ComputeLeaveHoursForDay(
-        DateOnly day, DateTime leaveStart, DateTime leaveEnd, int lunchBreak, int dinnerBreak, decimal dailyCapHours)
+        DateOnly day, DateTime leaveStart, DateTime leaveEnd, int lunchBreak, int dinnerBreak, decimal dailyCapHours,
+        ShiftSchedule? shift = null)
     {
-        var dayStart = day.ToDateTime(TimeOnly.MinValue);
-        var dayEnd   = day.AddDays(1).ToDateTime(TimeOnly.MinValue);
-        var segStart = leaveStart > dayStart ? leaveStart : dayStart;
-        var segEnd   = leaveEnd   < dayEnd   ? leaveEnd   : dayEnd;
+        var (winStart, winEnd) = ResolveLeaveWindow(day, shift);
+        var segStart = leaveStart > winStart ? leaveStart : winStart;
+        var segEnd   = leaveEnd   < winEnd   ? leaveEnd   : winEnd;
         if (segEnd <= segStart) return 0;
         var raw = ComputeWorkHours(segStart, segEnd, lunchBreak, dinnerBreak);
         return Math.Min(raw, dailyCapHours);
     }
+
+    /// <summary>
+    /// 这一天"可以请假"的时间段：这天排了班就取班次的上下班时间（跨天班次下班顺延到第二天）；没排班就沿用自然日
+    /// 0:00~24:00（没有班次可参照）。以前一律按自然日切，跨天请假的第一天会一直算到午夜、最后一天从 0 点算起——
+    /// 比如"周一 13:30 ~ 周二 12:00"会被算成 2 天（应约 1 天），当天上午已经上的班还会被记成请假、工时清零
+    /// （2026-09-24 第 11 轮审查，用户确认改成按班次时间算）。
+    /// </summary>
+    public static (DateTime Start, DateTime End) ResolveLeaveWindow(DateOnly day, ShiftSchedule? shift)
+    {
+        if (shift is null)
+            return (day.ToDateTime(TimeOnly.MinValue), day.AddDays(1).ToDateTime(TimeOnly.MinValue));
+        var start = day.ToDateTime(shift.WorkStartTime);
+        var end   = day.ToDateTime(shift.WorkEndTime);
+        if (shift.IsCrossDay || end <= start) end = end.AddDays(1);
+        return (start, end);
+    }
+
+    /// <summary>
+    /// 这一天算不算"非工作日"（法定节假日/公司休息日，或者班次配置的每周休息日；调班补班日算工作日）。
+    /// 请假、出差遇到非工作日不计入（婚假/产假/丧假除外，见 <see cref="LeaveCountsNaturalDays"/>）。
+    /// 跟 <see cref="CountExpectedWorkdays"/> 用同一套判断，保证"应出勤"和"请了几天假"看的是同一份日历。
+    /// </summary>
+    public static bool IsNonWorkday(DateOnly day, int? groupId, IEnumerable<Holiday> holidays, ShiftSchedule? shift)
+    {
+        var holiday = ResolveEffectiveHoliday(day, groupId, holidays);
+        if (holiday?.HolidayType == HolidayType.CompensatoryWorkDay) return false;
+        if (holiday?.HolidayType is HolidayType.LegalHoliday or HolidayType.CompanyRestDay) return true;
+        return IsShiftWeeklyRestDay(day, shift);
+    }
+
+    /// <summary>婚假、产假、丧假按自然日计算（休息日、节假日也算请假）；其余假别（事假/病假/年假/调休）只算工作日。</summary>
+    public static bool LeaveCountsNaturalDays(LeaveType? leaveType) =>
+        leaveType is LeaveType.MarriageLeave or LeaveType.MaternityLeave or LeaveType.BereavementLeave;
 
     /// <summary>
     /// 这一天跟请假区间是不是有真实交集（不管时长多少，哪怕只有几分钟也算有）。
@@ -1722,12 +1782,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 只有前一种才应该跳过这一天不标记"请假"，后一种如果也跳过，会导致"请了假但没打卡"的短时长
     /// 请假被误判成旷工（发现于 2026-09-18 数据核查，是 09-18 那次"无交集跳过"修复自身的边界缺陷）。
     /// </summary>
-    public static bool HasLeaveOverlapForDay(DateOnly day, DateTime leaveStart, DateTime leaveEnd)
+    public static bool HasLeaveOverlapForDay(DateOnly day, DateTime leaveStart, DateTime leaveEnd, ShiftSchedule? shift = null)
     {
-        var dayStart = day.ToDateTime(TimeOnly.MinValue);
-        var dayEnd   = day.AddDays(1).ToDateTime(TimeOnly.MinValue);
-        var segStart = leaveStart > dayStart ? leaveStart : dayStart;
-        var segEnd   = leaveEnd   < dayEnd   ? leaveEnd   : dayEnd;
+        var (winStart, winEnd) = ResolveLeaveWindow(day, shift);
+        var segStart = leaveStart > winStart ? leaveStart : winStart;
+        var segEnd   = leaveEnd   < winEnd   ? leaveEnd   : winEnd;
         return segEnd > segStart;
     }
 
@@ -1822,12 +1881,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var count = 0;
         for (var d = start; d <= end; d = d.AddDays(1))
         {
-            var holiday = ResolveEffectiveHoliday(d, groupId, holidaysInRange);
-            if (holiday?.HolidayType == HolidayType.CompensatoryWorkDay) { count++; continue; }
-            if (holiday?.HolidayType is HolidayType.LegalHoliday or HolidayType.CompanyRestDay) continue;
-
-            var isRestDay = IsShiftWeeklyRestDay(d, shiftByDate.TryGetValue(d, out var shift) ? shift : null);
-            if (!isRestDay) count++;
+            if (!IsNonWorkday(d, groupId, holidaysInRange, shiftByDate.TryGetValue(d, out var shift) ? shift : null)) count++;
         }
         return count;
     }

@@ -51,8 +51,12 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
         {
             if (UserId <= 0) throw new InvalidOperationException("请先选择员工");
             var user = await db.Users.FindAsync(UserId) ?? throw new InvalidOperationException("员工不存在");
-            if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, user.DepartmentId))
+            var cuAdj = HttpContext.GetCurrentUser()!;
+            if (!await deptScopeService.CanAccessDeptAsync(cuAdj, user.DepartmentId))
                 throw new InvalidOperationException("无权给该员工补卡");
+            // 跟员工管理页同一套角色层级：文员不能改管理员的打卡、分公司账号不能改总部账号的打卡（以前只校验了部门范围）
+            if (!cuAdj.CanManageAccount(user.Role, user.ScopedDepartmentId))
+                throw new InvalidOperationException("无权给该账号补卡，请联系总部管理员操作");
 
             DateTime? clockIn = null;
             if (!string.IsNullOrWhiteSpace(ClockInTime))

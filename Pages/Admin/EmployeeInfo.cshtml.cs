@@ -81,7 +81,7 @@ public class EmployeeInfoModel(
             operatorNo, users.Count, deptId, keyword);
 
         return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            System.Web.HttpUtility.UrlEncode($"员工信息_{DateTime.Now:yyyyMMdd}.xlsx"));
+            $"员工信息_{DateTime.Now:yyyyMMdd}.xlsx");   // 不能再 UrlEncode：File() 会自己处理中文文件名，先编码一次会变成 %e5%91%98… 的乱码
     }
 
     /// <summary>加载部门下拉选项：按"父部门在前、子部门缩进"的顺序摊平成一份列表；受限管理员只看到

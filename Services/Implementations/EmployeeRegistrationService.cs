@@ -15,9 +15,11 @@ public class EmployeeRegistrationService(AttendanceDbContext db, IDeptScopeServi
     /// <summary>提交登记：先校验姓名/手机号/身份证号格式，再挡掉"已经是员工"或"已经提交过还没处理"这两种重复情况。</summary>
     public async Task SubmitAsync(SubmitRegistrationDto dto)
     {
-        var realName = dto.RealName.Trim();
-        var phone    = dto.Phone.Trim();
-        var idNumber = dto.IdNumber.Trim().ToUpperInvariant();   // 身份证号末位可能是 x，统一转大写方便比对
+        // 表单里留空提交时，模型绑定会把空串变成 null，直接 Trim 会空引用、员工只看到"提交失败，请稍后重试"，
+        // 而不是"请填写姓名"，所以先兜成空串再校验
+        var realName = (dto.RealName ?? "").Trim();
+        var phone    = (dto.Phone ?? "").Trim();
+        var idNumber = (dto.IdNumber ?? "").Trim().ToUpperInvariant();   // 身份证号末位可能是 x，统一转大写方便比对
 
         if (string.IsNullOrEmpty(realName))
             throw new InvalidOperationException("请填写姓名");

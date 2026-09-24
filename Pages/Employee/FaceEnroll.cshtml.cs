@@ -53,6 +53,12 @@ public class FaceEnrollModel(
             var user = await db.Users.FindAsync(CurrentUserId)
                 ?? throw new InvalidOperationException("账号不存在");
 
+            // 录入过就不能自己再换：参考照是远程打卡防代打的唯一依据，员工要是能随时自己换，
+            // 把它换成同事的脸，同事就能用自己的脸替他打卡（1:1 比对只能证明"镜头前的人=参考照上的人"）。
+            // 确实要换（换脸、拍得不好）由管理员在「员工管理」里"清除人脸照片"后重新录入（2026-09-24 第 11 轮审查，用户确认）
+            if (!string.IsNullOrEmpty(user.FaceReferencePhotoUrl))
+                throw new InvalidOperationException("已经录入过人脸照片，如需更换请联系管理员在「员工管理」里清除后重新录入");
+
             // 顺序：先写新文件（不删旧的）→ 写库 → 成功了才删旧文件；写库失败就把新文件回收掉。
             // 以前是先删旧照片再写库，写库一失败旧照片已经没了、库里却还指向它，这个员工的远程打卡就
             // 彻底不能用了（2026-09-24 审查修复）
@@ -166,21 +172,5 @@ public class FaceEnrollModel(
 
     /// <summary>删掉一张人脸参考照的两个文件（留档版 + 比对版）。只在写库成功换掉旧照片、或写库失败要回收新文件时调用；
     /// 文件不存在/删除失败都只记日志，不影响主流程。</summary>
-    private void DeleteFaceFiles(string? url)
-    {
-        if (string.IsNullOrEmpty(url)) return;
-        try
-        {
-            var root = Path.GetFullPath(PrivateFileStorage.GetRoot(env));
-            var path = Path.GetFullPath(Path.Combine(root, url.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
-            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return;
-            if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
-            var verifyPath = Path.Combine(Path.GetDirectoryName(path)!, $"{Path.GetFileNameWithoutExtension(path)}{VerifySuffix}.jpg");
-            if (System.IO.File.Exists(verifyPath)) System.IO.File.Delete(verifyPath);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "清理人脸参考照文件失败：{Url}", url);
-        }
-    }
+    private void DeleteFaceFiles(string? url) => PrivateFileStorage.DeleteFaceReferenceFiles(env, url, logger);
 }

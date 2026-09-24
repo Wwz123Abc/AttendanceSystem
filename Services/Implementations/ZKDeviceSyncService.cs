@@ -135,10 +135,22 @@ public class ZKDeviceSyncService(
             // 但只在昨天排的确实是跨天班次时才续，避免把普通白班忘打下班卡的旧记录误接到今天的打卡上
             // （逻辑和 AttendanceService.PunchAsync 的夜班续接处理保持一致）。
             var yesterday = calendarDate.AddDays(-1);
+            // 续接要有时间窗（AttendanceService.NightShiftCarryOverHours）：超过昨天班次应下班时间太久才来的打卡，
+            // 是新一天的上班卡，不能再接到昨天那条没打下班卡的记录上——不然夜班漏打一次下班卡，第二天晚上的上班卡
+            // 会被当成昨天的下班卡，第二天整天没记录被记旷工，之后每天连环错位（2026-09-24 第 11 轮审查）
             if (recordMap.TryGetValue((uid, yesterday), out var yesterdayRecord)
                 && yesterdayRecord.ClockInTime != null && yesterdayRecord.ClockOutTime == null
                 && shiftByUserDate.TryGetValue((uid, yesterday), out var yesterdayShift)
-                && yesterdayShift?.IsCrossDay == true)
+                && yesterdayShift is { IsCrossDay: true }
+                && AttendanceService.IsWithinNightCarryOver(yesterday, yesterdayShift, r.Time))
+            {
+                workDate = yesterday;
+            }
+            // 夜班刚打完下班卡、几分钟内又刷了一次（重复刷脸）：仍归昨天，后面会按"取更晚"更新下班时间，
+            // 不然第二次会落到今天成为一条凭空的上班卡（休息日还会多出 1 天出勤 + 1 次缺卡）
+            else if (recordMap.TryGetValue((uid, yesterday), out var yRec)
+                     && yRec.ClockOutTime is { } yOut && r.Time >= yOut && r.Time - yOut <= TimeSpan.FromMinutes(30)
+                     && shiftByUserDate.TryGetValue((uid, yesterday), out var yShift) && yShift is { IsCrossDay: true })
             {
                 workDate = yesterday;
             }

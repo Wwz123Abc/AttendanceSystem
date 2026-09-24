@@ -91,7 +91,7 @@ public class AdminController(
         const string initialPwd = "123456";
         var created = await userService.CreateUserAsync(user, initialPwd);
         await userService.SetUserDevicesAsync(created.Id, deviceIds);
-        await ApplyScopeAfterSaveAsync(created.Id, req.ScopedDepartmentId);
+        await ApplyScopeAfterSaveAsync(created.Id, req.ScopedDepartmentId, isCreate: true);
         return Ok(new { Success = true, Message = "员工创建成功", UserId = created.Id, InitialPassword = initialPwd });
     }
 
@@ -140,7 +140,7 @@ public class AdminController(
         {
             if (req.DeviceIds is not null)
                 await userService.SetUserDevicesAsync(id, req.DeviceIds);
-            await ApplyScopeAfterSaveAsync(id, req.ScopedDepartmentId);
+            await ApplyScopeAfterSaveAsync(id, req.ScopedDepartmentId, isCreate: false);
         }
         return Ok(new { Success = ok, Message = ok ? "更新成功" : "用户不存在" });
     }
@@ -192,10 +192,22 @@ public class AdminController(
     /// ScopedDepartmentId 的代码，等于不管谁调用，走 API 建的新账号 ScopedDepartmentId 恒为 null，
     /// null 在 DeptScopeService 里的语义是"不受限"，是一条比页面那条更彻底的越权提权链。
     /// </summary>
-    private async Task ApplyScopeAfterSaveAsync(int userId, int? requestedScope)
+    private async Task ApplyScopeAfterSaveAsync(int userId, int? requestedScope, bool isCreate)
     {
         var isHqSuperAdmin = Cu.Role == UserRole.Admin && !Cu.IsScoped;
-        await userService.SetScopedDepartmentAsync(userId, isHqSuperAdmin ? requestedScope : Cu.ScopedDepartmentId);
+        if (isHqSuperAdmin)
+        {
+            await userService.SetScopedDepartmentAsync(userId, requestedScope);
+            return;
+        }
+        // 编辑时对方已有范围就保持不变（跟 UserManage 页面同一规则，见那边的说明）
+        if (!isCreate)
+        {
+            var currentScope = await db.Users.Where(u => u.Id == userId)
+                .Select(u => u.ScopedDepartmentId).FirstOrDefaultAsync();
+            if (currentScope.HasValue) return;
+        }
+        await userService.SetScopedDepartmentAsync(userId, Cu.ScopedDepartmentId);
     }
 
     /// <summary>新建/编辑员工前的范围+权限校验：部门、直属上级必须在管理范围内；只有不受限的

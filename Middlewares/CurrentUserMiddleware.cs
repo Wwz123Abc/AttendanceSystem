@@ -43,8 +43,11 @@ public sealed class CurrentUser
     /// </summary>
     public bool CanManageAccount(UserRole targetRole, int? targetScopedDepartmentId) =>
         IsHqSuperAdmin
-        || targetRole != UserRole.Admin
-        || (targetScopedDepartmentId.HasValue && Role == UserRole.Admin);
+        || (targetRole == UserRole.Admin
+            ? targetScopedDepartmentId.HasValue && Role == UserRole.Admin
+            // 范围为空的文员=能看/管全公司的"总部文员"：受范围限制的账号（分公司管理员/分公司文员）不能操作他，
+            // 不然重置他的密码就能接管一个不受限的账号（2026-09-24 第 11 轮审查，用户确认禁止）。总部文员之间不受影响
+            : !(IsScoped && targetRole == UserRole.Clerk && !targetScopedDepartmentId.HasValue));
 }
 
 // 「中间件」= 每个网络请求都会先经过的一道“关卡”。

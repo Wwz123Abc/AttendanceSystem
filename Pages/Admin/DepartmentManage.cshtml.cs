@@ -193,6 +193,9 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
                 // 改了父部门等于把自己整个管理范围挪到别的位置，这种事只有总部管理员能做
                 if (ParentId != dept.ParentId)
                     throw new InvalidOperationException("不能修改自己管理范围根部门的上级部门，如需调整请联系总部管理员");
+                // 停用自己的范围根部门，总部再打开自己的编辑弹窗时下拉框里就找不到它，容易误把范围改成"不受限"
+                if (!IsActive)
+                    throw new InvalidOperationException("不能停用自己管理范围的根部门，如需停用请联系总部管理员");
             }
             else
             {
@@ -254,6 +257,14 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
                 ids = ids.Where(id => visibleIds.Contains(id) && id != cu.ScopedDepartmentId!.Value).ToList();
             if (ids.Count == 0)
                 throw new InvalidOperationException("没有可以删除的部门（不能删除自己管理范围之外的部门，也不能删除自己的管理范围根部门）");
+
+            // 有账号把这个部门当"管理范围"时数据库外键会拒绝删除，只给一句"删除失败，请稍后重试"，看不懂——提前说清楚
+            if (await db.Users.AnyAsync(u => u.ScopedDepartmentId != null && ids.Contains(u.ScopedDepartmentId.Value)))
+                throw new InvalidOperationException("有账号把要删除的部门设成了管理范围，请先到「员工管理」里改掉他们的管理范围再删除");
+            // 受限管理员：删除有下级部门的部门，下级会被"提升为顶级"，直接掉出他自己的管理范围（里面的员工再也看不到）
+            if (visibleIds is not null
+                && await db.Departments.AnyAsync(d => d.ParentId != null && ids.Contains(d.ParentId.Value) && !ids.Contains(d.Id)))
+                throw new InvalidOperationException("要删除的部门下面还有下级部门，请先删除或移走下级部门（否则下级部门会掉出你的管理范围）");
 
             var depts = await db.Departments.Where(d => ids.Contains(d.Id)).ToListAsync();
 

@@ -21,6 +21,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     /// 审批通过后逐日回写考勤记录（单事务几百万条插入），逐日累加到 9999 年还会抛日期越界异常
     /// （2026-09-24 审查修复）。超过的请拆成多张。</summary>
     public const int MaxLeaveOrTripSpanDays = 366;
+    /// <summary>单张加班申请的最长时长（小时）：以前结束时间没有上限，可以填到几天后，时长全记到开始那天。</summary>
+    public const int MaxOvertimeHours = 24;
 
     /// <summary>
     /// 提交申请：算请假/加班时长 → 生成申请单(带单号) → 建审批节点(员工自选审批人/直属上级/兜底管理员) → 通知审批人。
@@ -81,6 +83,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException("加班申请必须是当天的加班，请在当天24点前提交当日申请");
                 if (dto.OvertimeEndTime <= dto.OvertimeStartTime)
                     throw new InvalidOperationException("加班结束时间必须晚于开始时间");
+                if ((dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours > MaxOvertimeHours)
+                    throw new InvalidOperationException($"单次加班时长不能超过 {MaxOvertimeHours} 小时，请检查起止时间");
                 if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
                         && a.ApprovalType == ApprovalType.Overtime && activeStatuses.Contains(a.ApprovalStatus)
                         && a.OvertimeStartTime < dto.OvertimeEndTime && dto.OvertimeStartTime < a.OvertimeEndTime))
@@ -119,14 +123,21 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     .ToListAsync())
                 .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
             var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+            // 跟审批通过后的逐日回写（UpdateAttendanceAfterApprovalAsync）同一口径：按班次上下班时间取交集，
+            // 事假/病假/年假/调休遇到休息日、节假日不计（婚假/产假/丧假按自然日算）
+            var skipNonWorkdays = !AttendanceService.LeaveCountsNaturalDays(dto.LeaveType);
+            var leaveHolidays   = skipNonWorkdays
+                ? await db.Holidays.Where(h => h.HolidayDate >= leaveSd && h.HolidayDate <= leaveEd).ToListAsync()
+                : [];
 
             decimal total = 0;
             for (var d = leaveSd; d <= leaveEd; d = d.AddDays(1))
             {
-                var dailyCap = leaveShiftsInRange.TryGetValue(d, out var leaveShift)
-                    ? leaveShift.StandardWorkHours : defaultDailyHours;
+                leaveShiftsInRange.TryGetValue(d, out var leaveShift);
+                if (skipNonWorkdays && AttendanceService.IsNonWorkday(d, user.AttendanceGroupId, leaveHolidays, leaveShift)) continue;
+                var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
                 total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value,
-                    group?.LunchBreakMinutes ?? 60, group?.DinnerBreakMinutes ?? 30, dailyCap);
+                    group?.LunchBreakMinutes ?? 60, group?.DinnerBreakMinutes ?? 30, dailyCap, leaveShift);
             }
             leaveDuration = total;
         }
@@ -481,11 +492,19 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             ApprovalType.BusinessTrip       => "CC",
             _                               => "AP"
         };
-        var date  = DateTime.Now.ToString("yyyyMMdd");
-        // 按类型分开计数（原来不管什么类型混在一起数），不然同一天 BK/QJ/JB/CC 交替提交时，
-        // 单号里的流水号会一格一格互相"抢位"，看起来像中间缺了号，其实只是没按前缀分开数
-        var count = await db.ApprovalRequests.CountAsync(a => a.SubmittedAt.Date == DateTime.Today && a.ApprovalType == type) + 1;
-        return $"{prefix}{date}{count:D4}";   // 如 QJ202606250001
+        // 按类型分开计数：不同类型的前缀不一样（BK/QJ/JB/CC），流水号各数各的。
+        // 流水号取"当天这一类已经用到的最大号 + 1"，而不是"当天条数 + 1"：以前按条数数，只要当天有一张
+        // 不是最后一张的单被删掉（并发提交时一张回滚、删了当天提交过申请的员工……），之后算出的号就一直落在
+        // 已存在的号上，3 次重试全撞，当天这类申请全部提交失败（2026-09-24 第 11 轮审查）。
+        // 流水号固定 4 位，按字符串倒序取第一条就是最大号；RequestNo 有唯一索引，StartsWith 会走索引。
+        var head   = prefix + DateTime.Now.ToString("yyyyMMdd");
+        var lastNo = await db.ApprovalRequests
+            .Where(a => a.RequestNo.StartsWith(head))
+            .OrderByDescending(a => a.RequestNo)
+            .Select(a => a.RequestNo)
+            .FirstOrDefaultAsync();
+        var seq = lastNo is not null && int.TryParse(lastNo[head.Length..], out var n) ? n + 1 : 1;
+        return $"{head}{seq:D4}";   // 如 QJ202606250001
     }
 
     // ── 私有方法 ──────────────────────────────────────────────────────────────

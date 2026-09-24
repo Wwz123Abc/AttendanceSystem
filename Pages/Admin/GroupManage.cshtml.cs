@@ -34,8 +34,12 @@ public class GroupManageModel(
 
     // 列表里每项是 (考勤组, 该组在职人数)
     public List<(AttendanceGroup Group, int UserCount)> Groups { get; set; } = [];
-    public string? SuccessMessage { get; set; }
-    public string? ErrorMessage   { get; set; }
+    // 用 TempData：保存/删除后页面会 RedirectToPage() 刷新，存在普通属性里的提示跳转后就丢了
+    // （包括"该考勤组已有历史排班……请改用停用"这种关键提示，管理员点了删除却什么反馈都没有）。
+    // 注意：[TempData] 属性只要被设置就会写进 TempData，所以这个页面所有分支都必须 RedirectToPage()，
+    // 不能"直接返回页面"——否则下次打开页面还会把这条提示再显示一遍（2026-09-24 第 11 轮审查）
+    [TempData] public string? SuccessMessage { get; set; }
+    [TempData] public string? ErrorMessage   { get; set; }
 
     /// <summary>可选审批人（在职、非普通员工），供多选框列出</summary>
     public List<User> ApproverOptions { get; set; } = [];
@@ -190,24 +194,24 @@ public class GroupManageModel(
     /// <summary>点“保存”：新增或修改考勤组。</summary>
     public async Task<IActionResult> OnPostSaveAsync()
     {
-        if (string.IsNullOrWhiteSpace(GroupName)) { ErrorMessage = "考勤组名称不能为空"; await OnGetAsync(); return Page(); }
-        if (GroupName.Trim().Length > 100) { ErrorMessage = "考勤组名称不能超过 100 个字"; await OnGetAsync(); return Page(); }
-        if (LunchBreak is < 0 or > 120) { ErrorMessage = "午休时长请填 0-120 分钟之间"; await OnGetAsync(); return Page(); }
-        if (DinnerBreak is < 0 or > 120) { ErrorMessage = "晚餐时长请填 0-120 分钟之间"; await OnGetAsync(); return Page(); }
-        if (ApproverUserIds.Count == 0) { ErrorMessage = "请至少选择一位审批人"; await OnGetAsync(); return Page(); }
+        if (string.IsNullOrWhiteSpace(GroupName)) { ErrorMessage = "考勤组名称不能为空"; return RedirectToPage(); }
+        if (GroupName.Trim().Length > 100) { ErrorMessage = "考勤组名称不能超过 100 个字"; return RedirectToPage(); }
+        if (LunchBreak is < 0 or > 120) { ErrorMessage = "午休时长请填 0-120 分钟之间"; return RedirectToPage(); }
+        if (DinnerBreak is < 0 or > 120) { ErrorMessage = "晚餐时长请填 0-120 分钟之间"; return RedirectToPage(); }
+        if (ApproverUserIds.Count == 0) { ErrorMessage = "请至少选择一位审批人"; return RedirectToPage(); }
         if (!Enum.TryParse<Models.Enums.ApprovalLevelType>(ApprovalLevel, out var approvalLevel)) approvalLevel = Models.Enums.ApprovalLevelType.Level1;
         foreach (var loc in Locations)
         {
             if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;   // 没填全经纬度的行本来就会被跳过，不用校验
-            if (loc.Latitude.Value is < -90 or > 90) { ErrorMessage = "打卡地点纬度不正确（应在 -90 到 90 之间）"; await OnGetAsync(); return Page(); }
-            if (loc.Longitude.Value is < -180 or > 180) { ErrorMessage = "打卡地点经度不正确（应在 -180 到 180 之间）"; await OnGetAsync(); return Page(); }
-            if (loc.Radius is < 0 or > 5000) { ErrorMessage = "打卡范围半径请填 0-5000 米之间"; await OnGetAsync(); return Page(); }
-            if (loc.Name?.Trim().Length > 200) { ErrorMessage = "打卡地点名称不能超过 200 个字"; await OnGetAsync(); return Page(); }
+            if (loc.Latitude.Value is < -90 or > 90) { ErrorMessage = "打卡地点纬度不正确（应在 -90 到 90 之间）"; return RedirectToPage(); }
+            if (loc.Longitude.Value is < -180 or > 180) { ErrorMessage = "打卡地点经度不正确（应在 -180 到 180 之间）"; return RedirectToPage(); }
+            if (loc.Radius is < 0 or > 5000) { ErrorMessage = "打卡范围半径请填 0-5000 米之间"; return RedirectToPage(); }
+            if (loc.Name?.Trim().Length > 200) { ErrorMessage = "打卡地点名称不能超过 200 个字"; return RedirectToPage(); }
         }
 
         var cu = HttpContext.GetCurrentUser()!;
         if (EditId != 0 && !await IsGroupWritableAsync(cu, EditId))
-        { ErrorMessage = "无权编辑该考勤组"; await OnGetAsync(); return Page(); }
+        { ErrorMessage = "无权编辑该考勤组"; return RedirectToPage(); }
 
         // 受限管理员：勾选的审批人、跟随部门都必须在自己范围内——不能跨分公司指定审批人，
         // 也不能把自己范围外的部门拉进来跟随这个组
@@ -217,9 +221,13 @@ public class GroupManageModel(
             var approverDeptIds = await db.Users.Where(u => ApproverUserIds.Contains(u.Id))
                 .Select(u => u.DepartmentId).ToListAsync();
             if (approverDeptIds.Any(id => !id.HasValue || !visibleIds!.Contains(id.Value)))
-            { ErrorMessage = "审批人必须是同一分公司范围内的人"; await OnGetAsync(); return Page(); }
+            { ErrorMessage = "审批人必须是同一分公司范围内的人"; return RedirectToPage(); }
             if (SelectedDeptIds.Any(id => !visibleIds!.Contains(id)))
-            { ErrorMessage = "只能勾选自己管理范围内的部门"; await OnGetAsync(); return Page(); }
+            { ErrorMessage = "只能勾选自己管理范围内的部门"; return RedirectToPage(); }
+            // 不关联任何部门的考勤组会被当成"全公司通用组"：所有分公司都能看到、拿去给员工挂组，建组的人自己之后
+            // 却改不了（通用组只有总部能写）。所以分公司管理员必须至少勾选一个本分公司的部门（2026-09-24 第 11 轮审查）
+            if (SelectedDeptIds.Count == 0)
+            { ErrorMessage = "请至少勾选一个本分公司的部门（不关联部门的通用考勤组只有总部能建）"; return RedirectToPage(); }
         }
 
         try

@@ -339,7 +339,10 @@ app.UseExceptionHandler(errApp => errApp.Run(async context =>
 
     var (status, message) = error switch
     {
-        InvalidOperationException => (StatusCodes.Status400BadRequest, error.Message),
+        // 只有"本程序自己的代码"抛出的 InvalidOperationException 才是给用户看的业务提示；EF Core/框架内部也会抛这个类型
+        // （跟踪冲突、查询翻译失败……），原文可能带出内部细节，按未预期异常走下面的 500 + 通用文案（2026-09-24 第 11 轮审查）
+        InvalidOperationException when error.TargetSite?.DeclaringType?.Assembly == typeof(Program).Assembly
+            => (StatusCodes.Status400BadRequest, error.Message),
         KeyNotFoundException      => (StatusCodes.Status404NotFound, error.Message),
         _ => (StatusCodes.Status500InternalServerError,
               isDev && error is not null ? error.ToString() : "服务器内部错误，请稍后重试或联系管理员")

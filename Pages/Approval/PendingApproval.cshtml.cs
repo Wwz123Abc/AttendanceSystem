@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Services.Interfaces;
@@ -8,7 +9,8 @@ namespace AttendanceSystem.Pages.Approval;
 
 /// <summary>待我审批页：显示待办列表和详情，处理通过/驳回。需审批权限。</summary>
 [Authorize(Policy = "ApprovePolicy")]
-public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeService deptScopeService) : AppPageModel
+public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeService deptScopeService,
+    AttendanceDbContext db, ILogger<PendingApprovalModel> logger) : AppPageModel
 {
     public List<ApprovalRequestDto> PendingItems  { get; set; } = [];   // 待我审批的列表
     public List<ApprovalRequestDto> HandledItems  { get; set; } = [];   // 我已经审批过的记录
@@ -100,13 +102,23 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
         var okCount = 0;
         foreach (var id in ids)
         {
-            var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
+            try
             {
-                ApprovalRequestId = id,
-                IsApproved        = approved,
-                Comment           = Comment
-            });
-            if (ok) okCount++;
+                var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
+                {
+                    ApprovalRequestId = id,
+                    IsApproved        = approved,
+                    Comment           = Comment
+                });
+                if (ok) okCount++;
+            }
+            catch (Exception ex)
+            {
+                // 某一条写回考勤时抛异常（比如跟考勤机同步同时插入同一天记录撞唯一索引）不能中断整批：
+                // 记日志、清掉这条留在 DbContext 里没保存成功的改动（免得拖累下一条的保存），继续处理后面的
+                logger.LogError(ex, "批量审批失败，ApprovalRequestId={Id}", id);
+                db.ChangeTracker.Clear();
+            }
         }
 
         Message   = $"批量{(approved ? "通过" : "驳回")}完成：成功 {okCount} / {ids.Count} 条";

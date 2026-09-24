@@ -33,7 +33,7 @@
                 @if (!string.IsNullOrEmpty(Model.CurrentPhotoUrl))
                 {
                     <img src="@Model.CurrentPhotoUrl" class="img-fluid rounded" style="max-height:280px" alt="人脸参考照片" />
-                    <p class="text-muted small mt-2 mb-0">已录入，重新上传会替换这张</p>
+                    <p class="text-muted small mt-2 mb-0">已录入。如需更换，请联系管理员清除后重新录入</p>
                 }
                 else
                 {
@@ -54,6 +54,14 @@
                 <p class="text-muted small">
                     这张照片会作为"远程打卡"时人脸识别的比对基准，请正对镜头、光线充足、五官清晰，不要戴口罩/墨镜。
                 </p>
+                @if (!string.IsNullOrEmpty(Model.CurrentPhotoUrl))
+                {
+                    <div class="alert alert-info mb-0">
+                        <i class="bi bi-info-circle me-1"></i>你已经录入过人脸信息，不能自己更换。如需更换（比如换了发型、照片拍得不好），请联系管理员在「员工管理」里清除后重新录入。
+                    </div>
+                }
+                else
+                {
                 <form method="post" enctype="multipart/form-data">
                     <div class="mb-3">
                         <label class="form-label fw-semibold">人脸照片</label>
@@ -70,6 +78,7 @@
                         <i class="bi bi-upload me-2"></i>提交
                     </button>
                 </form>
+                }
             </div>
         </div>
     </div>

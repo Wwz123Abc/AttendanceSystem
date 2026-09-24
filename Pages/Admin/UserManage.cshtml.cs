@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -259,7 +260,7 @@ public class UserManageModel(
             const string initialPwd = "123456";
             await userService.CreateUserAsync(newUser, initialPwd);
             await userService.SetUserDevicesAsync(newUser.Id, DeviceIds);
-            await ApplyScopeAfterSaveAsync(newUser.Id);
+            await ApplyScopeAfterSaveAsync(newUser.Id, isCreate: true);
 
             // 如果这次新建是在确认某条扫码登记，顺带把那条登记标记为「已确认」，关联上新建好的账号
             if (RegistrationId.HasValue)
@@ -328,7 +329,7 @@ public class UserManageModel(
             {
                 if (wroteNewPhoto) DeleteIdCardFile(oldPhotoUrl);
                 await userService.SetUserDevicesAsync(EditUserId, DeviceIds);
-                await ApplyScopeAfterSaveAsync(EditUserId);
+                await ApplyScopeAfterSaveAsync(EditUserId, isCreate: false);
             }
             else if (wroteNewPhoto)
             {
@@ -433,6 +434,33 @@ public class UserManageModel(
         {
             logger.LogError(ex, "删除员工失败，Id={Id}", id);
             ErrorMessage = "删除失败，请稍后重试";
+        }
+        await ReloadAsync(); return Page();
+    }
+
+    /// <summary>清除某员工的人脸参考照（员工录入后不能自己更换，要换由管理员清除后让员工重新录入）。</summary>
+    public async Task<IActionResult> OnPostClearFacePhotoAsync(int id)
+    {
+        try
+        {
+            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            await EnsureCanManageTargetAsync(id);
+            var target = await db.Users.FindAsync(id) ?? throw new InvalidOperationException("员工不存在");
+            var oldUrl = target.FaceReferencePhotoUrl;
+            if (string.IsNullOrEmpty(oldUrl)) throw new InvalidOperationException("该员工还没有录入人脸照片");
+            target.FaceReferencePhotoUrl = null;
+            target.UpdatedAt = DateTime.Now;
+            await db.SaveChangesAsync();   // 先写库、成功了再删文件：写库失败时文件还在，库里也没被清掉，不会出现"库里指着一个已删除的文件"
+            PrivateFileStorage.DeleteFaceReferenceFiles(env, oldUrl, logger);
+            logger.LogInformation("管理员 {OperatorNo} 清除了员工 {EmployeeNo} 的人脸参考照",
+                User.FindFirstValue(ClaimTypes.Name) ?? "?", target.EmployeeNo);
+            SuccessMessage = $"已清除 {target.RealName} 的人脸照片，请通知其重新到「人脸信息」页录入";
+        }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "清除人脸照片失败，Id={Id}", id);
+            ErrorMessage = "操作失败，请稍后重试";
         }
         await ReloadAsync(); return Page();
     }
@@ -544,13 +572,24 @@ public class UserManageModel(
     /// ScopedDepartmentId 会一直是 null，而 null 在 DeptScopeService 里的语义是"不受限"——
     /// 等于一个分公司账号凭空建出了一个能看/管全公司数据（含重置任意人密码）的文员账号。
     /// </summary>
-    private async Task ApplyScopeAfterSaveAsync(int userId)
+    private async Task ApplyScopeAfterSaveAsync(int userId, bool isCreate)
     {
         var cu = HttpContext.GetCurrentUser()!;
         if (IsHqSuperAdmin(cu))
+        {
             await userService.SetScopedDepartmentAsync(userId, ScopedDeptId);
-        else
-            await userService.SetScopedDepartmentAsync(userId, cu.ScopedDepartmentId);
+            return;
+        }
+        // 编辑（不是新建）时：对方原来已经有管理范围就保持不变——不能无条件改成"我自己的范围"，
+        // 不然分公司管理员编辑下级分公司的文员（范围 Y ⊂ X）会把对方范围悄悄扩大成整个 X
+        // （2026-09-24 第 11 轮审查）。对方范围为空（比如刚从主管改成文员）才需要钳到我的范围，堵提权链。
+        if (!isCreate)
+        {
+            var currentScope = await db.Users.Where(u => u.Id == userId)
+                .Select(u => u.ScopedDepartmentId).FirstOrDefaultAsync();
+            if (currentScope.HasValue) return;
+        }
+        await userService.SetScopedDepartmentAsync(userId, cu.ScopedDepartmentId);
     }
 
     /// <summary>某个考勤组是否在当前登录者的管理范围内可用（口径跟 ShiftManage/GroupManage 页一致）：

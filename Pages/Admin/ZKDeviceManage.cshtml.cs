@@ -50,6 +50,8 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
             if (snTaken)
                 throw new InvalidOperationException($"序列号 {sn} 已经被别的设备使用");
 
+            string? renamedFromSn = null;   // 编辑时如果改了 SN，记下旧 SN，保存后把排队的命令一起改过去
+
             if (Id == 0)   // 新增
             {
                 // 受限管理员：设备归属部门强制收敛到自己的范围（哪怕前端下拉框已经只显示自己范围内的部门，
@@ -86,6 +88,7 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
                     // 只有不受限的总部管理员才能通过表单实际改动归属部门。
                     var wasActive = d.IsActive;
                     var oldSn     = d.SN;
+                    if (!string.Equals(oldSn, sn, StringComparison.Ordinal)) renamedFromSn = oldSn;
                     d.SN           = sn;
                     d.Name         = name;
                     d.IsActive     = IsActive;
@@ -115,6 +118,11 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
                 }
             }
             if (db.ChangeTracker.HasChanges()) await db.SaveChangesAsync();
+            // 改了设备 SN：按旧 SN 排队、还没确认执行的下发命令要跟着改成新 SN，不然它们变成孤儿，永远没有设备来取。
+            // 放在保存设备之后做（SN 撞了唯一索引时上面就已经抛异常，不会把命令挪走）
+            if (renamedFromSn is not null)
+                await db.ZKDeviceCommands.Where(c => c.SN == renamedFromSn && !c.Confirmed)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(c => c.SN, sn));
         }
         // 只把自己抛出来的中文校验提示给管理员看；其余（数据库报错等）记日志 + 通用文案，不露出原始报错文本
         catch (InvalidOperationException ex) { ErrorMessage = $"保存失败：{ex.Message}"; }
