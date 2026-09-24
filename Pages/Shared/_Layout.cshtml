@@ -104,6 +104,36 @@
             .main-content { padding: 1rem 1rem 1.5rem; }
             .topbar { padding: .6rem .9rem; }
             .notif-dropdown { width: min(340px, 92vw); right: -.5rem; }
+
+            /* 左右两栏的页面（员工管理、员工信息：左边部门树/筛选，右边列表/资料）：窄屏下改成上下排，
+               左栏占满一行；左栏里的长列表限制高度，不然要滑很久才能看到右边的内容 */
+            .split-layout { flex-direction: column; }
+            .split-layout > .split-side { width: 100% !important; }
+            .split-layout > .split-side .list-group { max-height: 32vh !important; }
+        }
+
+        /* 表格在手机上"一行变一张卡片"：给 <table> 加 table-stack，每个 <td> 写 data-label="字段名"，
+           窄屏下表头隐藏、每格左边显示字段名。这样多列的表不用左右拖动就能看全。
+           不需要显示的列加 class="stack-hide"；操作按钮那一格加 class="stack-actions"，独占一行。 */
+        @@media (max-width: 767.98px) {
+            .table-stack, .table-stack tbody, .table-stack tr, .table-stack td { display: block; width: 100%; }
+            .table-stack thead { display: block; }
+            .table-stack thead tr { display: none; }
+            .table-stack thead tr:has(.stack-checkall) { display: block; padding: .4rem .9rem; }
+            .table-stack thead th { display: none; border: 0; padding: 0; }
+            .table-stack thead th.stack-checkall { display: block; width: auto !important; background: transparent !important; }
+            .table-stack thead th.stack-checkall::after { content: " 全选"; font-weight: 400; color: var(--text-3); }
+            .table-stack tbody tr { position: relative; border-top: 1px solid var(--border-2); padding: .6rem .9rem; }
+            .table-stack td.stack-check { position: absolute; top: .6rem; right: .9rem; width: auto; }
+            .table-stack tbody tr:hover > * { background: transparent; }
+            .table-stack td { border: 0 !important; padding: .18rem 0 !important; display: flex; align-items: center; gap: .75rem; background: transparent !important; }
+            .table-stack td[data-label]::before {
+                content: attr(data-label); flex: 0 0 4.2rem; color: var(--text-3); font-size: .8rem;
+            }
+            .table-stack td.stack-hide { display: none; }
+            .table-stack td.stack-actions { padding-top: .5rem !important; flex-wrap: wrap; }
+            .table-stack td.stack-actions > * { flex-wrap: wrap !important; }
+            .table-stack td.empty-state { display: block; }
         }
 
         /* ── 顶栏 ─────────────────────────────────────────────────────── */

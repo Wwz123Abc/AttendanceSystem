@@ -66,10 +66,10 @@
 <div class="tab-content">
 <div class="tab-pane fade show active" id="tabEmployeeList">
 
-<div class="d-flex gap-3 align-items-start">
+<div class="d-flex gap-3 align-items-start split-layout">
 
     <!-- ── 左侧：部门筛选树 ────────────────────────────────────────────── -->
-    <div class="card" style="width:260px;flex-shrink:0">
+    <div class="card split-side" style="width:260px;flex-shrink:0">
         <div class="card-header d-flex justify-content-between align-items-center py-2">
             <span><i class="bi bi-diagram-3 me-1"></i>部门</span>
             <a href="/Admin/DepartmentManage" class="btn btn-outline-primary btn-sm py-0 px-2" title="前往部门管理">
@@ -130,7 +130,7 @@
                     @if (!string.IsNullOrEmpty(Model.RoleFilter)) { <input type="hidden" name="role" value="@Model.RoleFilter" /> }
                     <input type="text" name="keyword" value="@Model.Keyword" class="form-control form-control-sm"
                            style="max-width:200px" placeholder="姓名 / 工号" />
-                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i>搜索</button>
+                    <button type="submit" class="btn btn-primary btn-sm text-nowrap"><i class="bi bi-search me-1"></i>搜索</button>
                     @if (!string.IsNullOrEmpty(Model.Keyword))
                     {
                         <a href="@Q(Model.SelectedDeptId, Model.Unassigned, Model.StatusFilter, null)" class="btn btn-outline-secondary btn-sm">清除</a>
@@ -167,7 +167,7 @@
         </div>
 
         <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                 <span>员工列表（共 @Model.Total 人）</span>
                 <div class="d-flex gap-2">
                     <button class="btn btn-outline-success btn-sm" onclick="doBatch('BatchActivate','确认批量启用所选员工？（黑名单员工会被跳过）')">批量启用</button>
@@ -176,10 +176,10 @@
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
-                    <table class="table table-hover mb-0 align-middle">
+                    <table class="table table-hover mb-0 align-middle table-stack">
                         <thead>
                             <tr>
-                                <th style="width:40px"><input type="checkbox" id="checkAll" onclick="toggleAll(this)" /></th>
+                                <th style="width:40px" class="stack-checkall"><input type="checkbox" id="checkAll" onclick="toggleAll(this)" /></th>
                                 <th>姓名</th><th>工号</th><th>部门</th><th>角色</th>
                                 <th>用工性质</th><th>合同公司</th>
                                 <th>手机</th><th>状态</th><th>操作</th>
@@ -193,22 +193,22 @@
                             @foreach (var u in Model.Users)
                             {
                                 <tr>
-                                    <td><input type="checkbox" class="row-check" value="@u.Id" /></td>
-                                    <td>@u.RealName</td>
-                                    <td class="fw-semibold">@u.EmployeeNo</td>
-                                    <td class="small">@(u.Department?.DeptName ?? "—")</td>
-                                    <td><span class="badge bg-secondary">@u.Role.ToDisplayName()</span></td>
-                                    <td>
+                                    <td class="stack-check"><input type="checkbox" class="row-check" value="@u.Id" /></td>
+                                    <td data-label="姓名">@u.RealName</td>
+                                    <td data-label="工号" class="fw-semibold">@u.EmployeeNo</td>
+                                    <td data-label="部门" class="small">@(u.Department?.DeptName ?? "—")</td>
+                                    <td data-label="角色"><span class="badge bg-secondary">@u.Role.ToDisplayName()</span></td>
+                                    <td class="stack-hide">
                                         @if (u.Role is UserRole.Admin or UserRole.Clerk)
                                         { <span class="badge bg-primary">正式工</span> }
                                         else
                                         { <span class="badge bg-light text-muted">临时工</span> }
                                     </td>
-                                    <td class="small">@(u.ContractCompany ?? "—")</td>
-                                    <td class="small">
+                                    <td class="small stack-hide">@(u.ContractCompany ?? "—")</td>
+                                    <td data-label="手机" class="small">
                                         @u.Phone
                                     </td>
-                                    <td>
+                                    <td data-label="状态">
                                         @switch (u.Status)
                                         {
                                             case EmployeeStatus.Active:      <span class="badge bg-success">在职</span>      break;
@@ -216,7 +216,7 @@
                                             case EmployeeStatus.Blacklisted: <span class="badge bg-dark">黑名单</span>       break;
                                         }
                                     </td>
-                                    <td>
+                                    <td class="stack-actions">
                                         <div class="d-flex flex-nowrap align-items-center gap-1">
                                             <a class="btn btn-outline-info btn-sm" href="/Admin/EmployeeInfo?id=@u.Id" title="查看该员工的全部资料">
                                                 <i class="bi bi-person-lines-fill"></i> 详情

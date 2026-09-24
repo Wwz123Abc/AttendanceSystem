@@ -27,7 +27,7 @@
     <div class="card-header">设备列表（共 @Model.Devices.Count 台）</div>
     <div class="card-body p-0">
         <div class="table-responsive">
-            <table class="table table-hover mb-0">
+            <table class="table table-hover mb-0 table-stack">
                 <thead>
                     <tr>
                         <th>序列号 (SN)</th><th>别名</th><th>归属部门</th><th>状态</th><th>最近在线</th><th>操作</th>
@@ -42,10 +42,10 @@
                     {
                         var online = d.LastSeenAt.HasValue && d.LastSeenAt.Value > DateTime.Now.AddMinutes(-2);
                         <tr>
-                            <td class="fw-semibold">@d.SN</td>
-                            <td>@(d.Name ?? "—")</td>
-                            <td>@(d.Department?.DeptName ?? "—")</td>
-                            <td>
+                            <td data-label="序列号" class="fw-semibold">@d.SN</td>
+                            <td data-label="别名">@(d.Name ?? "—")</td>
+                            <td data-label="归属部门">@(d.Department?.DeptName ?? "—")</td>
+                            <td data-label="状态">
                                 @if (d.IsActive)
                                 {
                                     <span class="badge bg-success">启用</span>
@@ -59,8 +59,8 @@
                                     <span class="badge bg-info ms-1">在线</span>
                                 }
                             </td>
-                            <td class="small text-muted">@(d.LastSeenAt?.ToString("MM-dd HH:mm:ss") ?? "从未通信")</td>
-                            <td>
+                            <td data-label="最近在线" class="small text-muted">@(d.LastSeenAt?.ToString("MM-dd HH:mm:ss") ?? "从未通信")</td>
+                            <td class="stack-actions">
                                 <button type="button" class="btn btn-outline-primary btn-sm"
                                         onclick="openEdit(@d.Id, '@d.SN', '@(d.Name ?? "")', @(d.IsActive ? "true" : "false"), @(d.DepartmentId?.ToString() ?? "null"))">
                                     <i class="bi bi-pencil"></i>编辑
