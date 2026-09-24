@@ -636,7 +636,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 应出勤天数：跟 GenerateMonthlySummaryAsync 同一个口径（同一个 CountExpectedWorkdays），
             // 入职日期晚于周期开始的从入职日起算；没填入职日期的按整个周期算
             var effStart = user.HireDate is { } hireDate && hireDate > start ? hireDate : start;
-            row.ExpectedWorkdays = effStart > end ? 0
+            // 免考勤的人不需要打卡，没有"应出勤"这回事（不然会显示"应出勤 22 天 / 出勤 0 天"，像是整月没来）
+            row.ExpectedWorkdays = user.IsAttendanceExempt || effStart > end ? 0
                 : CountExpectedWorkdays(effStart, end, user.AttendanceGroupId, myHolidays,
                     assignByDate.ToDictionary(a => a.Key, a => a.Value.ShiftSchedule));
 
@@ -764,7 +765,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 应出勤天数：从“月初”和“该员工入职日”里取较晚的一天开始算，
             // 避免月中入职的人被算成全月应出勤、导致出勤率虚低。
             var effStart = user.HireDate is { } hd && hd > start ? hd : start;
-            var expected = effStart > end ? 0 : CountExpectedWorkdays(effStart, end, user.AttendanceGroupId, holidaysInRange, shiftByDate);
+            var expected = user.IsAttendanceExempt || effStart > end ? 0 : CountExpectedWorkdays(effStart, end, user.AttendanceGroupId, holidaysInRange, shiftByDate);
 
             // 取出已有的汇总，没有就新建
             if (!existingSummaries.TryGetValue(user.Id, out var summary))
@@ -880,7 +881,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     public async Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null)
     {
         var today   = DateOnly.FromDateTime(DateTime.Today);
-        var userIds = await BuildUserIdQueryAsync(null, groupId, deptIds);
+        var userIds = await BuildUserIdQueryAsync(null, groupId, deptIds, excludeExempt: true);
         var records = await db.AttendanceRecords
             .Where(r => r.WorkDate == today && userIds.Contains(r.UserId))
             .ToListAsync();
@@ -946,7 +947,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     public async Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null)
     {
         var today   = DateOnly.FromDateTime(DateTime.Today);
-        var userIds = await BuildUserIdQueryAsync(null, groupId, deptIds);
+        var userIds = await BuildUserIdQueryAsync(null, groupId, deptIds, excludeExempt: true);   // 必须和 GetTodayStatsAsync 同一批人
 
         var users = await db.Users.Include(u => u.Department)
             .Where(u => userIds.Contains(u.Id))
@@ -1831,10 +1832,16 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         return count;
     }
 
-    /// <summary>按部门/考勤组圈出在职员工的编号列表。</summary>
-    private async Task<List<int>> BuildUserIdQueryAsync(int? deptId, int? groupId, HashSet<int>? deptIds = null)
+    /// <summary>
+    /// 按部门/考勤组圈出在职员工的编号列表。
+    /// excludeExempt=true 时再排掉勾了"免考勤"的人：看板的总人数/未打卡只应该反映"需要打卡的人"，
+    /// 不然管理员、文员这类不打卡的人每天都会被算进"未打卡"，下钻名单里也全是他们（2026-09-24 补漏）。
+    /// 查"某段时间的考勤记录"这种场景不排——免考勤的人如果自己打了卡，记录照样该看到。
+    /// </summary>
+    private async Task<List<int>> BuildUserIdQueryAsync(int? deptId, int? groupId, HashSet<int>? deptIds = null, bool excludeExempt = false)
     {
         var q = db.Users.Where(u => u.IsActive).AsQueryable();
+        if (excludeExempt) q = q.Where(u => !u.IsAttendanceExempt);
         if (deptId.HasValue)  q = q.Where(u => u.DepartmentId == deptId.Value);
         if (groupId.HasValue) q = q.Where(u => u.AttendanceGroupId == groupId.Value);
         // 分公司管理员范围过滤：deptIds 是"自己范围内的部门 id 全集"（含下级部门），跟上面 deptId 的

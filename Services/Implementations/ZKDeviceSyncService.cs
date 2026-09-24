@@ -226,6 +226,11 @@ public class ZKDeviceSyncService(
                     record.EarlyLeaveMinutes = earlyMin;
                 if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
                     record.AttendanceStatus = status;
+                // 设备离线/下班卡晚到：23:55 的后台任务已经把这天标成"旷工"，之后才补传上来一张下班卡，而这天没有上班卡。
+                // 有打卡为证，人是到岗了，不该停在"旷工"——跟后台任务对"只有下班卡"的处理保持一致，记"未打卡（缺上班卡）"。
+                // 旷工只允许被上班卡纠正回正常/迟到，所以上面的白名单里不含 Absent，这里单独处理这一种情况。
+                else if (record.ClockInTime is null && record.AttendanceStatus == AttendanceStatus.Absent)
+                    record.AttendanceStatus = AttendanceStatus.NotPunched;
             }
 
             record.Remark    = "熵基考勤机同步";

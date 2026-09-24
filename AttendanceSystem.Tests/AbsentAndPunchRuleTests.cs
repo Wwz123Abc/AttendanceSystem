@@ -212,4 +212,87 @@ public class AbsentAndPunchRuleTests : IDisposable
         Assert.Equal(0, report.Rows.Single(r => r.EmployeeNo == "A2").AbsentDays);
         Assert.Equal(3, report.Rows.Single(r => r.EmployeeNo == "N3").AbsentDays);
     }
+
+    // ── 2026-09-24 审查补漏：④ 下班卡晚到不再停在旷工；⑤ 免考勤进看板口径、应出勤天数为 0 ─────────
+
+    [Fact]
+    public async Task 设备同步_23点55已被标旷工_之后补传的下班卡_旷工改成未打卡()
+    {
+        var (uid, _) = SeedDeviceWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, AttendanceStatus = AttendanceStatus.Absent });
+            db.SaveChanges();
+        }
+        using (var db = CreateContext())
+            await SyncSvc(db).ProcessAttLogAsync("SN1", [new ZKAttLogRow("E1", Tue.ToDateTime(new TimeOnly(22, 1)), 0, 15)]);
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Null(rec.ClockInTime);
+        Assert.Equal(AttendanceStatus.NotPunched, rec.AttendanceStatus);   // 以前一直停在"旷工"
+    }
+
+    [Fact]
+    public async Task 设备同步_旷工的人补传了上班卡_照旧被纠正回来_不受影响()
+    {
+        var (uid, _) = SeedDeviceWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, AttendanceStatus = AttendanceStatus.Absent });
+            db.SaveChanges();
+        }
+        using (var db = CreateContext())
+            await SyncSvc(db).ProcessAttLogAsync("SN1", [new ZKAttLogRow("E1", Tue.ToDateTime(new TimeOnly(8, 25)), 0, 15)]);
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(AttendanceStatus.Normal, rec.AttendanceStatus);
+    }
+
+    [Fact]
+    public async Task 看板_免考勤的人不进总人数和未打卡名单()
+    {
+        int normalId;
+        using (var db = CreateContext())
+        {
+            var exempt = U("A3", "管理员丙", exempt: true); var normal = U("N4", "员工戊");
+            db.Users.AddRange(exempt, normal);
+            db.SaveChanges();
+            normalId = normal.Id;
+        }
+
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var stats = await svc.GetTodayStatsAsync();
+        Assert.Equal(1, stats.TotalEmployees);
+        Assert.Equal(1, stats.NotPunchedCount);
+
+        var list = await svc.GetTodayStatsDetailAsync("notpunched");
+        Assert.Equal([normalId], list.Select(r => r.UserId).ToList());          // 名单里只有需要打卡的人，且条数 = 卡片数字
+        Assert.Equal(stats.NotPunchedCount, list.Count);
+        Assert.Single(await svc.GetTodayStatsDetailAsync("total"));
+    }
+
+    [Fact]
+    public async Task 应出勤天数_免考勤的人为0_普通人照常算_模板表和月度汇总一致()
+    {
+        using (var db = CreateContext())
+        {
+            db.Users.AddRange(U("A4", "管理员丁", exempt: true), U("N5", "员工己"));
+            db.SaveChanges();
+        }
+
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var report = await svc.GenerateTemplateReportAsync(new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30), null);
+        Assert.Equal(0, report.Rows.Single(r => r.EmployeeNo == "A4").ExpectedWorkdays);
+        Assert.True(report.Rows.Single(r => r.EmployeeNo == "N5").ExpectedWorkdays > 0);
+
+        await svc.GenerateMonthlySummaryAsync(2026, 9, null);
+        using var check = CreateContext();
+        var sums = await check.MonthlyAttendanceSummaries.Include(m => m.User).ToListAsync();
+        Assert.Equal(0, sums.Single(m => m.User.EmployeeNo == "A4").ExpectedWorkdays);
+        Assert.Equal(report.Rows.Single(r => r.EmployeeNo == "N5").ExpectedWorkdays, sums.Single(m => m.User.EmployeeNo == "N5").ExpectedWorkdays);
+    }
 }
