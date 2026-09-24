@@ -197,6 +197,13 @@
                             <label class="form-label fw-semibold">
                                 打卡地点 <small class="text-muted fw-normal">（可配多个，员工落在其中任意一个的有效半径内即算打卡成功）</small>
                             </label>
+                            <div id="locationSearchBar" class="input-group input-group-sm mb-2" style="display:none">
+                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                <input type="search" id="locationSearch" class="form-control" autocomplete="off"
+                                       placeholder="按地点名称搜索已添加的地点" oninput="filterLocationRows()" />
+                                <span class="input-group-text text-muted" id="locationSearchCount"></span>
+                            </div>
+                            <div id="locationNoMatch" class="text-muted small mb-2" style="display:none">没有名称匹配的地点</div>
                             <div id="locationRows"></div>
                             <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addLocationRow()">
                                 <i class="bi bi-plus-lg me-1"></i>添加打卡地点
@@ -419,11 +426,33 @@ function addLocationRow(data) {
     div.querySelector('[data-field="Radius"]').value = data.radius ?? 500;
     document.getElementById('locationRows').appendChild(div);
     renumberLocationRows();
+    // 新加的地点必须马上看得见，所以清掉搜索条件（否则新行会因为名称是空的被藏起来）
+    const box = document.getElementById('locationSearch');
+    if (box) box.value = '';
+    filterLocationRows();
 }
 
 function removeLocationRow(btn) {
     btn.closest('.location-row').remove();
     renumberLocationRows();
+    filterLocationRows();
+}
+
+// 按名称搜索已添加的地点：只是把不匹配的行藏起来（display:none），行还在表单里，
+// 所以保存时所有地点照常提交，搜索不会造成漏存；行的编号也不受影响。
+function filterLocationRows() {
+    const rows = document.querySelectorAll('#locationRows .location-row');
+    const kw = (document.getElementById('locationSearch').value || '').trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(row => {
+        const name = (row.querySelector('[data-field="Name"]').value || '').toLowerCase();
+        const hit = !kw || name.includes(kw);
+        row.style.display = hit ? '' : 'none';
+        if (hit) shown++;
+    });
+    document.getElementById('locationSearchBar').style.display = rows.length ? 'flex' : 'none';
+    document.getElementById('locationSearchCount').textContent = kw ? `${shown} / ${rows.length}` : `共 ${rows.length} 个`;
+    document.getElementById('locationNoMatch').style.display = (kw && rows.length && !shown) ? 'block' : 'none';
 }
 
 // 重新按当前 DOM 顺序，把每一行的 name 属性编成 Locations[0]、Locations[1]……连续序号，
@@ -442,6 +471,8 @@ function renumberLocationRows() {
 function setLocations(list) {
     document.getElementById('locationRows').innerHTML = '';
     list.forEach(l => addLocationRow({ name: l.name, lat: l.lat, lng: l.lng, radius: l.radius }));
+    document.getElementById('locationSearch').value = '';
+    filterLocationRows();
 }
 
 // "获取当前位置"按钮：直接用管理员当前所在的浏览器定位，自动填进这一行的经纬度框
