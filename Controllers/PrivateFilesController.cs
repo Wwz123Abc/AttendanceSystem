@@ -44,9 +44,12 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
         };
         if (!allowed) return Forbid();
 
-        var root     = PrivateFileStorage.GetRoot(env);
+        // 文件实际存放在 {PrivateUploads}/uploads/{分类}/...（各处上传代码都是这样落盘的，数据库里存的 URL 也带
+        // "/uploads/" 前缀）；而路由前缀 "uploads" 已经被路由吃掉了，relativePath 只剩 "{分类}/..."，
+        // 所以这里必须把 "uploads" 这一层补回来，否则所有身份证照/人脸照/附件都会 404。
+        var root     = Path.GetFullPath(Path.Combine(PrivateFileStorage.GetRoot(env), "uploads"));
         var fullPath = Path.GetFullPath(Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return Forbid();   // 防路径穿越
+        if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return Forbid();   // 防路径穿越
         if (!System.IO.File.Exists(fullPath)) return NotFound();
 
         var contentType = Path.GetExtension(fullPath).ToLowerInvariant() switch
