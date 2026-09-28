@@ -32,6 +32,9 @@ public class FaceEnrollModel(
     /// <summary>当前已录入的参考照片地址，没录入过则为空。</summary>
     public string? CurrentPhotoUrl { get; set; }
 
+    /// <summary>参考照片是不是真的可用（有地址、文件也还在）。地址在但文件丢了不算，允许重新录入。</summary>
+    public bool HasUsablePhoto { get; set; }
+
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage   { get; set; }
 
@@ -39,6 +42,7 @@ public class FaceEnrollModel(
     {
         CurrentPhotoUrl = await db.Users.Where(u => u.Id == CurrentUserId)
             .Select(u => u.FaceReferencePhotoUrl).FirstOrDefaultAsync();
+        HasUsablePhoto = PrivateFileStorage.FaceReferenceFileExists(env, CurrentPhotoUrl);
     }
 
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)
@@ -56,7 +60,7 @@ public class FaceEnrollModel(
             // 录入过就不能自己再换：参考照是远程打卡防代打的唯一依据，员工要是能随时自己换，
             // 把它换成同事的脸，同事就能用自己的脸替他打卡（1:1 比对只能证明"镜头前的人=参考照上的人"）。
             // 确实要换（换脸、拍得不好）由管理员在「员工管理」里"清除人脸照片"后重新录入（2026-09-24 第 11 轮审查，用户确认）
-            if (!string.IsNullOrEmpty(user.FaceReferencePhotoUrl))
+            if (PrivateFileStorage.FaceReferenceFileExists(env, user.FaceReferencePhotoUrl))   // 地址在、文件也在才算"录入过"；文件丢了的允许重录
                 throw new InvalidOperationException("已经录入过人脸照片，如需更换请联系管理员在「员工管理」里清除后重新录入");
 
             // 顺序：先写新文件（不删旧的）→ 写库 → 成功了才删旧文件；写库失败就把新文件回收掉。
@@ -89,6 +93,7 @@ public class FaceEnrollModel(
         }
         CurrentPhotoUrl = await db.Users.Where(u => u.Id == CurrentUserId)
             .Select(u => u.FaceReferencePhotoUrl).FirstOrDefaultAsync();
+        HasUsablePhoto = PrivateFileStorage.FaceReferenceFileExists(env, CurrentPhotoUrl);
         return Page();
     }
 

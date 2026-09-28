@@ -11,6 +11,18 @@ public static class PrivateFileStorage
 {
     public static string GetRoot(IWebHostEnvironment env) => Path.Combine(env.ContentRootPath, "PrivateUploads");
 
+    /// <summary>人脸参考照的文件还在不在（留档版或比对用的瘦身版任意一个在就算在）。数据库里记着地址但文件已经丢了，
+    /// 这个员工的远程打卡就用不了，需要让他能重新录入。</summary>
+    public static bool FaceReferenceFileExists(IWebHostEnvironment env, string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+        var root = Path.GetFullPath(GetRoot(env));
+        var path = Path.GetFullPath(Path.Combine(root, url.TrimStart('/').Replace('/', Path.DirectorySeparatorChar)));
+        if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
+        var verifyPath = Path.Combine(Path.GetDirectoryName(path)!, $"{Path.GetFileNameWithoutExtension(path)}_verify.jpg");
+        return File.Exists(path) || File.Exists(verifyPath);
+    }
+
     /// <summary>
     /// 删掉人脸参考照的文件：留档版，加上同目录下比对用的 "_verify.jpg" 瘦身版。只删 PrivateUploads 目录里的文件
     /// （路径穿越直接忽略）；文件不存在不算错。删除失败只记日志、不抛异常——清理文件不能盖过调用方本来的结果。

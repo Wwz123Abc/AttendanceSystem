@@ -388,15 +388,20 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     public static bool IsWithinNightCarryOver(DateOnly shiftDate, ShiftSchedule shift, DateTime punchTime) =>
         punchTime <= shiftDate.ToDateTime(shift.WorkEndTime).AddDays(1).AddHours(NightShiftCarryOverHours);
 
-    public async Task<AttendanceRecordDto?> GetTodayAttendanceAsync(int userId)
+    public async Task<AttendanceRecordDto?> GetTodayAttendanceAsync(int userId, DateTime? now = null)
     {
-        var today  = DateOnly.FromDateTime(DateTime.Today);
+        var nowTime = now ?? DateTime.Now;   // now 只给测试用：可以指定"现在是几点"
+        var today  = DateOnly.FromDateTime(nowTime);
         var record = await db.AttendanceRecords
             .Include(r => r.User)
             .ThenInclude(u => u.Department)
             .FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == today);
 
-        if (record is null)
+        // 今天没有记录，或者只有一条"没有上班卡"的空记录（请假/出差/节假日审批会提前给未来的日子建记录）时，
+        // 都要看昨天的夜班是不是还没下班：夜班员工在请假/出差日的早上下班，如果只因为"今天有一条记录"就不再看昨天，
+        // 这张下班卡会被当成"今天的上班卡"（然后被"上班时间太早"拦下，或者记成错误的上班卡），昨天那班永远没有下班卡
+        // （2026-09-28 全项目审查发现）
+        if (record is null || record.ClockInTime is null)
         {
             var yesterday = today.AddDays(-1);
             var openYesterday = await db.AttendanceRecords
@@ -406,7 +411,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (openYesterday is not null)
             {
                 var yesterdayAssignment = await GetShiftAssignmentAsync(userId, yesterday);
-                if (yesterdayAssignment?.ShiftSchedule is { IsCrossDay: true } ys && IsWithinNightCarryOver(yesterday, ys, DateTime.Now))
+                if (yesterdayAssignment?.ShiftSchedule is { IsCrossDay: true } ys && IsWithinNightCarryOver(yesterday, ys, nowTime))
                     record = openYesterday;
             }
         }

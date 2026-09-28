@@ -23,7 +23,7 @@ public class FakeAttendanceService : IAttendanceService
     public Task<PunchResponseDto> PunchAsync(int userId, PunchRequestDto request, bool skipLocationCheck = false) => throw new NotImplementedException();
     public Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude, double? accuracyMeters = null) => throw new NotImplementedException();
     public Task<string?> GetClockInRejectionAsync(int userId, DateTime now) => throw new NotImplementedException();
-    public Task<AttendanceRecordDto?> GetTodayAttendanceAsync(int userId) => throw new NotImplementedException();
+    public Task<AttendanceRecordDto?> GetTodayAttendanceAsync(int userId, DateTime? now = null) => throw new NotImplementedException();
     public Task<List<AttendanceRecordDto>> GetPersonalAttendanceAsync(PersonalAttendanceQueryDto query) => throw new NotImplementedException();
     public Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto query, HashSet<int>? deptIds = null) => throw new NotImplementedException();
     public Task<MonthlySummaryDto?> GetMonthlySummaryAsync(int userId, int year, int month) => throw new NotImplementedException();

@@ -779,4 +779,94 @@ public class Round11FixTests : IDisposable
         }
         Assert.Null(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(17, 30)));
     }
+
+    // ── ⑭ 2026-09-28 全项目审查：夜班下班遇到"今天有空记录"、夜班延续段加班重叠、人脸文件丢失 ──────
+
+    [Fact]
+    public async Task 夜班下班_今天有一条请假的空记录_仍然接到昨天的夜班_不当成今天的上班卡()
+    {
+        var (uid, _) = SeedNightWorld();   // 周一 20:00 上班（没下班），周二 08:00 下班（跨天班次）
+        using (var db = CreateContext())
+        {
+            // 周二请了假：审批通过时提前给周二建了一条"请假"的空记录（没有上班卡）
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, AttendanceStatus = AttendanceStatus.OnLeave, LeaveHours = 11 });
+            db.SaveChanges();
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var rec = await svc.GetTodayAttendanceAsync(uid, Tue.ToDateTime(new TimeOnly(8, 40)));
+        Assert.NotNull(rec);
+        Assert.Equal(Mon, rec!.WorkDate);                       // 返回的是周一那条没下班的夜班记录，所以这次卡会被判成"下班"
+        Assert.NotNull(rec.ClockInTime);
+    }
+
+    [Fact]
+    public async Task 今天已经有上班卡_不再回头找昨天的记录()
+    {
+        var (uid, _) = SeedNightWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, ClockInTime = Tue.ToDateTime(new TimeOnly(19, 50)), AttendanceStatus = AttendanceStatus.Normal });
+            db.SaveChanges();
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var rec = await svc.GetTodayAttendanceAsync(uid, Tue.ToDateTime(new TimeOnly(20, 30)));
+        Assert.Equal(Tue, rec!.WorkDate);
+    }
+
+    [Theory]
+    [InlineData(0, 0, 4, 0, true)]      // 凌晨 00:00~04:00：压在昨晚夜班（20:00~次日 08:00）的正班时间里 → 拒绝
+    [InlineData(6, 0, 9, 0, true)]      // 早上 06:00~09:00：夜班 08:00 才下班，重叠 → 拒绝
+    [InlineData(8, 0, 10, 0, false)]    // 08:00 起（夜班已下班）：不重叠 → 可以
+    public async Task 夜班延续到今天凌晨的那一段_也不能填加班(int sh, int sm, int eh, int em, bool rejected)
+    {
+        var uid = SeedOvertimeWorld(restDays: "", NightShift());   // 20:00~次日 08:00 的夜班，先排在今天
+        using (var db = CreateContext())
+        {
+            // 改成只排了"昨天"的夜班；今天没排——填的是夜班延续到今天早上的那一段
+            var asg = db.ShiftAssignments.Single(x => x.UserId == uid);
+            asg.WorkDate = DateOnly.FromDateTime(DateTime.Today).AddDays(-1);
+            db.SaveChanges();
+        }
+        var ex = await TrySubmitOvertimeAsync(uid, new TimeOnly(sh, sm), new TimeOnly(eh, em));
+        if (rejected)
+        {
+            var ioe = Assert.IsType<InvalidOperationException>(ex);
+            Assert.StartsWith("加班时间不能和上班时间重叠", ioe.Message);
+            Assert.Contains("前一天", ioe.Message);
+        }
+        else Assert.Null(ex);
+    }
+
+    private sealed class TempEnv(string root) : Microsoft.AspNetCore.Hosting.IWebHostEnvironment
+    {
+        public string ApplicationName { get; set; } = "t";
+        public Microsoft.Extensions.FileProviders.IFileProvider WebRootFileProvider { get; set; } = null!;
+        public string WebRootPath { get; set; } = root;
+        public string EnvironmentName { get; set; } = "Development";
+        public string ContentRootPath { get; set; } = root;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
+    }
+
+    [Fact]
+    public void 人脸参考照文件是否还在_有文件才算_丢了允许重录_路径穿越不算()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "att-face-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(root, "PrivateUploads", "uploads", "faces", "E1");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var env = new TempEnv(root);
+            Assert.False(Helpers.PrivateFileStorage.FaceReferenceFileExists(env, null));
+            Assert.False(Helpers.PrivateFileStorage.FaceReferenceFileExists(env, "/uploads/faces/E1/ref.jpg"));   // 库里有地址、文件没有
+            File.WriteAllText(Path.Combine(dir, "ref.jpg"), "x");
+            Assert.True(Helpers.PrivateFileStorage.FaceReferenceFileExists(env, "/uploads/faces/E1/ref.jpg"));
+            File.Delete(Path.Combine(dir, "ref.jpg"));
+            File.WriteAllText(Path.Combine(dir, "ref_verify.jpg"), "x");                                          // 只剩瘦身版也算在
+            Assert.True(Helpers.PrivateFileStorage.FaceReferenceFileExists(env, "/uploads/faces/E1/ref.jpg"));
+            Assert.False(Helpers.PrivateFileStorage.FaceReferenceFileExists(env, "/uploads/../../secret.jpg"));   // 路径穿越
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
 }

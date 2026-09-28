@@ -27,7 +27,7 @@ public interface IAttendanceService
     /// </summary>
     Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude, double? accuracyMeters = null);
     /// <summary>获取某员工今日考勤记录。</summary>
-    Task<AttendanceRecordDto?>     GetTodayAttendanceAsync(int userId);
+    Task<AttendanceRecordDto?>     GetTodayAttendanceAsync(int userId, DateTime? now = null);
     /// <summary>按条件查询个人考勤记录列表。</summary>
     Task<List<AttendanceRecordDto>> GetPersonalAttendanceAsync(PersonalAttendanceQueryDto query);
     /// <summary>按部门/考勤组查询考勤记录列表。<paramref name="deptIds"/> 非空时额外收窄到这批部门内

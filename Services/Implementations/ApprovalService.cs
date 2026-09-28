@@ -89,18 +89,22 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 // 时间算两遍（2026-09 上一期有 122 张这样的单子、约 1000 小时重叠——员工把整个工作日时间都填成了加班）。
                 // 休息日/节假日（没有"正班"）不受限，整天加班照常；当天没排班的也不判断。（2026-09-28 用户确认）
                 var otDate  = DateOnly.FromDateTime(dto.OvertimeStartTime.Value);
-                var otShift = (await db.ShiftAssignments.Include(a => a.ShiftSchedule)
-                    .FirstOrDefaultAsync(a => a.UserId == applicantUserId && a.WorkDate == otDate))?.ShiftSchedule;
-                if (otShift is not null)
+                var otPrev  = otDate.AddDays(-1);
+                var otAssigns = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+                    .Where(a => a.UserId == applicantUserId && (a.WorkDate == otDate || a.WorkDate == otPrev))
+                    .ToListAsync();
+                var otHolidays = await db.Holidays.Where(h => h.HolidayDate == otDate || h.HolidayDate == otPrev).ToListAsync();
+                // 当天的班次，加上"昨天的跨天班次（夜班）延续到今天凌晨的那一段"——夜班员工在凌晨填的加班，
+                // 如果压在昨晚夜班的正班时间里，一样是重复计算
+                foreach (var (shiftDate, shiftAssign) in new[] { (otDate, otAssigns.FirstOrDefault(a => a.WorkDate == otDate)), (otPrev, otAssigns.FirstOrDefault(a => a.WorkDate == otPrev)) })
                 {
-                    var otHolidays = await db.Holidays.Where(h => h.HolidayDate == otDate).ToListAsync();
-                    if (!AttendanceService.IsNonWorkday(otDate, user.AttendanceGroupId, otHolidays, otShift))
-                    {
-                        var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(otDate, otShift);   // 当天班次的上下班时间（跨天班次下班顺延到第二天）
-                        if (dto.OvertimeStartTime.Value < shiftEnd && dto.OvertimeEndTime.Value > shiftStart)
-                            throw new InvalidOperationException(
-                                $"加班时间不能和上班时间重叠，请只填下班后（或上班前）的加班时段（您当天的班次是 {otShift.WorkStartTime:HH\\:mm}–{otShift.WorkEndTime:HH\\:mm}）");
-                    }
+                    var s0 = shiftAssign?.ShiftSchedule;
+                    if (s0 is null || (shiftDate == otPrev && !s0.IsCrossDay)) continue;   // 昨天的班只有跨天班次才会延续到今天
+                    if (AttendanceService.IsNonWorkday(shiftDate, user.AttendanceGroupId, otHolidays, s0)) continue;
+                    var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(shiftDate, s0);   // 班次的上下班时间（跨天班次下班顺延到第二天）
+                    if (dto.OvertimeStartTime.Value < shiftEnd && dto.OvertimeEndTime.Value > shiftStart)
+                        throw new InvalidOperationException(
+                            $"加班时间不能和上班时间重叠，请只填下班后（或上班前）的加班时段（您{(shiftDate == otDate ? "当天" : "前一天")}的班次是 {s0.WorkStartTime:HH\\:mm}–{s0.WorkEndTime:HH\\:mm}）");
                 }
                 if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
                         && a.ApprovalType == ApprovalType.Overtime && activeStatuses.Contains(a.ApprovalStatus)
