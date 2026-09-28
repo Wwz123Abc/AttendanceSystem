@@ -141,8 +141,20 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             }
             leaveDuration = total;
         }
-        decimal? overtimeDuration = dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue
-            ? (decimal)(dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours : null;
+        // 加班时长：跟正班工时同一套扣饭点规则（AttendanceService.ComputeWorkHours）——申请的时间段超过 6 小时扣午休
+        // （默认 60 分钟）、超过 9 小时再扣晚餐（默认 30 分钟），按考勤组配置的时长，最后按半小时向下取整。
+        // 以前直接拿"结束-开始"的总长度，休息日全天加班（08:30-22:00）会记成 13.5 小时，把午休和晚餐也算成了加班
+        // （2026-09-28 用户确认）。审批通过后回写考勤用的是同一个函数，所以这里显示的时长就是最后记的时长
+        decimal? overtimeDuration = null;
+        if (dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue)
+        {
+            var otGroup = user.AttendanceGroupId.HasValue
+                ? await db.AttendanceGroups.FindAsync(user.AttendanceGroupId.Value) : null;
+            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value,
+                otGroup?.LunchBreakMinutes ?? 60, otGroup?.DinnerBreakMinutes ?? 30);
+            if (overtimeDuration < 0.5m)
+                throw new InvalidOperationException("加班时长不足 0.5 小时（按半小时为最小单位计算），请检查起止时间");
+        }
         decimal? businessTripDuration = dto.BusinessTripStartTime.HasValue && dto.BusinessTripEndTime.HasValue
             ? (decimal)(dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays : null;
 

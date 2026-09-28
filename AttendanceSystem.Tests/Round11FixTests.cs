@@ -544,4 +544,48 @@ public class Round11FixTests : IDisposable
         Assert.Equal(0m, rec.ActualWorkHours);
         Assert.Equal(13.5m, rec.OvertimeHours);
     }
+
+    // ── ⑪ 加班时长按申请的时间段扣饭点：超过 6 小时扣午休、超过 9 小时再扣晚餐（2026-09-28 用户确认）────
+
+    [Theory]
+    [InlineData(18, 0, 22, 0, 4)]       // 4 小时：不扣
+    [InlineData(8, 30, 17, 30, 8)]      // 9 小时：超过 6 小时扣午休 60 分钟；正好 9 小时不算"超过 9 小时"，不扣晚餐
+    [InlineData(8, 30, 22, 0, 12)]      // 13.5 小时（陈林发 9/26 那张）：扣 60 + 30 分钟 = 12 小时
+    [InlineData(8, 0, 20, 0, 10.5)]     // 12 小时 → 10.5
+    [InlineData(9, 0, 15, 0, 6)]        // 正好 6 小时：不算"超过 6 小时"，不扣
+    public async Task 加班审批通过回写_申请时长超过6小时9小时按规则扣饭点(int sh, int sm, int eh, int em, double expected)
+    {
+        var (uid, _) = SeedWeekWorld();
+        var start = Mon.ToDateTime(new TimeOnly(sh, sm));
+        var end   = Mon.ToDateTime(new TimeOnly(eh, em));
+        var raw   = (decimal)(end - start).TotalHours;
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = $"JB-T-{sh}{sm}-{eh}{em}", ApplicantUserId = uid, ApprovalType = ApprovalType.Overtime,
+            OvertimeStartTime = start, OvertimeEndTime = end, OvertimeDurationHours = raw,   // 单子上存的是不扣饭点的总长度（老单子/未回写时的样子）
+            Reason = "t"
+        });
+
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal((decimal)expected, rec.OvertimeHours);
+        Assert.Equal((decimal)expected, (await check.ApprovalRequests.SingleAsync(a => a.Id == id)).OvertimeDurationHours);   // 单子上的时长同步成实际记入的数
+    }
+
+    [Fact]
+    public async Task 加班申请_不足半小时_提交时被拒绝()
+    {
+        var (uid, _) = SeedWeekWorld();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = DateTime.Today.AddHours(18);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.Overtime, Reason = "t", OvertimeStartTime = start, OvertimeEndTime = start.AddMinutes(20)
+        }));
+        Assert.Contains("0.5", ex.Message);
+    }
 }

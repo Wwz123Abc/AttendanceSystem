@@ -1170,8 +1170,20 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 db.AttendanceRecords.Add(record);
             }
 
-            record.OvertimeHours += approval.OvertimeDurationHours.Value;
-            AppendApprovalNote(record, $"加班已审批通过（{approval.RequestNo}），{approval.OvertimeDurationHours:0.##} 小时");
+            // 加班时长按"申请的起止时间"重新算一遍再记：超过 6 小时扣午休、超过 9 小时再扣晚餐（跟提交时同一个函数）。
+            // 不直接用单子上存的时长，是因为改规则之前提交、还没批的老单子存的是不扣饭点的总长度；
+            // 算完顺手把单子上的时长也改成实际记入的数，审批列表/记录里看到的和考勤上记的一致
+            var otApplicant = await db.Users.FindAsync(approval.ApplicantUserId);
+            var otGroup = otApplicant?.AttendanceGroupId.HasValue == true
+                ? await db.AttendanceGroups.FindAsync(otApplicant.AttendanceGroupId.Value) : null;
+            var otHours = approval.OvertimeEndTime.HasValue
+                ? ComputeWorkHours(approval.OvertimeStartTime.Value, approval.OvertimeEndTime.Value,
+                    otGroup?.LunchBreakMinutes ?? 60, otGroup?.DinnerBreakMinutes ?? 30)
+                : approval.OvertimeDurationHours.Value;
+            approval.OvertimeDurationHours = otHours;
+
+            record.OvertimeHours += otHours;
+            AppendApprovalNote(record, $"加班已审批通过（{approval.RequestNo}），{otHours:0.##} 小时");
             record.UpdatedAt      = DateTime.Now;
 
             // 员工可能是先自己打卡上班、事后才补的加班申请——这天如果是休息日，打卡时因为
