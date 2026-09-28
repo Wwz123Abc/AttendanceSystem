@@ -251,6 +251,12 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             }
         }
 
+        // 午间必打卡的命中情况要在打完这张卡就写回记录：以前只有打下班卡算工时时才顺带写（ResolveEffectiveClockInAsync），
+        // 所以员工中午打完卡，"我的记录"里"午间打卡"一栏一直是 --，要等到下班打了卡才出现。下班卡那条路径自己会重算，这里不用管
+        if (request.PunchType != PunchType.ClockOut
+            && await LoadMidCheckResultsAsync(userId, workDate, shift) is { } midResults)
+            record.MidCheckResults = midResults.FormatMidCheckResults();
+
         record.UpdatedAt = now;
         await db.SaveChangesAsync();
 
@@ -1514,31 +1520,37 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     private async Task<(DateTime EffectiveClockIn, DateTime? SecondHalfAbsentBoundary)> ResolveEffectiveClockInAsync(
         AttendanceRecord record, DateOnly workDate, DateTime clockIn, ShiftSchedule? shift)
     {
-        var windows = shift?.ParseMidCheckWindows() ?? [];
-        if (shift is null || windows.Count == 0)
+        var results = await LoadMidCheckResultsAsync(record.UserId, workDate, shift);
+        if (shift is null || results is null)
         {
             record.MidCheckResults = null;
             return (ClampEffectiveClockIn(workDate, clockIn, shift, []), null);
         }
-
-        // 这一天所有打卡（不分类型）一次性查出来，再挨个窗口去里面找命中的那次
-        var dayPunches = await db.AttendancePunches
-            .Where(p => p.UserId == record.UserId
-                     && p.PunchTime >= workDate.ToDateTime(TimeOnly.MinValue).AddDays(-1)
-                     && p.PunchTime <= workDate.ToDateTime(TimeOnly.MinValue).AddDays(2))
-            .Select(p => p.PunchTime)
-            .ToListAsync();
-        // 这次打卡本身可能刚 Add 但还没 SaveChanges，数据库还查不到，要单独补进去——不然如果正好
-        // 是这次打卡本身落在窗口里（比如误判成下班的午间打卡），会查不到自己这一条、误判成没满足窗口。
-        // 跟 ZKDeviceSyncService 那边的同类查询保持一致做法。
-        dayPunches.AddRange(db.AttendancePunches.Local.Where(p => p.UserId == record.UserId).Select(p => p.PunchTime));
-
-        var results = ResolveMidCheckResults(workDate, shift, windows, dayPunches.Distinct().ToList());
         record.MidCheckResults = results.FormatMidCheckResults();
 
         var missedEnds = ResolveMissedNonLastWindowEnds(workDate, shift, results);
         var effectiveClockIn = ClampEffectiveClockIn(workDate, clockIn, shift, missedEnds);
         return (effectiveClockIn, ResolveSecondHalfAbsentBoundary(workDate, shift, results));
+    }
+
+    /// <summary>
+    /// 查这个人这一天所有打卡（不分类型），算出班次里每一段午间必打卡窗口的命中情况；班次没配窗口返回 null。
+    /// 这次打卡本身可能刚 Add 但还没 SaveChanges，数据库还查不到，要单独从 Local 补进去——不然如果正好
+    /// 是这次打卡本身落在窗口里，会查不到自己这一条、误判成没满足窗口。
+    /// </summary>
+    private async Task<List<MidCheckWindowResult>?> LoadMidCheckResultsAsync(int userId, DateOnly workDate, ShiftSchedule? shift)
+    {
+        var windows = shift?.ParseMidCheckWindows() ?? [];
+        if (shift is null || windows.Count == 0) return null;
+
+        var dayPunches = await db.AttendancePunches
+            .Where(p => p.UserId == userId
+                     && p.PunchTime >= workDate.ToDateTime(TimeOnly.MinValue).AddDays(-1)
+                     && p.PunchTime <= workDate.ToDateTime(TimeOnly.MinValue).AddDays(2))
+            .Select(p => p.PunchTime)
+            .ToListAsync();
+        dayPunches.AddRange(db.AttendancePunches.Local.Where(p => p.UserId == userId).Select(p => p.PunchTime));
+        return ResolveMidCheckResults(workDate, shift, windows, dayPunches.Distinct().ToList());
     }
 
     /// <summary>按班次配置的每一段午间窗口，从给定的打卡时刻列表里找出每一段命中的那次打卡（没命中就是 null）。</summary>

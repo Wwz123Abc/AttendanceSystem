@@ -263,6 +263,15 @@ public class ZKDeviceSyncService(
             {
                 AttendanceService.AppendApprovalNote(record, AttendanceService.ClockTimeInvertedNote);
             }
+            // 只有上班卡、还没有下班卡（人还在岗，午间打了卡）：下面的工时结算不会走到，但午间必打卡的命中情况
+            // 要先写回记录，不然"我的记录"里"午间打卡"一栏要等到下班打了卡才出现
+            if (record.ClockInTime.HasValue && record.ClockOutTime is null
+                && shiftByUserDate.TryGetValue((uid, workDate), out var midShift) && midShift is not null)
+            {
+                var midWindows = midShift.ParseMidCheckWindows();
+                if (midWindows.Count > 0)
+                    record.MidCheckResults = (await ResolveMidCheckResultsAsync(uid, workDate, midShift, midWindows, ct)).FormatMidCheckResults();
+            }
             if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) continue;
 
             groupIdByUser.TryGetValue(uid, out var groupId);
@@ -291,17 +300,7 @@ public class ZKDeviceSyncService(
             var windows = shift?.ParseMidCheckWindows() ?? [];
             if (shift is not null && windows.Count > 0)
             {
-                var dayPunchTimes = await db.AttendancePunches
-                    .Where(p => p.UserId == uid
-                             && p.PunchTime >= workDate.ToDateTime(TimeOnly.MinValue).AddDays(-1)
-                             && p.PunchTime <= workDate.ToDateTime(TimeOnly.MinValue).AddDays(2))
-                    .Select(p => p.PunchTime)
-                    .ToListAsync(ct);
-                // 这一批里刚 Add 但还没 SaveChanges 的打卡，数据库还查不到，要单独补进去
-                dayPunchTimes.AddRange(db.AttendancePunches.Local
-                    .Where(p => p.UserId == uid)
-                    .Select(p => p.PunchTime));
-                var midCheckResults = AttendanceService.ResolveMidCheckResults(workDate, shift, windows, dayPunchTimes.Distinct().ToList());
+                var midCheckResults = await ResolveMidCheckResultsAsync(uid, workDate, shift, windows, ct);
                 record.MidCheckResults = midCheckResults.FormatMidCheckResults();
                 missedWindowEnds = AttendanceService.ResolveMissedNonLastWindowEnds(workDate, shift, midCheckResults);
                 secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, midCheckResults);
@@ -415,5 +414,22 @@ public class ZKDeviceSyncService(
 
     /// <summary>去重粒度用"分钟"而不是"秒"：同一人同一分钟内多次刷卡（设备防抖间隔内的重复上报）
     /// 只记一条，避免原始打卡流水表里出现同一次打卡被拆成两条秒数不同的记录。</summary>
+    /// <summary>查这个人这一天所有打卡（不分类型），算出班次里每一段午间必打卡窗口的命中情况。
+    /// 这一批里刚 Add 但还没 SaveChanges 的打卡，数据库还查不到，要从 Local 单独补进去。</summary>
+    private async Task<List<MidCheckWindowResult>> ResolveMidCheckResultsAsync(
+        int uid, DateOnly workDate, ShiftSchedule shift, List<(TimeOnly Start, TimeOnly End)> windows, CancellationToken ct)
+    {
+        var dayPunchTimes = await db.AttendancePunches
+            .Where(p => p.UserId == uid
+                     && p.PunchTime >= workDate.ToDateTime(TimeOnly.MinValue).AddDays(-1)
+                     && p.PunchTime <= workDate.ToDateTime(TimeOnly.MinValue).AddDays(2))
+            .Select(p => p.PunchTime)
+            .ToListAsync(ct);
+        dayPunchTimes.AddRange(db.AttendancePunches.Local
+            .Where(p => p.UserId == uid)
+            .Select(p => p.PunchTime));
+        return AttendanceService.ResolveMidCheckResults(workDate, shift, windows, dayPunchTimes.Distinct().ToList());
+    }
+
     private static DateTime TruncateToMinute(DateTime dt) => new(dt.Year, dt.Month, dt.Day, dt.Hour, dt.Minute, 0);
 }
