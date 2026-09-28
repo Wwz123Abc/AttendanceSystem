@@ -1,0 +1,480 @@
+@page
+@model AttendanceSystem.Pages.Agent.ChatModel
+@{
+    ViewData["Title"] = "智能助手";
+}
+
+<div class="agent-chat-page p-3">
+    <style>
+        .agent-chat-page .ac-head {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            margin-bottom: 14px; flex-wrap: wrap;
+        }
+        .agent-chat-page .ac-head h5 { margin: 0; }
+        .agent-chat-page .ac-head .ac-note { color: #6b7280; font-size: 12.5px; max-width: 640px; }
+        .agent-chat-page .ac-shell { height: calc(100vh - 190px); min-height: 460px; }
+
+        /* ── 左侧会话列表 ── */
+        .agent-chat-page .ac-conv-card { display: flex; flex-direction: column; height: 100%; }
+        .agent-chat-page .ac-conv-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 12px; border-bottom: 1px solid #e5e7eb;
+        }
+        .agent-chat-page .ac-conv-header .label { font-weight: 600; font-size: 13px; color: #374151; }
+        .agent-chat-page .ac-conv-list { flex-grow: 1; overflow-y: auto; padding: 6px; }
+        .agent-chat-page .ac-conv-row { position: relative; margin-bottom: 3px; }
+        .agent-chat-page .ac-conv-item {
+            display: flex; align-items: center; gap: 8px; padding: 8px 34px 8px 8px; border-radius: 10px;
+            text-decoration: none; color: inherit; transition: background .12s ease;
+        }
+        .agent-chat-page .ac-conv-item:hover { background: #f1f5f9; }
+        .agent-chat-page .ac-conv-item.active { background: #eff6ff; }
+        .agent-chat-page .ac-conv-item.active .ac-conv-title { color: #1d4ed8; }
+        .agent-chat-page .ac-conv-avatar {
+            width: 30px; height: 30px; border-radius: 50%; background: #dbeafe; color: #1d4ed8;
+            display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0;
+        }
+        .agent-chat-page .ac-conv-body { flex-grow: 1; min-width: 0; }
+        .agent-chat-page .ac-conv-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .agent-chat-page .ac-conv-meta { font-size: 11px; color: #9ca3af; }
+        .agent-chat-page .ac-conv-del-form { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); opacity: 0; transition: opacity .12s ease; }
+        .agent-chat-page .ac-conv-row:hover .ac-conv-del-form { opacity: 1; }
+        .agent-chat-page .ac-conv-del {
+            border: none; background: none; color: #9ca3af; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+        }
+        .agent-chat-page .ac-conv-del:hover { background: #fee2e2; color: #dc2626; }
+        .agent-chat-page .ac-empty-conv { padding: 24px 12px; text-align: center; color: #9ca3af; font-size: 12.5px; }
+
+        /* ── 右侧对话区 ── */
+        .agent-chat-page .ac-chat-card { display: flex; flex-direction: column; height: 100%; }
+        .agent-chat-page .ac-chat-body { flex-grow: 1; overflow-y: auto; padding: 16px; background: #f8fafc; }
+        .agent-chat-page .ac-msg-row { display: flex; gap: 8px; margin-bottom: 14px; align-items: flex-start; }
+        .agent-chat-page .ac-msg-row.user { flex-direction: row-reverse; }
+        .agent-chat-page .ac-avatar {
+            width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff;
+        }
+        .agent-chat-page .ac-avatar.bot { background: linear-gradient(135deg,#2563eb,#1e40af); }
+        .agent-chat-page .ac-avatar.usr { background: #64748b; }
+        .agent-chat-page .ac-bubble-col { max-width: 72%; display: flex; flex-direction: column; }
+        .agent-chat-page .ac-msg-row.user .ac-bubble-col { align-items: flex-end; }
+        .agent-chat-page .ac-bubble { padding: 9px 13px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6; }
+        .agent-chat-page .ac-msg-row.user .ac-bubble { background: #2563eb; color: #fff; border-top-right-radius: 3px; }
+        .agent-chat-page .ac-msg-row.assistant .ac-bubble { background: #fff; border: 1px solid #e5e7eb; border-top-left-radius: 3px; }
+        .agent-chat-page .ac-msg-time { font-size: 11px; color: #9ca3af; margin-top: 3px; padding: 0 3px; }
+        .agent-chat-page .ac-tool-trace { font-size: 11.5px; color: #6b7280; margin-top: 4px; }
+        .agent-chat-page .ac-tool-trace summary { cursor: pointer; color: #2563eb; }
+        .agent-chat-page .ac-tool-trace summary:hover { text-decoration: underline; }
+        .agent-chat-page .ac-tool-trace div { margin-top: 4px; padding: 6px 8px; background: #f8fafc; border-radius: 6px; font-family: ui-monospace, monospace; word-break: break-all; }
+        .agent-chat-page .ac-typing { display: inline-flex; gap: 4px; padding: 3px 2px; }
+        .agent-chat-page .ac-typing span { width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; animation: acTyping 1s infinite ease-in-out; }
+        .agent-chat-page .ac-typing span:nth-child(2) { animation-delay: .15s; }
+        .agent-chat-page .ac-typing span:nth-child(3) { animation-delay: .3s; }
+        @@keyframes acTyping { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+        .agent-chat-page .ac-empty-chat { text-align: center; color: #9ca3af; padding: 60px 0; }
+        .agent-chat-page .ac-empty-chat i { font-size: 2.4rem; opacity: .5; }
+
+        /* ── 待确认动作 ── */
+        .agent-chat-page .ac-actions { border-top: 1px solid #e5e7eb; background: #fffbeb; padding: 10px 14px; max-height: 34%; overflow-y: auto; }
+        .agent-chat-page .ac-actions-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        .agent-chat-page .ac-actions-title { font-size: 12.5px; font-weight: 600; color: #92400e; }
+        .agent-chat-page .ac-batch-all { font-size: 12px; color: #6b7280; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+        .agent-chat-page .ac-batch-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .agent-chat-page .ac-batch-hint { font-size: 12px; color: #92400e; flex-grow: 1; }
+        .agent-chat-page .ac-batch-check { margin-top: 3px; flex-shrink: 0; }
+        .agent-chat-page .ac-action-card {
+            display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+            background: #fff; border: 1px solid #fde68a; border-left: 3px solid #f59e0b; border-radius: 10px;
+            padding: 10px 12px; margin-bottom: 8px;
+        }
+        .agent-chat-page .ac-action-card.risk { border-color: #fecaca; border-left-color: #dc2626; background: #fef2f2; }
+        .agent-chat-page .ac-action-card.done { opacity: .8; }
+        .agent-chat-page .ac-action-info { flex-grow: 1; min-width: 0; }
+        .agent-chat-page .ac-action-summary { font-size: 13px; color: #1f2937; margin-top: 4px; }
+        .agent-chat-page .ac-action-card.risk .ac-action-summary.pending { color: #b91c1c; font-weight: 600; }
+        .agent-chat-page .ac-action-result { font-size: 12px; margin-top: 4px; }
+        .agent-chat-page .ac-action-btns { display: flex; flex-direction: column; gap: 5px; flex-shrink: 0; }
+        .agent-chat-page .ac-action-btns .btn { white-space: nowrap; }
+
+        /* ── 输入区 ── */
+        .agent-chat-page .ac-input-area { border-top: 1px solid #e5e7eb; background: #fff; padding: 12px 14px; }
+        .agent-chat-page .ac-input-row { display: flex; align-items: flex-end; gap: 8px; }
+        .agent-chat-page .ac-textarea {
+            flex-grow: 1; resize: none; border-radius: 12px; border: 1px solid #d1d5db; padding: 9px 12px;
+            font-size: 14px; line-height: 1.5; max-height: 140px; overflow-y: auto;
+        }
+        .agent-chat-page .ac-textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 .15rem rgba(37,99,235,.15); }
+        .agent-chat-page .ac-send-btn { border-radius: 12px; padding: 9px 20px; flex-shrink: 0; }
+        .agent-chat-page .ac-input-hint { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11.5px; color: #9ca3af; }
+    </style>
+
+    <div class="ac-head">
+        <h5><i class="bi bi-robot me-2 text-primary"></i>智能助手</h5>
+        <span class="ac-note">助手查询数据会调用系统工具并按你的管理范围返回；<b>写操作一律先生成"待确认动作"</b>，需要你点【确认执行】才会真正生效，敏感资料不会出现在对话里。
+            <a asp-page="Logs" class="ms-1"><i class="bi bi-journal-text me-1"></i>动作审计</a></span>
+    </div>
+
+    @if (!Model.Enabled)
+    {
+        <div class="alert alert-warning">
+            智能助手功能未启用。如需开启，请在服务器配置 <code>Agent:Enabled=true</code> 并设置环境变量 <code>AGENT_API_KEY</code> 后重启服务。
+        </div>
+    }
+    else
+    {
+        if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <div class="alert alert-danger py-2">@Model.ErrorMessage</div>
+        }
+        else if (!string.IsNullOrEmpty(Model.SuccessMessage))
+        {
+            <div class="alert alert-success py-2">@Model.SuccessMessage</div>
+        }
+
+        @if (Model.DailyTokenBudget.HasValue && Model.TodayTokenUsage >= Model.DailyTokenBudget.Value * 0.8)
+        {
+            var overBudget = Model.TodayTokenUsage >= Model.DailyTokenBudget.Value;
+            <div class="alert @(overBudget ? "alert-danger" : "alert-warning") py-2">
+                今日 Token 用量已达 @Model.TodayTokenUsage / @Model.DailyTokenBudget（@((Model.TodayTokenUsage * 100 / Model.DailyTokenBudget.Value))%）@(overBudget ? "，已超过预算线，请关注调用成本" : "，接近预算线")。
+            </div>
+        }
+
+        <div class="row g-3 ac-shell">
+            @* ── 左侧：会话列表 ── *@
+            <div class="col-md-3 h-100">
+                <div class="card ac-conv-card">
+                    <div class="ac-conv-header">
+                        <span class="label">会话</span>
+                        <form method="post" asp-page-handler="New" class="m-0">
+                            <button class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>新对话</button>
+                        </form>
+                    </div>
+                    <div class="ac-conv-list">
+                        @if (!Model.Conversations.Any())
+                        {
+                            <div class="ac-empty-conv">还没有会话<br />点上面"新对话"开始</div>
+                        }
+                        @foreach (var c in Model.Conversations)
+                        {
+                            <div class="ac-conv-row">
+                                <a asp-page="Chat" asp-route-id="@c.Id" class="ac-conv-item @(c.Id == Model.CurrentConversationId ? "active" : "")">
+                                    <span class="ac-conv-avatar">@(string.IsNullOrEmpty(c.Title) ? "?" : c.Title[..1])</span>
+                                    <span class="ac-conv-body">
+                                        <div class="ac-conv-title">@c.Title</div>
+                                        <div class="ac-conv-meta">@c.UpdatedAtText · @c.MessageCount 条@(c.TokenTotal > 0 ? $" · ≈{c.TokenTotal} tok" : "")</div>
+                                    </span>
+                                </a>
+                                <form method="post" asp-page-handler="Delete" class="ac-conv-del-form m-0"
+                                      onsubmit="return confirm('删除该会话？消息将保留在审计记录中。');">
+                                    <input type="hidden" name="id" value="@c.Id" />
+                                    <button class="ac-conv-del" title="删除会话">×</button>
+                                </form>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @* ── 右侧：对话区 ── *@
+            <div class="col-md-9 h-100">
+                <div class="card ac-chat-card">
+                    <div class="ac-chat-body" id="msgArea">
+                        @if (Model.CurrentConversationId == 0)
+                        {
+                            <div class="ac-empty-chat">
+                                <i class="bi bi-chat-dots d-block mb-2"></i>
+                                选择左侧会话，或点"新对话"开始
+                            </div>
+                        }
+                        else if (!Model.Messages.Any())
+                        {
+                            <div class="ac-empty-chat">这个会话还没有消息，在下方输入框问点什么吧</div>
+                        }
+                        else
+                        {
+                            @foreach (var m in Model.Messages)
+                            {
+                                if (m.Role == "user")
+                                {
+                                    <div class="ac-msg-row user">
+                                        <span class="ac-avatar usr"><i class="bi bi-person-fill"></i></span>
+                                        <div class="ac-bubble-col">
+                                            <div class="ac-bubble">@m.Content</div>
+                                            <div class="ac-msg-time">@m.CreatedAtText</div>
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="ac-msg-row assistant">
+                                        <span class="ac-avatar bot"><i class="bi bi-robot"></i></span>
+                                        <div class="ac-bubble-col">
+                                            <div class="ac-bubble ac-md">@m.Content</div>
+                                            @if (!string.IsNullOrEmpty(m.ToolTraceText))
+                                            {
+                                                <details class="ac-tool-trace">
+                                                    <summary>查看本轮调用了哪些工具</summary>
+                                                    <div>@m.ToolTraceText</div>
+                                                </details>
+                                            }
+                                            <div class="ac-msg-time">@m.CreatedAtText</div>
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        }
+                    </div>
+
+                    @* ── 待管理员处理的动作（助手生成的写操作提案） ── *@
+                    @if (Model.PendingActions.Any())
+                    {
+                        var pendingCount = Model.PendingActions.Count(a => a.IsPending);
+                        <div class="ac-actions">
+                            <div class="ac-actions-title-row">
+                                <div class="ac-actions-title"><i class="bi bi-shield-check me-1"></i>待确认动作（写操作需确认后才执行）</div>
+                                @if (pendingCount > 1)
+                                {
+                                    <label class="ac-batch-all"><input type="checkbox" id="batchSelectAll" /> 全选</label>
+                                }
+                            </div>
+                            @if (pendingCount > 1)
+                            {
+                                <form method="post" asp-page-handler="BatchReview" id="acBatchForm" class="ac-batch-bar">
+                                    <input type="hidden" name="ReviewConversationId" value="@Model.CurrentConversationId" />
+                                    <span class="ac-batch-hint" id="batchCountHint">未勾选</span>
+                                    <button type="submit" name="approve" value="true" class="btn btn-sm btn-success" disabled
+                                            onclick="return confirm('确认执行所有勾选的动作？执行后立即生效并记入审计。');">批量确认</button>
+                                    <button type="submit" name="approve" value="false" class="btn btn-sm btn-outline-secondary" disabled
+                                            onclick="return confirm('拒绝所有勾选的动作？');">批量拒绝</button>
+                                </form>
+                            }
+                            @foreach (var a in Model.PendingActions)
+                            {
+                                <div class="ac-action-card @(a.HighRisk ? "risk" : "") @(a.IsPending ? "" : "done")">
+                                    @if (a.IsPending && pendingCount > 1)
+                                    {
+                                        <input type="checkbox" class="ac-batch-check" name="actionIds" value="@a.Id" form="acBatchForm" />
+                                    }
+                                    <div class="ac-action-info">
+                                        <div class="small">
+                                            <span class="badge bg-info">@a.ToolNameText</span>
+                                            @if (a.HighRisk)
+                                            {
+                                                <span class="badge bg-danger">高风险</span>
+                                            }
+                                            <span class="badge @(a.IsPending ? "bg-warning text-dark" : a.StatusText == "已执行" ? "bg-success" : a.StatusText == "执行失败" ? "bg-danger" : "bg-secondary")">@a.StatusText</span>
+                                            <span class="text-muted small">@a.CreatedAtText</span>
+                                        </div>
+                                        <div class="ac-action-summary @(a.HighRisk && a.IsPending ? "pending" : "")">@a.SummaryText</div>
+                                        @if (!string.IsNullOrEmpty(a.ResultText))
+                                        {
+                                            <div class="ac-action-result text-success">✅ @a.ResultText</div>
+                                        }
+                                        @if (!string.IsNullOrEmpty(a.ErrorText))
+                                        {
+                                            <div class="ac-action-result text-danger">⚠️ @a.ErrorText</div>
+                                        }
+                                    </div>
+                                    @if (a.IsPending)
+                                    {
+                                        <div class="ac-action-btns">
+                                            <form method="post" asp-page-handler="ReviewApprove" class="m-0">
+                                                <input type="hidden" name="actionId" value="@a.Id" />
+                                                <input type="hidden" name="ReviewConversationId" value="@Model.CurrentConversationId" />
+                                                <button class="btn btn-sm btn-success w-100" onclick="return confirm(@(a.HighRisk ? "'这是高风险操作（删除/拉黑/重置密码/改范围），确认执行？执行后立即生效并记入审计。'" : "'确认执行该动作？执行后立即生效并记入审计。'"));">确认执行</button>
+                                            </form>
+                                            <form method="post" asp-page-handler="ReviewReject" class="m-0">
+                                                <input type="hidden" name="actionId" value="@a.Id" />
+                                                <input type="hidden" name="ReviewConversationId" value="@Model.CurrentConversationId" />
+                                                <button class="btn btn-sm btn-outline-secondary w-100">拒绝</button>
+                                            </form>
+                                        </div>
+                                    }
+                                    else if (a.CanUndo)
+                                    {
+                                        <div class="ac-action-btns">
+                                            <form method="post" asp-page-handler="ReviewUndo" class="m-0"
+                                                  onsubmit="return confirm('确认撤回该动作？将按执行前快照还原现场，执行后立即生效并记入审计。');">
+                                                <input type="hidden" name="actionId" value="@a.Id" />
+                                                <input type="hidden" name="ReviewConversationId" value="@Model.CurrentConversationId" />
+                                                <button class="btn btn-sm btn-outline-warning w-100" title="@a.UndoHint">撤回</button>
+                                            </form>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (Model.CurrentConversationId > 0)
+                    {
+                        @Html.AntiForgeryToken()
+                        <div class="ac-input-area">
+                            <div class="ac-input-row">
+                                <textarea id="sendText" class="ac-textarea" rows="1" maxlength="4000"
+                                          placeholder="例如：查一下 E0001 的员工；把 W0001 停用生成待确认动作；这个月的考勤异常……"></textarea>
+                                <button id="sendBtn" class="btn btn-primary ac-send-btn" type="button" onclick="agentSend()">发送</button>
+                            </div>
+                            <div class="ac-input-hint">
+                                <span>Enter 发送，Shift+Enter 换行；请勿粘贴身份证号、住址等敏感信息</span>
+                                <span id="sendHint"></span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@section Scripts {
+    <script>
+        // 批量确认/拒绝：勾选框数量联动批量按钮的可用状态与提示文字
+        (function () {
+            var checks = document.querySelectorAll('.ac-batch-check');
+            var selectAll = document.getElementById('batchSelectAll');
+            var form = document.getElementById('acBatchForm');
+            if (!form || checks.length === 0) return;
+            var hint = document.getElementById('batchCountHint');
+            var btns = form.querySelectorAll('button[type=submit]');
+            function refresh() {
+                var n = Array.prototype.filter.call(checks, function (c) { return c.checked; }).length;
+                hint.textContent = n > 0 ? '已勾选 ' + n + ' 条' : '未勾选';
+                btns.forEach(function (b) { b.disabled = n === 0; });
+                if (selectAll) selectAll.checked = n === checks.length;
+            }
+            checks.forEach(function (c) { c.addEventListener('change', refresh); });
+            if (selectAll) {
+                selectAll.addEventListener('change', function () {
+                    checks.forEach(function (c) { c.checked = selectAll.checked; });
+                    refresh();
+                });
+            }
+            refresh();
+        })();
+
+        // 轻量 Markdown：先转义 HTML 再转 **粗体**（模型回答常用），避免把星号原样显示
+        function renderMd(t) {
+            var s = String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+            return s;
+        }
+        // 输入框随内容自动增高（最多到 CSS 里设的 max-height，之后出现滚动条）
+        function autoGrow(ta) {
+            ta.style.height = 'auto';
+            ta.style.height = ta.scrollHeight + 'px';
+        }
+        // 打开页面：把历史里的助手回答按 Markdown 渲染，滚动到底 + 聚焦输入框
+        (function () {
+            var area = document.getElementById('msgArea');
+            if (area) {
+                area.querySelectorAll('.ac-md').forEach(function (b) {
+                    b.innerHTML = renderMd(b.textContent);
+                });
+                area.scrollTop = area.scrollHeight;
+            }
+            var ta = document.getElementById('sendText');
+            if (ta) { ta.focus(); ta.addEventListener('input', function () { autoGrow(ta); }); }
+        })();
+
+        // 回车发送（Shift+Enter 换行）
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.id === 'sendText') {
+                e.preventDefault();
+                agentSend();
+            }
+        });
+
+        var conversationId = @Model.CurrentConversationId;
+        var streaming = false;
+
+        function agentSend() {
+            if (streaming || conversationId <= 0) return;
+            var ta = document.getElementById('sendText');
+            var text = ta.value.trim();
+            if (!text) return;
+
+            var tokenInput = document.querySelector('input[name="__RequestVerificationToken"]');
+            var token = tokenInput ? tokenInput.value : '';
+
+            var btn = document.getElementById('sendBtn');
+            var area = document.getElementById('msgArea');
+            var hint = document.getElementById('sendHint');
+
+            // 显示用户气泡
+            var ub = document.createElement('div');
+            ub.className = 'ac-msg-row user';
+            ub.innerHTML = '<span class="ac-avatar usr"><i class="bi bi-person-fill"></i></span>' +
+                '<div class="ac-bubble-col"><div class="ac-bubble"></div></div>';
+            ub.querySelector('.ac-bubble').textContent = text;
+            area.appendChild(ub);
+            area.scrollTop = area.scrollHeight;
+
+            // 流式气泡（先显示打字中的跳动小圆点）
+            var sb = document.createElement('div');
+            sb.className = 'ac-msg-row assistant';
+            sb.innerHTML = '<span class="ac-avatar bot"><i class="bi bi-robot"></i></span>' +
+                '<div class="ac-bubble-col"><div class="ac-bubble ac-md"><span class="ac-typing"><span></span><span></span><span></span></span></div></div>';
+            var bubble = sb.querySelector('.ac-bubble');
+            area.appendChild(sb);
+            area.scrollTop = area.scrollHeight;
+
+            ta.value = '';
+            ta.style.height = 'auto';
+            btn.disabled = true;
+            btn.textContent = '生成中…';
+            streaming = true;
+            var acc = '';
+
+            fetch('?handler=Stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'SendConversationId=' + encodeURIComponent(conversationId) +
+                      '&SendText=' + encodeURIComponent(text) +
+                      '&__RequestVerificationToken=' + encodeURIComponent(token)
+            }).then(function (res) {
+                if (!res.ok || !res.body) throw new Error('请求失败 HTTP ' + res.status);
+                var reader = res.body.getReader();
+                var decoder = new TextDecoder('utf-8');
+                var buf = '';
+                function pump() {
+                    return reader.read().then(function (r) {
+                        if (r.done) return;
+                        buf += decoder.decode(r.value, { stream: true });
+                        var idx;
+                        while ((idx = buf.indexOf('\n\n')) >= 0) {
+                            var block = buf.slice(0, idx);
+                            buf = buf.slice(idx + 2);
+                            var dIdx = block.indexOf('data:');
+                            if (dIdx < 0) continue;
+                            var data = block.slice(dIdx + 5).trim();
+                            if (!data) continue;
+                            var ev;
+                            try { ev = JSON.parse(data); } catch (e) { continue; }
+                            if (ev.t === 'd') {
+                                acc += ev.x;
+                                bubble.innerHTML = renderMd(acc);
+                                area.scrollTop = area.scrollHeight;
+                            } else if (ev.t === 'err') {
+                                bubble.textContent = '⚠️ ' + ev.x;
+                            } else if (ev.t === 'done') {
+                                if (ev.x && !acc) { bubble.innerHTML = renderMd(ev.x); }
+                            }
+                        }
+                        return pump();
+                    });
+                }
+                return pump();
+            }).catch(function (e) {
+                bubble.textContent = '⚠️ ' + e.message;
+            }).finally(function () {
+                btn.disabled = false;
+                btn.textContent = '发送';
+                streaming = false;
+                // 流结束：刷新页面落库（对话历史/动作卡片/会话列表）
+                setTimeout(function () { location.reload(); }, 300);
+            });
+        }
+    </script>
+}

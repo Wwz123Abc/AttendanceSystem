@@ -39,6 +39,10 @@ public class AttendanceDbContext : DbContext
     public DbSet<ZKDevice>                  ZKDevices                  => Set<ZKDevice>();
     public DbSet<FaceVerifyAttempt>         FaceVerifyAttempts         => Set<FaceVerifyAttempt>();
     public DbSet<UserZKDevice>              UserZKDevices              => Set<UserZKDevice>();
+    public DbSet<AgentConversation>         AgentConversations         => Set<AgentConversation>();
+    public DbSet<AgentMessage>              AgentMessages              => Set<AgentMessage>();
+    public DbSet<AgentPendingAction>        AgentPendingActions        => Set<AgentPendingAction>();
+    public DbSet<AgentActionLog>            AgentActionLogs            => Set<AgentActionLog>();
 
     // 这个方法在“建立数据库模型”时被调用，用来配置表名、关系、索引、唯一约束等。
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -315,6 +319,30 @@ public class AttendanceDbContext : DbContext
              .WithMany()
              .HasForeignKey(a => a.UserId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── AgentConversation / AgentMessage / AgentPendingAction / AgentActionLog：管理员助手（AGENT）。
+        //    会话与消息、提案随用户/会话级联清理；动作日志只追加、不建外键（审计独立保留）。
+        modelBuilder.Entity<AgentConversation>(e =>
+        {
+            e.HasIndex(c => c.UserId);
+            e.HasOne(c => c.User).WithMany().HasForeignKey(c => c.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<AgentMessage>(e =>
+        {
+            e.HasIndex(m => m.ConversationId);
+            e.HasOne(m => m.Conversation).WithMany().HasForeignKey(m => m.ConversationId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<AgentPendingAction>(e =>
+        {
+            e.HasIndex(a => a.ConversationId);
+            e.HasIndex(a => a.Status);
+            e.HasOne(a => a.Conversation).WithMany().HasForeignKey(a => a.ConversationId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<AgentActionLog>(e =>
+        {
+            e.HasIndex(l => l.OperatorUserId);
+            e.HasIndex(l => l.CreatedAt);
         });
 
         // ── 写入初始“种子数据”（首次建库时自动插入）──

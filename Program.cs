@@ -187,6 +187,25 @@ builder.Services.Configure<ZKDeviceOptions>(
     builder.Configuration.GetSection(ZKDeviceOptions.SectionName));
 builder.Services.AddScoped<IZKDeviceSyncService, ZKDeviceSyncService>();
 
+// ── 智能助手（AGENT）：DeepSeek 对话引擎 + 会话编排 + 动作审核 ────────────────────
+// 密钥约定：ApiKey 不写进 appsettings，从环境变量 AGENT_API_KEY 读取。
+builder.Services.Configure<AgentOptions>(
+    builder.Configuration.GetSection(AgentOptions.SectionName));
+builder.Services.AddOptions<AgentOptions>()
+    .PostConfigure<IConfiguration>((o, config) =>
+    {
+        if (string.IsNullOrWhiteSpace(o.ApiKey))
+            o.ApiKey = config["AGENT_API_KEY"];
+    });
+builder.Services.AddHttpClient("agent", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(100);
+});
+builder.Services.AddScoped<IAgentEngine, DeepSeekAgentEngine>();
+builder.Services.AddScoped<IAgentService,  AgentService>();
+builder.Services.AddScoped<IAgentToolExecutor, AgentToolExecutor>();
+builder.Services.AddScoped<IAgentActionService, AgentActionService>();
+
 // ── 网页(Razor Pages) + 接口(Web API)──────────────────────────────────────────
 builder.Services.AddRazorPages(options =>
 {

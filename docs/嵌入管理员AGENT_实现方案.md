@@ -64,7 +64,7 @@ AgentService（对话编排：循环 模型↔工具，最多 N 轮）
 - `ParamsSchema`（JSON Schema，供模型填参）
 - `Category`：`read` | `write_low` | `write_high`
 - `RequireApproval`：read=false；write=true（全部走提案）
-- `ScopeHint`：人/部门/组/考勤机/登记/全局，工具实现内部据此做范围校验（**注：考勤机已于 2026-09-21 取消按管理范围过滤，设备类工具不做范围收窄**，详见 `docs/更新日志.md` 与隔离复查文档第 0 节）
+- `ScopeHint`：人/部门/组/设备/登记/全局，工具实现内部据此做范围校验
 - `MaxRows` 等护栏（防止模型一次拉全表）
 
 **首批工具（建议）**
@@ -75,7 +75,7 @@ AgentService（对话编排：循环 模型↔工具，最多 N 轮）
 | `pending_registration_list` | read | 待确认登记（不含身份证号/住址/照片 URL，仅姓名/手机号后四位/提交时间/意向部门） | 登记 DepartmentId ∈ 范围 |
 | `attendance_anomaly_list` | read | 指定日期范围/部门的迟到/早退/旷工清单（含汇总） | deptId 收窄 |
 | `monthly_summary_get` | read | 某部门/某人月度汇总解释 | deptId 收窄 |
-| `device_status_list` | read | 全部启用中的考勤机在线/离线（含 SN，**是否回显 SN 见下方注**） | **不按管理范围过滤**（2026-09-21 起设备隔离取消）——注意 SN 是设备通道唯一凭证，建议该工具**不返回 SN** |
+| `device_status_list` | read | 本范围考勤机在线/离线/SN | ZKDevice.DepartmentId ∈ 范围 |
 | `group_shift_holiday_list` | read | 考勤组/班次/假期查询 | 组可见性（ANY/零部门口径同页面） |
 | `employee_create_propose` | write | 建档草稿（工号/部门/考勤组/设备/上级） | 表单所有字段范围校验（复刻 ValidateScopeForSaveAsync） |
 | `employee_update_propose` | write | 改资料（含停用/启用） | CanAccessUser |
@@ -205,11 +205,16 @@ env | grep -i proxy || echo "无代理环境变量"
 | 阶段 | 内容 | 预估 |
 |---|---|---|
 | M0 | ✅ 已完成：服务器外网探测通过、DeepSeek 选型定稿（deepseek-v4-flash，备用 deepseek-chat）、API Key 就位（AGENT_API_KEY） | 已完成 |
-| M1 | 骨架：IAgentEngine、AgentService 编排循环、`/Agent/Chat` 页面、限流 | 3–4 天 |
-| M2 | 工具框架（注册/裁剪/脱敏压缩）+ 首批只读工具（user_search、待确认、异常清单、月度汇总、设备状态） | 3–4 天 |
-| M3 | 人审管道（AgentPendingAction + Approve 接口 + 卡片 UI）+ 首批写工具（补卡、登记驳回/认领建档、停启用、公告草稿） | 4–5 天 |
-| M4 | 高风险写工具（删除/拉黑/改密码/改范围）+ 审计查询页 + 防注入加固 | 3–4 天 |
-| M5 | 打磨：会话标题/历史裁剪/Token 记录/SSE 流式（可选） | 2–3 天 |
+| M1 | ✅ 完成：骨架（IAgentEngine/DeepSeek 引擎/AgentService 编排/`/Agent/Chat` 独立页/限流） | 已完成并验证 |
+| M2 | ✅ 完成：工具框架 + 5 个只读工具（user_search、待确认、异常清单、月度汇总、设备状态，范围校验+脱敏） | 已完成并验证 |
+| M3 | ✅ 完成：人审管道（AgentPendingAction + 确认/拒绝 + 卡片 UI）+ 写工具（补卡/驳回登记/停用启用） | 已完成并验证 |
+| M4 | ✅ 完成：高风险工具（删除/拉黑/重置密码/改范围·仅HQ）+ `/Agent/Logs` 审计页 + 高风险标记 | 已完成并验证 |
+| M5 | ✅ 完成：Token 用量展示等打磨（SSE 流式为可选，未做） | 已完成 |
+| 补充 | ✅ 完成：`registration_confirm_propose`（认领登记建档，M3 列表里遗留的主干任务） | 已完成并验证 |
+| 说明 | 公告草稿（announcement 发布）未纳入本轮：范围/受众选择依赖界面，建议后续按需以 UI 向导形式补充 | 待定 |
+
+**工具覆盖面（2026-09-07 增补后）**：只读工具 7 个（user_search / pending_registration_list / attendance_anomaly_list / monthly_summary_get / device_status_list / holiday_list / 报表说明），提案式写工具 15 个（补卡、驳回登记、登记建档、停用启用、批量启停、删除、拉黑/移出、重置密码、改范围·仅HQ、普通建档、改资料、假期增删）。规则与页面一致或更严：AGENT 的组假期/组写权限采用"关联部门全部在范围内"（页面为 ANY，见隔离审计 H3）。
+**尚未工具化的面（按需后续补）**：审批处理（副作用重、需类型级校验与本人指派语义，建议单独一期）、公告发布/撤回、班次与排班、考勤组与部门结构维护、设备登记与分配、报表导出（建议 UI 向导）。
 
 合计约 2.5–4 周实现（视实现方节奏），每阶段完成由测试方按 §11 清单回归。
 

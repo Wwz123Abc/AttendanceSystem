@@ -1,0 +1,96 @@
+@page
+@model AttendanceSystem.Pages.Agent.LogsModel
+@{
+    ViewData["Title"] = "智能助手 · 动作审计";
+}
+
+<div class="p-3">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <h5 class="mb-0"><i class="bi bi-journal-text me-2 text-primary"></i>智能助手 · 动作审计</h5>
+        <span class="text-muted small">@(Model.IsHq ? "总部视图：全部管理员的动作记录" : "你只能看到自己发起的动作记录")</span>
+    </div>
+
+    <form method="get" class="row g-2 align-items-end mb-3">
+        <div class="col-auto">
+            <label class="form-label small mb-0">开始日期</label>
+            <input type="date" name="From" class="form-control form-control-sm" value="@Model.From?.ToString("yyyy-MM-dd")" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label small mb-0">结束日期</label>
+            <input type="date" name="To" class="form-control form-control-sm" value="@Model.To?.ToString("yyyy-MM-dd")" />
+        </div>
+        <div class="col-auto">
+            <label class="form-label small mb-0">结果</label>
+            <select name="Result" class="form-select form-select-sm">
+                <option value="0" selected="@(Model.Result == 0)">全部</option>
+                <option value="1" selected="@(Model.Result == 1)">成功</option>
+                <option value="2" selected="@(Model.Result == 2)">失败</option>
+            </select>
+        </div>
+        <div class="col-auto">
+            <label class="form-label small mb-0">提案人（姓名/工号/编号）</label>
+            <input type="text" name="Operator" class="form-control form-control-sm" value="@Model.Operator" placeholder="如：admin 或 系统管理员" />
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-sm btn-primary">筛选</button>
+            <a asp-page="Logs" class="btn btn-sm btn-outline-secondary">重置</a>
+        </div>
+    </form>
+
+    @if (!Model.Rows.Any())
+    {
+        <div class="alert alert-light border">没有符合条件的动作记录。</div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>时间</th>
+                                <th>动作</th>
+                                <th>提案人</th>
+                                <th>确认人</th>
+                                <th>处理</th>
+                                <th style="width:34%">内容</th>
+                                <th>结果</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in Model.Rows)
+                            {
+                                <tr>
+                                    <td class="small text-nowrap">@r.CreatedAtText</td>
+                                    <td><span class="badge bg-info">@r.ToolNameText</span></td>
+                                    <td class="small">@r.OperatorName</td>
+                                    <td class="small">@r.ApproverName</td>
+                                    <td><span class="badge @(r.ReviewActionText == "确认执行" ? "bg-primary" : "bg-secondary")">@r.ReviewActionText</span></td>
+                                    <td class="small">
+                                        <div>@r.SummaryText</div>
+                                        @if (!string.IsNullOrEmpty(r.DetailText))
+                                        {
+                                            <div class="text-muted">@r.DetailText</div>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (r.Success)
+                                        {
+                                            <span class="text-success small">✅ 成功</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-danger small">❌ 失败</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="text-muted small mt-2">共显示 @Model.Shown 条（最多取最近 500 条，请用日期/提案人筛选收窄）。</div>
+    }
+</div>

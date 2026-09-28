@@ -522,6 +522,10 @@
                 @RenderBody()
             </main>
             <footer class="app-footer">© @DateTime.Now.Year 考勤管理系统</footer>
+            @if (currentUser?.IsAdmin == true || currentUser?.IsClerk == true)
+            {
+                @await Html.PartialAsync("~/Pages/Shared/_AgentWidget.cshtml")
+            }
         </div>
     </div>
 
@@ -635,6 +639,7 @@ else
         const intervalSec = @refreshSeconds;
         setInterval(function () {
             if (document.querySelector('.modal.show')) return;
+            if (document.querySelector('.agent-widget-panel.open')) return; // 悬浮机器人对话框开着时不刷新，避免打断回复
             const ae = document.activeElement;
             if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
             location.reload();
