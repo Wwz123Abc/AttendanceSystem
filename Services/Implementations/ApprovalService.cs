@@ -85,6 +85,23 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException("加班结束时间必须晚于开始时间");
                 if ((dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours > MaxOvertimeHours)
                     throw new InvalidOperationException($"单次加班时长不能超过 {MaxOvertimeHours} 小时，请检查起止时间");
+                // 工作日的加班时间段不能和当天班次的上下班时间重叠：正班时间本来就按打卡算正班工时，再填成加班会把同一段
+                // 时间算两遍（2026-09 上一期有 122 张这样的单子、约 1000 小时重叠——员工把整个工作日时间都填成了加班）。
+                // 休息日/节假日（没有"正班"）不受限，整天加班照常；当天没排班的也不判断。（2026-09-28 用户确认）
+                var otDate  = DateOnly.FromDateTime(dto.OvertimeStartTime.Value);
+                var otShift = (await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+                    .FirstOrDefaultAsync(a => a.UserId == applicantUserId && a.WorkDate == otDate))?.ShiftSchedule;
+                if (otShift is not null)
+                {
+                    var otHolidays = await db.Holidays.Where(h => h.HolidayDate == otDate).ToListAsync();
+                    if (!AttendanceService.IsNonWorkday(otDate, user.AttendanceGroupId, otHolidays, otShift))
+                    {
+                        var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(otDate, otShift);   // 当天班次的上下班时间（跨天班次下班顺延到第二天）
+                        if (dto.OvertimeStartTime.Value < shiftEnd && dto.OvertimeEndTime.Value > shiftStart)
+                            throw new InvalidOperationException(
+                                $"加班时间不能和上班时间重叠，请只填下班后（或上班前）的加班时段（您当天的班次是 {otShift.WorkStartTime:HH\\:mm}–{otShift.WorkEndTime:HH\\:mm}）");
+                    }
+                }
                 if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
                         && a.ApprovalType == ApprovalType.Overtime && activeStatuses.Contains(a.ApprovalStatus)
                         && a.OvertimeStartTime < dto.OvertimeEndTime && dto.OvertimeStartTime < a.OvertimeEndTime))

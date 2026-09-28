@@ -86,7 +86,7 @@
                             <label class="form-label">加班结束</label>
                             <input asp-for="OvertimeEnd" type="datetime-local" class="form-control" id="fOvertimeEnd" required />
                         </div>
-                        <div class="form-text mb-3">只能申请当天的加班，需在当天24点前提交。加班时长按申请的起止时间计算：超过 6 小时扣除午休（默认 60 分钟），超过 9 小时再扣除晚餐（默认 30 分钟，按所在考勤组的设置），按半小时向下取整；不足 0.5 小时不能提交。</div>
+                        <div class="form-text mb-3">只能申请当天的加班，需在当天24点前提交。<strong>工作日的加班时间不能和当天班次的上下班时间重叠，请只填下班后（或上班前）的加班时段</strong>（休息日、节假日不受此限制）。加班时长按申请的起止时间计算：超过 6 小时扣除午休（默认 60 分钟），超过 9 小时再扣除晚餐（默认 30 分钟，按所在考勤组的设置），按半小时向下取整；不足 0.5 小时不能提交。</div>
                     </div>
 
                     <!-- 出差字段 -->

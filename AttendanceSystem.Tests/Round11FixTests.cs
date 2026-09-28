@@ -668,4 +668,115 @@ public class Round11FixTests : IDisposable
         var tue = await check2.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
         Assert.Equal(Tue.ToDateTime(new TimeOnly(19, 40)), tue.ClockInTime);
     }
+
+    // ── ⑬ 工作日加班时间不能和当天班次的上下班时间重叠（2026-09-28 用户确认）────────────
+
+    /// <summary>造一个"今天排了白班 08:30-17:30"的员工（有直属上级，提交才走得通）；restDays 是这个班次的每周休息日。</summary>
+    private int SeedOvertimeWorld(string restDays, ShiftSchedule? shiftOverride = null)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        using var db = CreateContext();
+        var group = new AttendanceGroup { GroupName = "加班组" };
+        db.AttendanceGroups.Add(group);
+        db.SaveChanges();
+        var shift = shiftOverride ?? DayShift();
+        shift.AttendanceGroupId = group.Id; shift.RestDaysOfWeek = restDays;
+        db.ShiftSchedules.Add(shift);
+        var boss = new User { EmployeeNo = "B1", RealName = "上级", PasswordHash = "x", IsActive = true, Role = UserRole.Supervisor };
+        db.Users.Add(boss);
+        db.SaveChanges();
+        var user = new User { EmployeeNo = "OT1", RealName = "加班员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, SupervisorUserId = boss.Id, HireDate = new DateOnly(2026, 1, 1) };
+        db.Users.Add(user);
+        db.SaveChanges();
+        db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = today, ShiftScheduleId = shift.Id });
+        db.SaveChanges();
+        return user.Id;
+    }
+
+    private async Task<Exception?> TrySubmitOvertimeAsync(int uid, TimeOnly start, TimeOnly end)
+    {
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        try
+        {
+            await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+            {
+                ApprovalType = ApprovalType.Overtime, Reason = "t",
+                OvertimeStartTime = today.ToDateTime(start), OvertimeEndTime = today.ToDateTime(end)
+            });
+            return null;
+        }
+        catch (Exception ex) { return ex; }
+    }
+
+    [Theory]
+    [InlineData(8, 30, 17, 30)]     // 整个班次都填成加班（线上 110 张就是这样）
+    [InlineData(8, 30, 19, 30)]     // 上班时间开始，一直加班到晚上
+    [InlineData(9, 0, 12, 0)]       // 完全落在班次里面
+    [InlineData(7, 0, 9, 0)]        // 早上提前上班，但压到了班次开始之后（08:30~09:00）
+    [InlineData(16, 0, 19, 0)]      // 下班前就开始填（16:00~17:30 重叠）
+    public async Task 工作日加班_和班次上下班时间重叠_提交被拒绝(int sh, int sm, int eh, int em)
+    {
+        var uid = SeedOvertimeWorld(restDays: "");   // 没有每周休息日：今天肯定是工作日
+        var ex = await TrySubmitOvertimeAsync(uid, new TimeOnly(sh, sm), new TimeOnly(eh, em));
+        var ioe = Assert.IsType<InvalidOperationException>(ex);
+        Assert.StartsWith("加班时间不能和上班时间重叠，请只填下班后（或上班前）的加班时段", ioe.Message);
+        Assert.Contains("08:30–17:30", ioe.Message);            // 提示里带上当天的班次时间
+    }
+
+    [Theory]
+    [InlineData(17, 30, 21, 0)]     // 正好从下班时间开始：不重叠
+    [InlineData(18, 0, 22, 0)]      // 下班后
+    [InlineData(5, 0, 8, 30)]       // 上班前，正好到上班时间：不重叠
+    public async Task 工作日加班_只填下班后或上班前_不受影响(int sh, int sm, int eh, int em)
+    {
+        var uid = SeedOvertimeWorld(restDays: "");
+        Assert.Null(await TrySubmitOvertimeAsync(uid, new TimeOnly(sh, sm), new TimeOnly(eh, em)));
+    }
+
+    [Fact]
+    public async Task 休息日加班_整天都可以填_不受限制()
+    {
+        var todayDow = ((int)DateTime.Today.DayOfWeek).ToString();
+        var uid = SeedOvertimeWorld(restDays: todayDow);            // 今天是这个班次的每周休息日
+        Assert.Null(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(20, 0)));
+    }
+
+    [Fact]
+    public async Task 法定节假日加班_整天都可以填_不受限制()
+    {
+        var uid = SeedOvertimeWorld(restDays: "");
+        using (var db = CreateContext())
+        {
+            db.Holidays.Add(new Holiday { HolidayName = "国庆", HolidayDate = DateOnly.FromDateTime(DateTime.Today), HolidayType = HolidayType.LegalHoliday });
+            db.SaveChanges();
+        }
+        Assert.Null(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(20, 0)));
+    }
+
+    [Fact]
+    public async Task 调班补班日_算工作日_重叠照样拒绝()
+    {
+        var todayDow = ((int)DateTime.Today.DayOfWeek).ToString();
+        var uid = SeedOvertimeWorld(restDays: todayDow);            // 本来是休息日，但今天是补班日
+        using (var db = CreateContext())
+        {
+            db.Holidays.Add(new Holiday { HolidayName = "补班", HolidayDate = DateOnly.FromDateTime(DateTime.Today), HolidayType = HolidayType.CompensatoryWorkDay });
+            db.SaveChanges();
+        }
+        Assert.IsType<InvalidOperationException>(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(17, 30)));
+    }
+
+    [Fact]
+    public async Task 当天没排班_不判断重叠()
+    {
+        var uid = SeedOvertimeWorld(restDays: "");
+        using (var db = CreateContext())
+        {
+            db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid));
+            db.SaveChanges();
+        }
+        Assert.Null(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(17, 30)));
+    }
 }
