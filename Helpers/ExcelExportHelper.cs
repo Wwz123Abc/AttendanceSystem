@@ -168,30 +168,23 @@ public static class ExcelExportHelper
     }
 
     // ── 报表 3：模板月度汇总表（对照公司要求的外部模板文件列结构，一行一个人，含每日打卡格子）──
+    // 2026-09-28 按《月度汇总导出表_美化优化建议》做了美化：标题靠左、图例块、"分组行 + 列名行"两层表头、每天带星期、
+    // 浅灰格线 + 分组分隔线、柔和配色、文字靠左数字居中、统一数字格式、更紧凑的列宽、合计行换配色、A3 打印。
+    // ★ 硬约束（发工资那边如果有程序按位置读这份表，不能错位）：列的顺序和位置不变（新列只能加在最后）；
+    //   行号不变：标题第 1 行、图例第 2 行、分组行第 3 行、列名行第 4 行、数据从第 5 行起、合计行在最后；
+    //   合计仍是 SUBTOTAL(109,…)，筛选范围仍是"列名行到最后一个员工"。
     public static byte[] ExportTemplateReport(TemplateReportResultDto result)
     {
         using var wb = new XSSFWorkbook();
         var sheet = wb.CreateSheet("月度汇总");
-
-        // 这份报表颜色统一改成白色（不再有隔行斑马纹/周末浅黄底）；
-        // 只在"考勤结果"那组每日格子里：夜班当天标黄；休息/节假日且当天没有工时的标浅灰。
-        var titleStyle   = TitleStyle(wb);
-        var legendStyle  = LegendStyle(wb);
-        var headerStyle  = HeaderStyleNoFill(wb);
-        var dataStyle    = DataStyle(wb);
-        var nightShiftStyle = NightShiftStyle(wb);   // 夜班当天的格子：黄底
-        var restDayStyle    = RestDayStyle(wb);      // 休息/节假日且没有工时的格子：浅灰底
-        var totalStyle      = TotalRowStyle(wb);     // 合计行：加粗、浅蓝底
-        var redStyle     = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Red.Index);
-        // 提前建好、循环里直接复用，不然每行每个字段都调一次 ColorStyle 新建样式对象，
-        // 这份报表最多 2000+ 行、每行 7 个可能标色的字段，累计下来会新建上万个样式对象
-        var orangeCellStyle = ColorStyle(wb, NPOI.HSSF.Util.HSSFColor.Orange.Index);
+        var st = new TemplateReportStyles(wb);   // 样式全部提前按需建好并缓存、循环里复用（最多 2000+ 行，不能每格新建样式对象）
 
         var dayCount  = result.Dates.Count;
         var fixedCols = 6;                       // 姓名/考勤组/部门/工号/职位/合同公司
         // 尾部统计列。表头带单位：迟到/早退时长是"分钟"，正班工时/出差/夜班/加班这几列是"小时"，
         // 同一张表里两种单位混着，不写单位很容易把 752（分钟）当成小时去算工资。
         // ★ 新增的列只能加在最后（下面"应出勤天数"），不能插在中间——下游如果有程序/对照表按列位置取数，会整体错位。
+        // ★ 以后在最后加列，要同步扩大下面 groups 里最后一组（对照）的范围。
         string[] tailHeaders =
         [
             "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
@@ -199,111 +192,189 @@ public static class ExcelExportHelper
             "加班总时长(h)", "工作日加班(h)", "休息日加班(h)", "节假日加班(h)",
             "应出勤天数"
         ];
-        var tailCols  = tailHeaders.Length;       // 直接取表头个数，不再手写数字
-        var totalCols = fixedCols + dayCount + tailCols;
+        var tailCols   = tailHeaders.Length;      // 直接取表头个数，不再手写数字
+        var totalCols  = fixedCols + dayCount + tailCols;
+        var tailStart  = fixedCols + dayCount;
+        var lastDayCol = tailStart - 1;
+        // 分组的最后一列：右边线用深一点的颜色当分组分隔线（合同公司、每日最后一天、正班工时、旷工天数、节假日加班）
+        var edgeCols = new HashSet<int> { fixedCols - 1, lastDayCol, tailStart + 3, tailStart + 10, tailStart + 17 };
+        // 带单位的工时列（(h)）用 1 位小数、0 显示"-"；分钟列（(分)）用千分位
+        var hourCols   = new HashSet<int> { tailStart + 3, tailStart + 11, tailStart + 13, tailStart + 14, tailStart + 15, tailStart + 16, tailStart + 17 };
+        var minuteCols = new HashSet<int> { tailStart + 4, tailStart + 7 };
 
-        // 第 0 行：大标题（统计日期区间）
+        // ── 第 1 行：标题靠左，拆成"主标题 + 统计周期/人数"两段（不合并，这样冻结窗格后一打开就能看到）──
         var titleRow = sheet.CreateRow(0);
-        SetCell(titleRow, 0, $"月度汇总 统计日期：{result.StartDate:yyyy-MM-dd} 至 {result.EndDate:yyyy-MM-dd}", titleStyle);
-        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, totalCols - 1));
-        titleRow.HeightInPoints = 26;
+        titleRow.HeightInPoints = 34;
+        SetCell(titleRow, 0, "月度考勤汇总", st.Get(font: "1F3864", size: 16, bold: true, h: HorizontalAlignment.Left, border: false));
+        SetCell(titleRow, 2,
+            $"统计周期 {result.StartDate:yyyy-MM-dd} 至 {result.EndDate:yyyy-MM-dd}（{dayCount} 天）· 共 {result.Rows.Count} 人",
+            st.Get(font: "7F7F7F", size: 11, h: HorizontalAlignment.Left, border: false));
 
-        // 第 1 行：报表生成时间 + 图例/口径说明（写在原来的这一行里，不额外插入新行，保证下面表头/数据的行号不变）
-        var genRow = sheet.CreateRow(1);
-        SetCell(genRow, 0,
-            $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}　｜　说明：黄底=夜班；灰底=休息日/节假日（当天没有工时）；橙色=迟到/早退；红色=缺卡/旷工；" +
-            "格子里的数字=当日工时（小时，不足半小时舍去）；空白=应出勤但没有工时；周末列头如“29六”“30日”前面的数字是日号；" +
-            "带(分)的列单位是分钟，带(h)的列单位是小时；最后一行“合计”会随筛选结果变化。", legendStyle);
-        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
-        genRow.HeightInPoints = 32;
-
-        // 第 2 行：主表头；第 3 行：每天的日期表头。固定列和尾部统计列在 2、3 两行纵向合并成一格，
-        // 这样"第 3 行"就是完整的一行表头，筛选箭头加在这一行（每一列都有）。
-        var headerRow = sheet.CreateRow(2);
-        headerRow.HeightInPoints = 20;
-        var dayHeaderRow = sheet.CreateRow(3);
-        string[] fixedHeaders = ["姓名", "考勤组", "部门", "工号", "职位", "合同公司"];
-        for (var i = 0; i < fixedHeaders.Length; i++) MergeHeaderVertically(sheet, headerRow, dayHeaderRow, i, fixedHeaders[i], headerStyle);
-        SetCell(headerRow, fixedCols, "考勤结果", headerStyle);
-        if (dayCount > 1) sheet.AddMergedRegion(new CellRangeAddress(2, 2, fixedCols, fixedCols + dayCount - 1));
-        for (var i = 0; i < tailHeaders.Length; i++)
-            MergeHeaderVertically(sheet, headerRow, dayHeaderRow, fixedCols + dayCount + i, tailHeaders[i], headerStyle);
-
-        // 每天的日期表头：周六/周日在"六/日"前面保留日号（如"29六"），不然周末恰恰是加班/旷工最容易起争议的日子，
-        // 却看不出是几号，跨月时更晕（26,27,28,六,日,31,1,2…）
-        for (var i = 0; i < dayCount; i++)
+        // ── 第 2 行：报表生成时间 + 彩色图例块 + 一句短说明（还是只占这一行，不额外插入新行）──
+        var legendRow = sheet.CreateRow(1);
+        legendRow.HeightInPoints = 22;
+        var noteStyle = st.Get(font: "7F7F7F", size: 9, h: HorizontalAlignment.Left, border: false);
+        var genText   = $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}";
+        if (dayCount >= 14)
         {
-            var date  = result.Dates[i];
-            var label = date.DayOfWeek switch
+            void Block(int first, int last, string text, ICellStyle style)
             {
-                DayOfWeek.Saturday => $"{date.Day}六",
-                DayOfWeek.Sunday   => $"{date.Day}日",
-                _                  => date.Day.ToString()
-            };
-            SetCell(dayHeaderRow, fixedCols + i, label, headerStyle);
+                for (var c = first; c <= last; c++) SetCell(legendRow, c, c == first ? text : "", style);
+                sheet.AddMergedRegion(new CellRangeAddress(1, 1, first, last));
+            }
+            Block(0, 5, genText, noteStyle);
+            Block(6, 7, "夜班", st.Get(fill: "FFF2CC", size: 9));
+            Block(8, 10, "休息/节假日", st.Get(fill: "F2F2F2", size: 9));
+            Block(11, 13, "迟到/早退", st.Get(font: "C55A11", size: 9, bold: true));
+            Block(14, 16, "缺卡/旷工", st.Get(font: "C00000", size: 9, bold: true));
+            Block(17, lastDayCol, "格内数字 = 当日工时（小时，不足半小时舍去）；空白 = 应出勤但没有工时", noteStyle);
+            Block(tailStart, totalCols - 1, "(分) = 分钟　(h) = 小时　最后一行“合计”会随筛选结果变化", noteStyle);
+        }
+        else
+        {
+            // 天数太少（比如只导出一周）放不下图例块：退回成一行短说明
+            SetCell(legendRow, 0,
+                genText + "　｜　夜班=淡黄底；休息日/节假日（当天没有工时）=浅灰底；迟到/早退=橙色字；缺卡/旷工=红色字；" +
+                "格内数字=当日工时（小时，不足半小时舍去）；空白=应出勤但没有工时；带(分)的列单位是分钟，带(h)的列单位是小时；最后一行“合计”会随筛选结果变化。",
+                st.Get(font: "7F7F7F", size: 9, h: HorizontalAlignment.Left, wrap: true, border: false));
+            for (var c = 1; c < totalCols; c++) legendRow.CreateCell(c);
+            sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
+            legendRow.HeightInPoints = 32;
         }
 
-        // 列宽：姓名/部门等给宽一点，每日格子给窄一点（周末列头多了日号，稍微宽一点放得下）
-        sheet.SetColumnWidth(0, 10 * 256);
-        sheet.SetColumnWidth(1, 20 * 256);
-        sheet.SetColumnWidth(2, 18 * 256);
-        for (var i = 3; i < fixedCols; i++) sheet.SetColumnWidth(i, 12 * 256);
-        for (var i = 0; i < dayCount; i++) sheet.SetColumnWidth(fixedCols + i, 6 * 256);
-        for (var i = 0; i < tailHeaders.Length; i++) sheet.SetColumnWidth(fixedCols + dayCount + i, 13 * 256);
-        ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 4, repeatHeaderRows: 4);   // 冻结前 6 列（姓名..合同公司）+ 前 4 行（标题/说明/表头/日期表头）
+        // ── 第 3 行：分组行（深蓝底白字）；第 4 行：列名行（所有列名都写在这一行，筛选箭头也挂在这一行，
+        //    所以筛选下拉框里每一列都有名字，不再有纵向合并的空白格）──
+        var bandRow = sheet.CreateRow(2);
+        var nameRow = sheet.CreateRow(3);
+        bandRow.HeightInPoints = 20;
+        nameRow.HeightInPoints = 34;
+        (string Name, int First, int Last, string Tint, HorizontalAlignment Align)[] groups =
+        [
+            ("基本信息",                       0,              fixedCols - 1,  "D6DCE4", HorizontalAlignment.Center),
+            // "考勤结果"横跨每日列，文字靠左（居中的话冻结窗格后往右滚动就看不到了）
+            ("考勤结果（每日工时，单位：小时）", fixedCols,       lastDayCol,     "EEF3FA", HorizontalAlignment.Left),
+            ("出勤与工时",                     tailStart,      tailStart + 3,  "DDEBF7", HorizontalAlignment.Center),
+            ("迟到 · 早退 · 缺卡 · 旷工",       tailStart + 4,  tailStart + 10, "FBE5D6", HorizontalAlignment.Center),
+            ("出差 · 夜班 · 加班",              tailStart + 11, tailStart + 17, "E2EFDA", HorizontalAlignment.Center),
+            ("对照",                           tailStart + 18, tailStart + 18, "DDEBF7", HorizontalAlignment.Center),
+        ];
+        foreach (var g in groups)
+        {
+            for (var c = g.First; c <= g.Last; c++)   // 合并区里每个格子都要套样式，底色/边框才完整
+                SetCell(bandRow, c, c == g.First ? g.Name : "",
+                    st.Get(fill: "1F3864", font: "FFFFFF", size: 10, bold: true, h: g.Align, edge: c == g.Last));
+            if (g.Last > g.First)   // 只有一列的分组不能合并（合并区至少要 2 个格子）
+                sheet.AddMergedRegion(new CellRangeAddress(2, 2, g.First, g.Last));
+        }
+        string[] fixedHeaders = ["姓名", "考勤组", "部门", "工号", "职位", "合同公司"];
+        for (var i = 0; i < fixedHeaders.Length; i++)
+            SetCell(nameRow, i, fixedHeaders[i], st.Get(fill: "D6DCE4", font: "1F3864", size: 10, bold: true, edge: edgeCols.Contains(i), bottomMedium: true));
 
-        // 从第 4 行起：每个员工一行；固定列/尾部统计列统一白底，每日格子里当天是夜班的标黄、休息且没工时的标浅灰
+        // 每天的日期表头：每天都写"日号↵星期"，周末灰字灰底，一眼看出哪几天是周末
+        const string weekNames = "日一二三四五六";   // DayOfWeek 周日=0
+        for (var i = 0; i < dayCount; i++)
+        {
+            var date = result.Dates[i];
+            var weekend = date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+            SetCell(nameRow, fixedCols + i, $"{date.Day}\n{weekNames[(int)date.DayOfWeek]}",
+                st.Get(fill: weekend ? "E7E6E6" : "EEF3FA", font: weekend ? "808080" : "1F3864", size: 9, bold: true, wrap: true,
+                       edge: edgeCols.Contains(fixedCols + i), bottomMedium: true));
+        }
+        // 统计列表头：单位换到第二行；5~6 个字没有单位的在中间换行（只是加了换行符，文字本身不变）
+        static string WrapHeader(string h) =>
+            h.Contains('(') ? h.Replace("(", "\n(")
+            : h.Length >= 5 ? h.Insert(h.Length == 6 ? 4 : 3, "\n")
+            : h;
+        for (var i = 0; i < tailHeaders.Length; i++)
+        {
+            var col = tailStart + i;
+            var tint = groups.First(g => col >= g.First && col <= g.Last).Tint;
+            SetCell(nameRow, col, WrapHeader(tailHeaders[i]),
+                st.Get(fill: tint, font: "1F3864", size: 9, bold: true, wrap: true, edge: edgeCols.Contains(col), bottomMedium: true));
+        }
+
+        // 列宽：文字列按内容给，每日列和统计列压窄（同一屏多看十来列）
+        int[] fixedWidths = [9, 13, 11, 10, 10, 15];
+        for (var i = 0; i < fixedCols; i++) sheet.SetColumnWidth(i, fixedWidths[i] * 256);
+        for (var i = 0; i < dayCount; i++) sheet.SetColumnWidth(fixedCols + i, (int)(4.8 * 256));
+        for (var i = 0; i < tailCols; i++) sheet.SetColumnWidth(tailStart + i, (int)(8.2 * 256));
+        ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 4, repeatHeaderRows: 4);   // 冻结前 6 列（姓名..合同公司）+ 前 4 行
+        // 打印：这份表 56 列，只有 A3 横向才看得清；页边距收窄、水平居中、每页加页码和打印日期（只设这份报表，不影响其它导出）
+        sheet.PrintSetup.PaperSize = 8;   // 8 = A3
+        sheet.SetMargin(MarginType.LeftMargin,   0.25);
+        sheet.SetMargin(MarginType.RightMargin,  0.25);
+        sheet.SetMargin(MarginType.TopMargin,    0.4);
+        sheet.SetMargin(MarginType.BottomMargin, 0.5);
+        sheet.HorizontallyCenter = true;
+        sheet.Footer.Center = "第 &P 页 / 共 &N 页";
+        sheet.Footer.Right  = "打印日期 &D";
+        sheet.SetZoom(90);
+
+        // ── 数据区：白底，不加斑马纹（业务决定这份表颜色统一成白色）；颜色只用在夜班/休息日底色和异常字色上 ──
+        ICellStyle Txt(bool left, int col) => st.Get(h: left ? HorizontalAlignment.Left : HorizontalAlignment.Center, indent: (short)(left ? 1 : 0), edge: edgeCols.Contains(col));
+        ICellStyle Num(int col, string color = "262626")   // 统计数字：工时列 0.0、分钟列千分位、其余常规
+            => st.Get(font: color, format: hourCols.Contains(col) ? HourFormat : minuteCols.Contains(col) ? "#,##0" : null, edge: edgeCols.Contains(col));
+        const string orange = "C55A11", red = "C00000";
+        // 写一个统计数字格子：值为 0 且 blankIfZero 时留空（保持"0 不显示，方便一眼看出谁有问题"），但格子和边框照常创建，格线才连续
+        static void Put(IRow r, int col, double v, ICellStyle style, bool blankIfZero)
+        {
+            var cell = r.CreateCell(col);
+            cell.CellStyle = style;
+            if (!(blankIfZero && v == 0)) cell.SetCellValue(v);
+        }
+
         for (var r = 0; r < result.Rows.Count; r++)
         {
             var row = result.Rows[r];
             var xRow = sheet.CreateRow(r + 4);
-            var baseStyle = dataStyle;
+            xRow.HeightInPoints = 18;
 
-            SetCell(xRow, 0, row.RealName,             baseStyle);
-            SetCell(xRow, 1, row.GroupName ?? "",       baseStyle);
-            SetCell(xRow, 2, row.DeptName ?? "",        baseStyle);
-            SetCell(xRow, 3, row.EmployeeNo ?? "",      baseStyle);
-            SetCell(xRow, 4, row.Position ?? "",        baseStyle);
-            SetCell(xRow, 5, row.ContractCompany ?? "", baseStyle);
+            SetCell(xRow, 0, row.RealName,             Txt(true, 0));
+            SetCell(xRow, 1, row.GroupName ?? "",       Txt(true, 1));
+            SetCell(xRow, 2, row.DeptName ?? "",        Txt(true, 2));
+            SetCell(xRow, 3, row.EmployeeNo ?? "",      Txt(false, 3));
+            SetCell(xRow, 4, row.Position ?? "",        Txt(true, 4));
+            SetCell(xRow, 5, row.ContractCompany ?? "", Txt(true, 5));
 
             for (var i = 0; i < dayCount; i++)
             {
-                // 每日格子不管有没有值都要创建，夜班黄底/休息灰底才能连成一整块（不然没打卡的格子会漏标）
+                // 每日格子不管有没有值都要创建，夜班淡黄底/休息浅灰底才能连成一整块（不然没打卡的格子会漏标）
                 var cell = xRow.CreateCell(fixedCols + i);
                 var hasHours = row.DailyHours[i] is not null;
                 var isRest   = i < row.DailyIsRest.Count && row.DailyIsRest[i];
-                cell.CellStyle = row.DailyIsNightShift[i] ? nightShiftStyle
-                               : isRest && !hasHours      ? restDayStyle
-                               :                            baseStyle;
+                var isZero   = row.DailyHours[i] == 0m;
+                var fill = row.DailyIsNightShift[i] ? "FFF2CC"
+                         : isRest && !hasHours      ? "F2F2F2"
+                         :                            null;
+                cell.CellStyle = st.Get(fill: fill, font: isZero ? "BFBFBF" : "262626", edge: fixedCols + i == lastDayCol);   // 当天工时 0 用浅灰字，不抢眼
                 if (row.DailyHours[i] is { } h) cell.SetCellValue((double)h);
             }
 
-            var c = fixedCols + dayCount;
-            SetCell(xRow, c++, (double)row.ActualWorkdays, baseStyle);
-            SetCellIfNonZero(xRow, c++, (double)row.LeaveDays, baseStyle);
-            SetCellIfNonZero(xRow, c++, row.RestDays, baseStyle);
+            var c = tailStart;
+            Put(xRow, c, (double)row.ActualWorkdays, Num(c), false); c++;
+            Put(xRow, c, (double)row.LeaveDays, Num(c), true); c++;
+            Put(xRow, c, row.RestDays, Num(c), true); c++;
             // 总工时（正班+加班）跟正班工时统一口径后两列数值完全相同，删掉这一列，只保留"正班工时"
             // （加班已经单独有"加班总时长"及其细分列），避免同一张表里出现两列数字永远一样的困惑
-            SetCell(xRow, c++, (double)row.RegularWorkHours, baseStyle);
-            SetCellIfNonZero(xRow, c++, row.LateMinutes, orangeOrRed(row.LateMinutes));
-            SetCellIfNonZero(xRow, c++, row.EarlyLeaveCount, orangeOrRed(row.EarlyLeaveCount));
-            SetCellIfNonZero(xRow, c++, row.LateCount, orangeOrRed(row.LateCount));
-            SetCellIfNonZero(xRow, c++, row.EarlyLeaveMinutes, orangeOrRed(row.EarlyLeaveMinutes));
-            SetCellIfNonZero(xRow, c++, row.MissingClockInCount, redIfPositive(row.MissingClockInCount));
-            SetCellIfNonZero(xRow, c++, row.MissingClockOutCount, redIfPositive(row.MissingClockOutCount));
-            SetCellIfNonZero(xRow, c++, row.AbsentDays, redIfPositive(row.AbsentDays));
-            if (row.BusinessTripHours > 0) SetCell(xRow, c, (double)row.BusinessTripHours, baseStyle);
-            c++;
-            SetCellIfNonZero(xRow, c++, row.NightShiftDays, baseStyle);
-            SetCellIfNonZero(xRow, c++, (double)row.NightShiftHours, baseStyle);
-            SetCellIfNonZero(xRow, c++, (double)row.TotalOvertimeHours, baseStyle);
-            SetCellIfNonZero(xRow, c++, (double)row.WeekdayOvertimeHours, baseStyle);
-            SetCellIfNonZero(xRow, c++, (double)row.RestDayOvertimeHours, baseStyle);
-            SetCellIfNonZero(xRow, c++, (double)row.HolidayOvertimeHours, baseStyle);
-            SetCell(xRow, c, row.ExpectedWorkdays, baseStyle);   // 应出勤天数（放最后一列）
+            Put(xRow, c, (double)row.RegularWorkHours, Num(c), false); c++;
+            Put(xRow, c, row.LateMinutes, Num(c, row.LateMinutes > 0 ? orange : "262626"), true); c++;
+            Put(xRow, c, row.EarlyLeaveCount, Num(c, row.EarlyLeaveCount > 0 ? orange : "262626"), true); c++;
+            Put(xRow, c, row.LateCount, Num(c, row.LateCount > 0 ? orange : "262626"), true); c++;
+            Put(xRow, c, row.EarlyLeaveMinutes, Num(c, row.EarlyLeaveMinutes > 0 ? orange : "262626"), true); c++;
+            Put(xRow, c, row.MissingClockInCount, Num(c, row.MissingClockInCount > 0 ? red : "262626"), true); c++;
+            Put(xRow, c, row.MissingClockOutCount, Num(c, row.MissingClockOutCount > 0 ? red : "262626"), true); c++;
+            Put(xRow, c, row.AbsentDays, Num(c, row.AbsentDays > 0 ? red : "262626"), true); c++;
+            Put(xRow, c, (double)row.BusinessTripHours, Num(c), true); c++;
+            Put(xRow, c, row.NightShiftDays, Num(c), true); c++;
+            Put(xRow, c, (double)row.NightShiftHours, Num(c), true); c++;
+            Put(xRow, c, (double)row.TotalOvertimeHours, Num(c), true); c++;
+            Put(xRow, c, (double)row.WeekdayOvertimeHours, Num(c), true); c++;
+            Put(xRow, c, (double)row.RestDayOvertimeHours, Num(c), true); c++;
+            Put(xRow, c, (double)row.HolidayOvertimeHours, Num(c), true); c++;
+            Put(xRow, c, row.ExpectedWorkdays, Num(c), false);   // 应出勤天数（放最后一列）
         }
 
-        // 筛选箭头：表头是第 3 行（下标 3），范围到最后一条员工数据为止——合计行在范围外，不会被筛掉或排序打乱
+        // 筛选箭头：列名行是第 4 行（下标 3），范围到最后一条员工数据为止——合计行在范围外，不会被筛掉或排序打乱
         var lastDataRow = 4 + Math.Max(result.Rows.Count, 1) - 1;
         sheet.SetAutoFilter(new CellRangeAddress(3, lastDataRow, 0, totalCols - 1));
 
@@ -313,15 +384,23 @@ public static class ExcelExportHelper
         {
             var totalRowIndex = 4 + result.Rows.Count;
             var tRow = sheet.CreateRow(totalRowIndex);
-            SetCell(tRow, 0, "合计", totalStyle);
-            for (var col = 1; col < fixedCols; col++) SetCell(tRow, col, "", totalStyle);
+            tRow.HeightInPoints = 22;
+            var totalLabel = st.Get(fill: "D6DCE4", font: "1F3864", bold: true, h: HorizontalAlignment.Left, indent: 1, topMedium: true);
+            SetCell(tRow, 0, "合计（随筛选结果变化）", totalLabel);
+            for (var col = 1; col < fixedCols; col++) SetCell(tRow, col, "", st.Get(fill: "D6DCE4", font: "1F3864", bold: true, h: HorizontalAlignment.Left, edge: edgeCols.Contains(col), topMedium: true));
+            sheet.AddMergedRegion(new CellRangeAddress(totalRowIndex, totalRowIndex, 0, fixedCols - 1));
             var firstExcelRow = 5;                       // Excel 行号 = 下标 + 1；第一条数据的下标是 4
             var lastExcelRow  = 4 + result.Rows.Count;   // 最后一条数据的下标是 3 + Rows.Count，对应 Excel 行号 4 + Rows.Count
             for (var col = fixedCols; col < totalCols; col++)
             {
                 var letter = CellReference.ConvertNumToColString(col);
+                var isDay  = col < tailStart;
+                var fmt = hourCols.Contains(col) ? "#,##0.0;-#,##0.0;\"-\""
+                        : minuteCols.Contains(col) ? "#,##0;-#,##0;\"-\""
+                        : "General;-General;\"-\"";
                 var cell = tRow.CreateCell(col);
-                cell.CellStyle = totalStyle;
+                // 每日合计动辄三四千小时，窄列里会显示成"###"：字号缩到 8，放不下时自动缩小
+                cell.CellStyle = st.Get(fill: "D6DCE4", font: "1F3864", size: isDay ? 8 : 10, bold: true, format: fmt, edge: edgeCols.Contains(col), topMedium: true, shrink: isDay);
                 cell.SetCellFormula($"SUBTOTAL(109,{letter}{firstExcelRow}:{letter}{lastExcelRow})");
             }
             // 公式的计算结果先算好缓存进文件：Excel/WPS 打开时会自己重算，但用程序（或预览器）读取时才不会读到空值
@@ -329,44 +408,81 @@ public static class ExcelExportHelper
         }
 
         return ToBytes(wb);
-
-        ICellStyle orangeOrRed(int v) => v > 0 ? orangeCellStyle : dataStyle;
-        ICellStyle redIfPositive(int v) => v > 0 ? redStyle : dataStyle;
     }
 
-    /// <summary>表头单元格在"主表头行 + 日期表头行"两行上纵向合并成一格（合并区里两个格子都要套上边框样式，边框才完整）。</summary>
-    private static void MergeHeaderVertically(ISheet sheet, IRow topRow, IRow bottomRow, int col, string text, ICellStyle style)
-    {
-        SetCell(topRow, col, text, style);
-        SetCell(bottomRow, col, "", style);
-        sheet.AddMergedRegion(new CellRangeAddress(topRow.RowNum, bottomRow.RowNum, col, col));
-    }
+    // 工时列的数字格式：1 位小数、0 显示"-"、负数带负号
+    private const string HourFormat = "0.0;-0.0;\"-\"";
 
-    // 图例/口径说明那一行：靠左、自动换行
-    private static ICellStyle LegendStyle(IWorkbook wb)
+    /// <summary>
+    /// 模板月度汇总表专用的样式工厂：用任意 RGB 色（NPOI 自带的老调色板里没有这些柔和的颜色），按参数组合缓存——
+    /// 同样参数只建一次样式对象。xlsx 的样式数量有上限（约 6.4 万），"普通/夜班/休息 × 是否分组边界列 × 各种字色和数字格式"
+    /// 的组合总共只有几十种，靠这个缓存才不会在几千行的循环里反复新建。
+    /// </summary>
+    private sealed class TemplateReportStyles(XSSFWorkbook wb)
     {
-        var s = DataStyle(wb);
-        s.Alignment = HorizontalAlignment.Left;
-        s.WrapText = true;
-        return s;
-    }
+        private readonly Dictionary<string, ICellStyle> _styles = [];
+        private readonly Dictionary<string, IFont> _fonts = [];
+        private readonly IDataFormat _fmt = wb.CreateDataFormat();
 
-    // 休息日/节假日（且当天没有工时）的每日格子：浅灰底，跟"应出勤但没数据"的纯空白格子区分开
-    private static ICellStyle RestDayStyle(IWorkbook wb)
-    {
-        var s = DataStyle(wb);
-        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.Grey25Percent.Index;
-        s.FillPattern = FillPattern.SolidForeground;
-        return s;
-    }
+        private static XSSFColor Rgb(string hex)
+        {
+            var c = new XSSFColor();
+            c.SetRgb(Convert.FromHexString(hex));
+            return c;
+        }
 
-    // 合计行：加粗 + 浅蓝底
-    private static ICellStyle TotalRowStyle(IWorkbook wb)
-    {
-        var s = HeaderStyleNoFill(wb);
-        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.LightCornflowerBlue.Index;
-        s.FillPattern = FillPattern.SolidForeground;
-        return s;
+        private IFont Font(double size, string color, bool bold)
+        {
+            var key = $"{size}|{color}|{bold}";
+            if (_fonts.TryGetValue(key, out var cached)) return cached;
+            var f = (XSSFFont)wb.CreateFont();
+            f.FontName = ReportFontName;
+            f.FontHeightInPoints = size;
+            f.IsBold = bold;
+            f.SetColor(Rgb(color));
+            return _fonts[key] = f;
+        }
+
+        /// <param name="fill">底色（RGB 十六进制），null=不填色</param>
+        /// <param name="edge">true=分组的最后一列，右边线用深一点的颜色当分组分隔线</param>
+        /// <param name="border">false=不画边框（标题、说明文字）</param>
+        /// <param name="bottomMedium">下边线中粗深蓝（列名行下面那条线）</param>
+        /// <param name="topMedium">上边线中粗深蓝（合计行上面那条线）</param>
+        public ICellStyle Get(string? fill = null, string font = "262626", double size = 10, bool bold = false,
+            HorizontalAlignment h = HorizontalAlignment.Center, bool wrap = false, string? format = null,
+            bool edge = false, bool border = true, bool bottomMedium = false, bool topMedium = false,
+            short indent = 0, bool shrink = false)
+        {
+            var key = $"{fill}|{font}|{size}|{bold}|{h}|{wrap}|{format}|{edge}|{border}|{bottomMedium}|{topMedium}|{indent}|{shrink}";
+            if (_styles.TryGetValue(key, out var cached)) return cached;
+
+            var s = (XSSFCellStyle)wb.CreateCellStyle();
+            s.SetFont(Font(size, font, bold));
+            s.Alignment = h;
+            s.VerticalAlignment = VerticalAlignment.Center;
+            s.WrapText = wrap;
+            s.Indention = indent;
+            s.ShrinkToFit = shrink;
+            if (format is not null) s.DataFormat = _fmt.GetFormat(format);
+            if (fill is not null)
+            {
+                s.SetFillForegroundColor(Rgb(fill));
+                s.FillPattern = FillPattern.SolidForeground;
+            }
+            if (border)
+            {
+                var light = Rgb("D9D9D9");
+                var navy  = Rgb("1F3864");
+                s.BorderTop = topMedium ? BorderStyle.Medium : BorderStyle.Thin;
+                s.BorderBottom = bottomMedium ? BorderStyle.Medium : BorderStyle.Thin;
+                s.BorderLeft = s.BorderRight = BorderStyle.Thin;
+                s.SetTopBorderColor(topMedium ? navy : light);
+                s.SetBottomBorderColor(bottomMedium ? navy : light);
+                s.SetLeftBorderColor(light);
+                s.SetRightBorderColor(edge ? Rgb("8497B0") : light);
+            }
+            return _styles[key] = s;
+        }
     }
 
     // ── 报表 3.2：排班记录（排班页导出，一行一人，每天一格显示排的什么班，方便看有没有人漏排）──
@@ -735,15 +851,6 @@ public static class ExcelExportHelper
         s.Alignment   = HorizontalAlignment.Center;
         s.VerticalAlignment = VerticalAlignment.Center;
         ApplyBorder(s);
-        return s;
-    }
-
-    // 模板月度汇总表专用：夜班当天的每日格子标黄，一眼看出这个人这天上的是夜班
-    private static ICellStyle NightShiftStyle(IWorkbook wb)
-    {
-        var s = DataStyle(wb);
-        s.FillForegroundColor = NPOI.HSSF.Util.HSSFColor.Yellow.Index;
-        s.FillPattern = FillPattern.SolidForeground;
         return s;
     }
 
