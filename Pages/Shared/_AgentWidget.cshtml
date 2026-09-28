@@ -1,0 +1,408 @@
+@* 悬浮机器人助手（仅管理员/文员可见，见 _Layout 引用处）*@
+@Html.AntiForgeryToken()
+<div id="agentWidget" class="agent-widget-root">
+    <style>
+        .agent-widget-root { font-family: inherit; }
+        .agent-widget-fab {
+            position: fixed; right: 22px; bottom: 24px; z-index: 1080;
+            width: 56px; height: 56px; border-radius: 50%;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: #fff; border: none; box-shadow: 0 6px 18px rgba(37,99,235,.45);
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            font-size: 26px; transition: transform .18s ease, box-shadow .18s ease;
+            animation: awBreathe 3.2s ease-in-out infinite;
+        }
+        .agent-widget-fab:hover { transform: scale(1.1) rotate(-4deg); box-shadow: 0 8px 24px rgba(37,99,235,.6); }
+        .agent-widget-fab:active { transform: scale(.94); }
+        .agent-widget-fab.busy { animation: awBreathe 3.2s ease-in-out infinite, awSpinGlow 1.4s linear infinite; }
+        @@keyframes awBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+        @@keyframes awNod { 0%, 100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-2px) rotate(-6deg); } }
+        @@keyframes awSpinGlow { 0%, 100% { box-shadow: 0 6px 18px rgba(37,99,235,.45); } 50% { box-shadow: 0 6px 24px rgba(96,165,250,.85); } }
+
+        /* 有手有脚、会动的机器人小人（currentColor 继承按钮/标题栏的白色） */
+        .aw-bot { width: 34px; height: 34px; color: #fff; overflow: visible; flex-shrink: 0; }
+        .aw-bot-mini { width: 22px; height: 22px; }
+        .aw-bot-eye { transform-box: fill-box; transform-origin: center; animation: awBlinkEye 4.2s ease-in-out infinite; }
+        .aw-bot-eye.r { animation-delay: .05s; }
+        @@keyframes awBlinkEye { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.15); } }
+        .aw-bot-antenna-dot { transform-box: fill-box; transform-origin: center; animation: awAntennaPulse 1.6s ease-in-out infinite; }
+        @@keyframes awAntennaPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(1.3); } }
+        .aw-bot-arm-l, .aw-bot-arm-r, .aw-bot-leg-l, .aw-bot-leg-r { transform-box: fill-box; transform-origin: top center; }
+        .aw-bot-arm-r { animation: awWave 3.6s ease-in-out infinite; }
+        @@keyframes awWave { 0%, 78%, 100% { transform: rotate(0deg); } 82% { transform: rotate(-26deg); } 86% { transform: rotate(8deg); } 90% { transform: rotate(-18deg); } 94% { transform: rotate(0deg); } }
+        .aw-bot-leg-l { animation: awLegIdle 3.2s ease-in-out infinite; }
+        .aw-bot-leg-r { animation: awLegIdle 3.2s ease-in-out infinite reverse; }
+        @@keyframes awLegIdle { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(5deg); } }
+        .busy .aw-bot-arm-l { animation: awArmSwing .5s ease-in-out infinite; }
+        .busy .aw-bot-arm-r { animation: awArmSwing .5s ease-in-out infinite reverse; }
+        @@keyframes awArmSwing { 0%, 100% { transform: rotate(-20deg); } 50% { transform: rotate(20deg); } }
+        .busy .aw-bot-leg-l { animation: awLegStep .5s ease-in-out infinite; }
+        .busy .aw-bot-leg-r { animation: awLegStep .5s ease-in-out infinite .25s; }
+        @@keyframes awLegStep { 0%, 100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-2px) rotate(10deg); } }
+        .agent-widget-fab .aw-dot {
+            position: absolute; top: 2px; right: 2px; width: 12px; height: 12px; border-radius: 50%;
+            background: #fbbf24; border: 2px solid #fff; display: none;
+        }
+        .agent-widget-fab.busy .aw-dot { display: block; animation: awBlink 1s infinite; }
+        @@keyframes awBlink { 50% { opacity: .25; } }
+        .agent-widget-panel {
+            position: fixed; right: 22px; bottom: 92px; z-index: 1080;
+            width: 380px; max-width: calc(100vw - 30px); height: 560px; max-height: calc(100vh - 130px);
+            background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(15,23,42,.25);
+            display: flex; flex-direction: column; overflow: hidden; border: 1px solid #e5e7eb;
+            opacity: 0; transform: translateY(16px) scale(.96); pointer-events: none;
+            transition: opacity .2s ease, transform .2s ease;
+        }
+        .agent-widget-panel.open { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+        .aw-head {
+            display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+            background: linear-gradient(135deg,#2563eb,#1e40af); color: #fff;
+        }
+        .aw-head .aw-bot-mini { animation: awNod 2.4s ease-in-out infinite; }
+        .aw-head .aw-title { font-weight: 600; font-size: 15px; flex-grow: 1; }
+        .aw-head a { color: #dbeafe; font-size: 12px; text-decoration: none; margin-left: 8px; }
+        .aw-head a:hover { text-decoration: underline; }
+        .aw-head .aw-close { cursor: pointer; background: none; border: none; color: #fff; font-size: 18px; transition: transform .15s ease; }
+        .aw-head .aw-close:hover { transform: rotate(90deg); }
+        .aw-body { flex-grow: 1; overflow-y: auto; padding: 10px 12px; background: #f8fafc; }
+        .aw-msg { margin-bottom: 8px; display: flex; animation: awPop .22s ease; }
+        @@keyframes awPop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .aw-msg .b { max-width: 82%; padding: 7px 10px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.5; }
+        .aw-msg.user { justify-content: flex-end; }
+        .aw-msg.user .b { background: #2563eb; color: #fff; border-bottom-right-radius: 2px; }
+        .aw-msg.assistant { justify-content: flex-start; }
+        .aw-msg.assistant .b { background: #fff; border: 1px solid #e5e7eb; border-bottom-left-radius: 2px; }
+        .aw-typing { display: inline-flex; gap: 4px; padding: 2px 0; }
+        .aw-typing span { width: 6px; height: 6px; border-radius: 50%; background: #94a3b8; animation: awTyping 1s infinite ease-in-out; }
+        .aw-typing span:nth-child(2) { animation-delay: .15s; }
+        .aw-typing span:nth-child(3) { animation-delay: .3s; }
+        @@keyframes awTyping { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+        .aw-actions-list { border-top: 1px dashed #e5e7eb; background: #fffbeb; padding: 6px 12px; max-height: 40%; overflow-y: auto; flex-shrink: 0; }
+        .aw-actions-list:empty { display: none; padding: 0; border: none; }
+        .aw-action-card { background: #fff; border: 1px solid #fde68a; border-left: 3px solid #f59e0b; border-radius: 8px; padding: 7px 9px; margin: 6px 0; animation: awPop .22s ease; }
+        .aw-action-card.risk { border-left-color: #dc2626; border-color: #fecaca; background: #fef2f2; }
+        .aw-action-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+        .aw-action-tool { font-size: 11px; font-weight: 600; color: #92400e; }
+        .aw-action-card.risk .aw-action-tool { color: #b91c1c; }
+        .aw-action-status { font-size: 11px; color: #6b7280; }
+        .aw-action-summary { font-size: 12.5px; color: #1f2937; margin: 4px 0; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+        .aw-action-note { font-size: 11.5px; color: #6b7280; margin-bottom: 4px; }
+        .aw-action-btns { display: flex; gap: 6px; }
+        .aw-action-btns button { font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; transition: transform .1s ease; }
+        .aw-action-btns button:active { transform: scale(.94); }
+        .aw-action-btns .approve { background: #2563eb; color: #fff; }
+        .aw-action-btns .reject { background: #fff; color: #6b7280; border-color: #d1d5db; }
+        .aw-action-btns .undo { background: #fff; color: #b45309; border-color: #fde68a; }
+        .aw-action-btns button:disabled { opacity: .5; cursor: default; }
+        .aw-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 10px 0; }
+        .aw-chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid #dbeafe; background: #eff6ff; color: #1d4ed8; cursor: pointer; transition: background .12s ease; }
+        .aw-chip:hover { background: #dbeafe; }
+        .aw-chip:disabled { opacity: .5; cursor: default; }
+        .aw-foot { padding: 8px 10px; border-top: 1px solid #e5e7eb; background: #fff; }
+        .aw-input-row { display: flex; gap: 6px; }
+        .aw-input-row input { flex-grow: 1; }
+        .aw-input-row #awSend { transition: transform .12s ease; }
+        .aw-input-row #awSend:not(:disabled):active { transform: scale(.92); }
+        .aw-actions-note { margin-top: 6px; font-size: 12px; color: #b45309; }
+    </style>
+
+    <button id="awFab" class="agent-widget-fab" title="智能助手" aria-label="智能助手">
+        <span class="aw-dot"></span>
+        <svg class="aw-bot" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <line x1="32" y1="6" x2="32" y2="14" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+            <circle class="aw-bot-antenna-dot" cx="32" cy="5" r="3.4" fill="#fbbf24" />
+            <rect class="aw-bot-arm-l" x="9" y="22" width="11" height="5" rx="2.5" fill="currentColor" />
+            <rect class="aw-bot-arm-r" x="44" y="22" width="11" height="5" rx="2.5" fill="currentColor" />
+            <rect x="18" y="12" width="28" height="22" rx="8" fill="currentColor" />
+            <circle class="aw-bot-eye" cx="27" cy="22" r="3" fill="#1d4ed8" />
+            <circle class="aw-bot-eye r" cx="37" cy="22" r="3" fill="#1d4ed8" />
+            <rect x="20" y="34" width="24" height="18" rx="6" fill="currentColor" opacity=".92" />
+            <rect class="aw-bot-leg-l" x="22" y="52" width="8" height="9" rx="3" fill="currentColor" />
+            <rect class="aw-bot-leg-r" x="34" y="52" width="8" height="9" rx="3" fill="currentColor" />
+        </svg>
+    </button>
+
+    <div id="awPanel" class="agent-widget-panel">
+        <div class="aw-head">
+            <svg class="aw-bot aw-bot-mini" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <line x1="32" y1="6" x2="32" y2="14" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                <circle class="aw-bot-antenna-dot" cx="32" cy="5" r="3.4" fill="#fbbf24" />
+                <rect class="aw-bot-arm-l" x="9" y="22" width="11" height="5" rx="2.5" fill="currentColor" />
+                <rect class="aw-bot-arm-r" x="44" y="22" width="11" height="5" rx="2.5" fill="currentColor" />
+                <rect x="18" y="12" width="28" height="22" rx="8" fill="currentColor" />
+                <circle class="aw-bot-eye" cx="27" cy="22" r="3" fill="#1e40af" />
+                <circle class="aw-bot-eye r" cx="37" cy="22" r="3" fill="#1e40af" />
+                <rect x="20" y="34" width="24" height="18" rx="6" fill="currentColor" opacity=".92" />
+                <rect class="aw-bot-leg-l" x="22" y="52" width="8" height="9" rx="3" fill="currentColor" />
+                <rect class="aw-bot-leg-r" x="34" y="52" width="8" height="9" rx="3" fill="currentColor" />
+            </svg>
+            <span class="aw-title">智能助手</span>
+            <a href="/Agent/Chat" target="_blank" title="打开完整对话页（写操作动作卡片在这里处理）">完整页 ↗</a>
+            <a href="/Agent/Logs" target="_blank" title="动作审计">审计 ↗</a>
+            <button type="button" class="aw-close" id="awClose" aria-label="关闭">×</button>
+        </div>
+        <div class="aw-body" id="awBody"></div>
+        <div class="aw-actions-list" id="awActions"></div>
+        <div class="aw-chips" id="awChips">
+            <button type="button" class="aw-chip" data-q="查一下今天的考勤异常">今日异常</button>
+            <button type="button" class="aw-chip" data-q="列一下我待审批的单子">待审批</button>
+            <button type="button" class="aw-chip" data-q="有哪些待确认的登记">待确认登记</button>
+        </div>
+        <div class="aw-foot">
+            <div class="aw-input-row">
+                <input type="text" id="awText" class="form-control form-control-sm" maxlength="4000"
+                       placeholder="问点什么…（写操作可直接在这里确认）" autocomplete="off" />
+                <button type="button" id="awSend" class="btn btn-sm btn-primary">发送</button>
+            </div>
+            <div class="aw-actions-note" id="awHint">生成的操作提案可以直接在下面点确认执行；手机号等敏感信息请勿粘贴。</div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            if (window.__agentWidgetLoaded) return;
+            window.__agentWidgetLoaded = true;
+
+            var convId = 0;
+            var busy = false;
+            var briefShown = false;
+            var fab = document.getElementById('awFab');
+            var panel = document.getElementById('awPanel');
+            var body = document.getElementById('awBody');
+            var actionsBox = document.getElementById('awActions');
+            var chips = document.getElementById('awChips');
+            var text = document.getElementById('awText');
+            var hint = document.getElementById('awHint');
+
+            // 轻量 Markdown：转义后把 **粗体** 渲染出来，避免星号原样显示
+            function renderMd(t) {
+                var s = String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+                return s;
+            }
+
+            function token() {
+                // 从服务端取当前会话有效的防伪令牌（用请求头方式携带，更可靠）
+                return fetch('/Agent/Chat?handler=Token', { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) { return d.token || ''; })
+                    .catch(function () { return ''; });
+            }
+            function scrollBottom() { body.scrollTop = body.scrollHeight; }
+            function bubble(role, content) {
+                var row = document.createElement('div');
+                row.className = 'aw-msg ' + role;
+                var b = document.createElement('div');
+                b.className = 'b';
+                b.textContent = content;
+                row.appendChild(b);
+                body.appendChild(row);
+                scrollBottom();
+                return b;
+            }
+
+            // 渲染待确认/可撤回的动作卡片列表（直接在悬浮窗内点确认/拒绝/撤回，不用跳完整页）
+            function renderActions(list) {
+                actionsBox.innerHTML = '';
+                (list || []).forEach(function (a) {
+                    if (!a.isPending && !a.canUndo) return;   // 已拒绝/已过期/不可撤回的执行记录不占地方
+                    var card = document.createElement('div');
+                    card.className = 'aw-action-card' + (a.highRisk ? ' risk' : '');
+                    var top = document.createElement('div');
+                    top.className = 'aw-action-top';
+                    top.innerHTML = '<span class="aw-action-tool"></span><span class="aw-action-status"></span>';
+                    top.querySelector('.aw-action-tool').textContent = a.toolNameText || '操作';
+                    top.querySelector('.aw-action-status').textContent = a.statusText || '';
+                    card.appendChild(top);
+                    var sum = document.createElement('div');
+                    sum.className = 'aw-action-summary';
+                    sum.textContent = a.summaryText || '';
+                    card.appendChild(sum);
+                    if (a.canUndo && a.undoHint) {
+                        var note = document.createElement('div');
+                        note.className = 'aw-action-note';
+                        note.textContent = a.undoHint;
+                        card.appendChild(note);
+                    }
+                    var btns = document.createElement('div');
+                    btns.className = 'aw-action-btns';
+                    if (a.isPending) {
+                        btns.innerHTML = '<button type="button" class="approve">确认执行</button><button type="button" class="reject">拒绝</button>';
+                        btns.querySelector('.approve').addEventListener('click', function () { reviewAction(a.id, 'approve', this); });
+                        btns.querySelector('.reject').addEventListener('click', function () { reviewAction(a.id, 'reject', this); });
+                    } else if (a.canUndo) {
+                        btns.innerHTML = '<button type="button" class="undo">撤回</button>';
+                        btns.querySelector('.undo').addEventListener('click', function () { reviewAction(a.id, 'undo', this); });
+                    }
+                    card.appendChild(btns);
+                    actionsBox.appendChild(card);
+                });
+            }
+
+            function refreshActions() {
+                if (!convId) return;
+                fetch('/Agent/Chat?handler=WidgetActions&conversationId=' + convId, { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) { renderActions(d.actions); })
+                    .catch(function () { /* 静默：不影响主对话 */ });
+            }
+
+            function reviewAction(actionId, act, btnEl) {
+                var card = btnEl.closest('.aw-action-card');
+                card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+                token().then(function (tk) {
+                    return fetch('/Agent/Chat?handler=WidgetReview', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'RequestVerificationToken': tk },
+                        body: 'actionId=' + encodeURIComponent(actionId) + '&conversationId=' + encodeURIComponent(convId) + '&act=' + encodeURIComponent(act)
+                    });
+                }).then(function (r) { return r.json(); }).then(function (d) {
+                    hint.textContent = d.message || (d.ok ? '操作成功' : '操作失败');
+                    renderActions(d.actions);
+                }).catch(function (e) {
+                    hint.textContent = '⚠️ ' + e.message;
+                    card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+                });
+            }
+
+            function openPanel() {
+                panel.classList.add('open');
+                if (convId === 0) loadData();
+                text.focus();
+            }
+            function closePanel() { panel.classList.remove('open'); }
+            function setBusy(on) {
+                busy = on;
+                fab.classList.toggle('busy', on);
+                document.getElementById('awSend').disabled = on;
+                text.disabled = on;
+            }
+
+            // 主动播报：今日异常/待审批/待确认登记速览，每次页面打开只播一次，不打扰
+            function showBriefOnce() {
+                if (briefShown) return;
+                briefShown = true;
+                fetch('/Agent/Chat?handler=WidgetBrief', { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) { if (d.text) bubble('assistant', d.text); })
+                    .catch(function () { /* 静默：播报失败不影响正常对话 */ });
+            }
+
+            function loadData() {
+                fetch('/Agent/Chat?handler=WidgetData', { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        body.innerHTML = '';
+                        if (!d.enabled) {
+                            bubble('assistant', '智能助手未启用（Agent:Enabled=true + AGENT_API_KEY 环境变量）。');
+                            return;
+                        }
+                        if (!d.conversationId) {
+                            // 无会话：自动建一个
+                            return token().then(function (tk) {
+                                return fetch('/Agent/Chat?handler=WidgetEnsure', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'RequestVerificationToken': tk }
+                                }).then(function (r2) { return r2.json(); }).then(function (e) {
+                                    convId = e.conversationId;
+                                    showBriefOnce();
+                                    bubble('assistant', '你好！我是考勤系统智能助手。有什么可以帮你？（要数据查询、生成操作提案都可以，生成的动作可以直接在下面确认）');
+                                });
+                            });
+                        }
+                        convId = d.conversationId;
+                        var msgs = d.messages || [];
+                        showBriefOnce();
+                        if (msgs.length === 0) {
+                            bubble('assistant', '你好！我是考勤系统智能助手。有什么可以帮你？（要数据查询、生成操作提案都可以，生成的动作可以直接在下面确认）');
+                        } else {
+                            msgs.forEach(function (m) {
+                                if (m.role === 'user') bubble('user', m.content);
+                                else if (m.role === 'assistant') {
+                                    var b = bubble('assistant', m.content);
+                                    b.innerHTML = renderMd(m.content);
+                                }
+                            });
+                        }
+                        renderActions(d.actions);
+                    }).catch(function (e) {
+                        bubble('assistant', '加载失败：' + e.message);
+                    });
+            }
+
+            function send() {
+                if (busy || !convId) return;
+                var t = text.value.trim();
+                if (!t) return;
+                text.value = '';
+                bubble('user', t);
+                var sb = bubble('assistant', '');
+                sb.innerHTML = '<span class="aw-typing"><span></span><span></span><span></span></span>';
+                var acc = '';
+                setBusy(true);
+                hint.textContent = '正在生成…（写操作生成动作后请到「完整页」确认执行）';
+
+                token().then(function (tk) {
+                    return fetch('/Agent/Chat?handler=Stream', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'RequestVerificationToken': tk
+                        },
+                        body: 'SendConversationId=' + encodeURIComponent(convId) +
+                              '&SendText=' + encodeURIComponent(t)
+                    }).then(function (res) {
+                        if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+                        var reader = res.body.getReader();
+                        var decoder = new TextDecoder('utf-8');
+                        var buf = '';
+                        function pump() {
+                            return reader.read().then(function (r) {
+                                if (r.done) return;
+                                buf += decoder.decode(r.value, { stream: true });
+                                var idx;
+                                while ((idx = buf.indexOf('\n\n')) >= 0) {
+                                    var block = buf.slice(0, idx);
+                                    buf = buf.slice(idx + 2);
+                                    var di = block.indexOf('data:');
+                                    if (di < 0) continue;
+                                    var data = block.slice(di + 5).trim();
+                                    if (!data) continue;
+                                    var ev;
+                                    try { ev = JSON.parse(data); } catch (e) { continue; }
+                                    if (ev.t === 'd') { acc += ev.x; sb.innerHTML = renderMd(acc); scrollBottom(); }
+                                    else if (ev.t === 'err') { sb.textContent = '⚠️ ' + ev.x; }
+                                    else if (ev.t === 'done' && ev.x && !acc) { sb.innerHTML = renderMd(ev.x); }
+                                }
+                                return pump();
+                            });
+                        }
+                        return pump();
+                    });
+                }).catch(function (e) {
+                    sb.textContent = '⚠️ ' + e.message;
+                }).finally(function () {
+                    setBusy(false);
+                    hint.textContent = '生成的操作提案可以直接在下面点确认执行；手机号等敏感信息请勿粘贴。';
+                    refreshActions();
+                });
+            }
+
+            fab.addEventListener('click', function () {
+                if (panel.classList.contains('open')) closePanel();
+                else openPanel();
+            });
+            document.getElementById('awClose').addEventListener('click', closePanel);
+            document.getElementById('awSend').addEventListener('click', send);
+            text.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+            chips.querySelectorAll('.aw-chip').forEach(function (chip) {
+                chip.addEventListener('click', function () {
+                    if (busy || !convId) return;
+                    text.value = chip.getAttribute('data-q');
+                    send();
+                });
+            });
+        })();
+    </script>
+</div>

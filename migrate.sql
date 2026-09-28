@@ -2893,5 +2893,214 @@ DELIMITER ;
 CALL MigrationsScript();
 DROP PROCEDURE MigrationsScript;
 
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE TABLE `AgentActionLog` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `ConversationId` int NOT NULL,
+        `OperatorUserId` int NOT NULL,
+        `ApproverUserId` int NULL,
+        `ToolName` varchar(60) CHARACTER SET utf8mb4 NOT NULL,
+        `SummaryText` varchar(500) CHARACTER SET utf8mb4 NOT NULL,
+        `ReviewAction` varchar(20) CHARACTER SET utf8mb4 NOT NULL,
+        `Success` tinyint(1) NOT NULL,
+        `WasExpired` tinyint(1) NOT NULL,
+        `DetailText` varchar(1000) CHARACTER SET utf8mb4 NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        CONSTRAINT `PK_AgentActionLog` PRIMARY KEY (`Id`)
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE TABLE `AgentConversation` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `UserId` int NOT NULL,
+        `Title` varchar(200) CHARACTER SET utf8mb4 NULL,
+        `IsActive` tinyint(1) NOT NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        `UpdatedAt` datetime(6) NOT NULL,
+        CONSTRAINT `PK_AgentConversation` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_AgentConversation_User_UserId` FOREIGN KEY (`UserId`) REFERENCES `User` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE TABLE `AgentMessage` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `ConversationId` int NOT NULL,
+        `Role` varchar(20) CHARACTER SET utf8mb4 NOT NULL,
+        `Content` longtext CHARACTER SET utf8mb4 NOT NULL,
+        `ModelName` varchar(100) CHARACTER SET utf8mb4 NULL,
+        `PromptTokens` int NULL,
+        `CompletionTokens` int NULL,
+        `ToolTraceText` longtext CHARACTER SET utf8mb4 NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        CONSTRAINT `PK_AgentMessage` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_AgentMessage_AgentConversation_ConversationId` FOREIGN KEY (`ConversationId`) REFERENCES `AgentConversation` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE TABLE `AgentPendingAction` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `ConversationId` int NOT NULL,
+        `ToolName` varchar(60) CHARACTER SET utf8mb4 NOT NULL,
+        `ParamJson` longtext CHARACTER SET utf8mb4 NOT NULL,
+        `SummaryText` varchar(500) CHARACTER SET utf8mb4 NOT NULL,
+        `Status` int NOT NULL,
+        `CreatedBy` int NOT NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        `ExpiresAt` datetime(6) NOT NULL,
+        `ReviewedBy` int NULL,
+        `ReviewedAt` datetime(6) NULL,
+        `ResultText` varchar(500) CHARACTER SET utf8mb4 NULL,
+        `ErrorText` varchar(500) CHARACTER SET utf8mb4 NULL,
+        `Undoable` tinyint(1) NOT NULL,
+        `SnapshotJson` longtext CHARACTER SET utf8mb4 NULL,
+        `UndoneAt` datetime(6) NULL,
+        `UndoneBy` int NULL,
+        CONSTRAINT `PK_AgentPendingAction` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_AgentPendingAction_AgentConversation_ConversationId` FOREIGN KEY (`ConversationId`) REFERENCES `AgentConversation` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE INDEX `IX_AgentActionLog_CreatedAt` ON `AgentActionLog` (`CreatedAt`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE INDEX `IX_AgentActionLog_OperatorUserId` ON `AgentActionLog` (`OperatorUserId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE INDEX `IX_AgentConversation_UserId` ON `AgentConversation` (`UserId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE INDEX `IX_AgentMessage_ConversationId` ON `AgentMessage` (`ConversationId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE INDEX `IX_AgentPendingAction_ConversationId` ON `AgentPendingAction` (`ConversationId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    CREATE INDEX `IX_AgentPendingAction_Status` ON `AgentPendingAction` (`Status`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20260928082948_AddAgent', '9.0.9');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
 COMMIT;
 
