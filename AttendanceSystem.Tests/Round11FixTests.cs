@@ -473,4 +473,75 @@ public class Round11FixTests : IDisposable
         Assert.NotNull(rec.MidCheckResults);
         Assert.True(rec.MidCheckResults.ParseMidCheckResults().Single().IsSatisfied);
     }
+
+    // ── ⑩ 休息日不计正班工时，批了加班的只算加班（2026-09-28 用户确认）────────
+
+    [Theory]
+    [InlineData(13.5)]    // 休息日全天加班：正班 0，只有加班 13.5
+    [InlineData(0)]       // 休息日没批加班：本来就是 0
+    public async Task 手动补卡_休息日不计正班工时_有加班也一样(double otHours)
+    {
+        var (uid, _) = SeedWeekWorld();   // 周五~周一都排了白班，班次配置的每周休息日是周六周日
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Sat, OvertimeHours = (decimal)otHours });
+            db.SaveChanges();
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            await svc.AdminAdjustPunchAsync(uid, Sat, Sat.ToDateTime(new TimeOnly(8, 24)), Sat.ToDateTime(new TimeOnly(22, 2)), null, "管理员");
+        }
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Sat);
+        Assert.Equal(0m, rec.ActualWorkHours);                  // 以前有加班时这里是 8：正班 8 + 加班 13.5 重复计算
+        Assert.Equal((decimal)otHours, rec.OvertimeHours);      // 加班时长以审批单为准，不受影响
+    }
+
+    [Fact]
+    public async Task 手动补卡_工作日照常计正班工时_加班另算()
+    {
+        var (uid, _) = SeedWeekWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Mon, OvertimeHours = 4m });
+            db.SaveChanges();
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            await svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(8, 25)), Mon.ToDateTime(new TimeOnly(22, 0)), null, "管理员");
+        }
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal(8m, rec.ActualWorkHours);     // 工作日：正班封顶在应下班时间，8 小时
+        Assert.Equal(4m, rec.OvertimeHours);
+    }
+
+    [Fact]
+    public async Task 考勤机同步_休息日有加班_正班工时也是0_只有加班()
+    {
+        var (uid, _) = SeedDayMidWorld();
+        using (var db = CreateContext())
+        {
+            // 把排班挪到周六（班次配置的每周休息日），并提前批好加班
+            var assign = db.ShiftAssignments.Single(a => a.UserId == uid);
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = uid, WorkDate = Sat, ShiftScheduleId = assign.ShiftScheduleId });
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Sat, OvertimeHours = 13.5m });
+            db.SaveChanges();
+        }
+        using (var db = CreateContext())
+        {
+            var att = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var svc = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
+            await svc.ProcessAttLogAsync("SNM", [
+                new ZKAttLogRow("M1", Sat.ToDateTime(new TimeOnly(8, 24)), 0, 15),
+                new ZKAttLogRow("M1", Sat.ToDateTime(new TimeOnly(22, 2)), 0, 15)]);
+        }
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Sat);
+        Assert.NotNull(rec.ClockOutTime);
+        Assert.Equal(0m, rec.ActualWorkHours);
+        Assert.Equal(13.5m, rec.OvertimeHours);
+    }
 }

@@ -812,8 +812,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     // 缺打卡的窗口直接从记录本身已经存好的 MidCheckResults 里读，不用班次现在的配置反查
                     // （班次配置可能后来改过，用记录当时冻结下来的这份才准确）。
                     shiftByDate.TryGetValue(r.WorkDate, out var shift);
-                    // 休息日自己打卡、又没有批准的加班申请，不补算工时——跟本地打卡同一套规则
-                    if (r.OvertimeHours <= 0 && await IsNonCompRestDayAsync(db, r.WorkDate, shift, user.AttendanceGroupId))
+                    // 休息日不计正班工时（有没有批准的加班都一样：有加班的话只算加班）——跟本地打卡同一套规则
+                    if (await IsNonCompRestDayAsync(db, r.WorkDate, shift, user.AttendanceGroupId))
                     {
                         r.ActualWorkHours = 0;
                     }
@@ -1506,7 +1506,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         AttendanceRecord record, DateOnly workDate, DateTime clockIn, DateTime clockOut, ShiftSchedule? shift, int? groupId)
     {
         var (effectiveClockIn, secondHalfBoundary) = await ResolveEffectiveClockInAsync(record, workDate, clockIn, shift);
-        if (record.OvertimeHours <= 0 && await IsNonCompRestDayAsync(db, workDate, shift, groupId))
+        // 休息日不计正班工时：没批加班的，打了卡也不算工时；批了加班的，只算加班（加班时长以审批单为准，
+        // 由 OvertimeHours 单独记）。以前"有批准的加班就照常算正班工时"，休息日全天加班的人会被
+        // "正班 8 小时 + 加班 13.5 小时"重复计算同一段在岗时间（2026-09-28 用户确认改成只算加班）
+        if (await IsNonCompRestDayAsync(db, workDate, shift, groupId))
             return 0;
         var effectiveClockOut = ClampEffectiveClockOut(workDate, clockOut, shift, secondHalfBoundary);
         return CalcWorkHours(effectiveClockIn, effectiveClockOut, groupId);

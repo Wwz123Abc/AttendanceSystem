@@ -306,8 +306,8 @@ public class ZKDeviceSyncService(
                 secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, midCheckResults);
             }
 
-            // 休息日自己打卡、又没有批准的加班申请，不算工时——跟本地打卡（ComputeDailyWorkHoursAsync）同一套规则
-            if (record.OvertimeHours <= 0 && await AttendanceService.IsNonCompRestDayAsync(db, workDate, shift, groupId))
+            // 休息日不计正班工时（有加班的话只算加班）——跟本地打卡（ComputeDailyWorkHoursAsync）同一套规则
+            if (await AttendanceService.IsNonCompRestDayAsync(db, workDate, shift, groupId))
             {
                 record.ActualWorkHours = 0;
             }
