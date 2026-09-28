@@ -586,6 +586,77 @@ public static class ExcelExportHelper
         return ToBytes(wb);
     }
 
+    // ── 总审批记录：员工提交的申请 + 各级审批结果（一行一张申请单）────────────────────
+    public static byte[] ExportApprovalRecords(List<ApprovalRequestDto> items, DateOnly start, DateOnly end)
+    {
+        using var wb = new XSSFWorkbook();
+        var sheet = wb.CreateSheet("总审批记录");
+
+        var titleStyle  = TitleStyle(wb);
+        var headerStyle = HeaderStyle(wb);
+        var dataStyle   = DataStyle(wb);
+        var bandedStyle = BandedStyle(wb);
+        // 申请内容/理由/审批流程可能很长且有换行，这几列用自动换行 + 左对齐，不用居中
+        ICellStyle Wrap(ICellStyle basis)
+        {
+            var s = wb.CreateCellStyle();
+            s.CloneStyleFrom(basis);
+            s.WrapText = true;
+            s.Alignment = HorizontalAlignment.Left;
+            s.VerticalAlignment = VerticalAlignment.Top;
+            return s;
+        }
+        var wrapData   = Wrap(dataStyle);
+        var wrapBanded = Wrap(bandedStyle);
+
+        string[] headers =
+        [
+            "申请单号", "类型", "申请人工号", "申请人", "部门", "申请内容", "时长", "申请理由",
+            "提交时间", "当前状态", "审批流程 / 意见", "最后处理时间"
+        ];
+        int[] widths = [20, 8, 12, 10, 16, 42, 12, 30, 17, 10, 46, 17];
+
+        var titleRow = sheet.CreateRow(0);
+        SetCell(titleRow, 0, $"总审批记录（提交时间 {start:yyyy-MM-dd} 至 {end:yyyy-MM-dd}，共 {items.Count} 条）", titleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, headers.Length - 1));
+        titleRow.HeightInPoints = 28;
+
+        var headerRow = sheet.CreateRow(1);
+        headerRow.HeightInPoints = 20;
+        for (var i = 0; i < headers.Length; i++)
+        {
+            SetCell(headerRow, i, headers[i], headerStyle);
+            sheet.SetColumnWidth(i, widths[i] * 256);
+        }
+        sheet.SetAutoFilter(new CellRangeAddress(1, 1, 0, headers.Length - 1));
+        ApplyLookAndFeel(sheet, freezeCols: 4, freezeRows: 2, repeatHeaderRows: 2);   // 冻结单号/类型/工号/姓名这几列 + 标题表头
+
+        for (var r = 0; r < items.Count; r++)
+        {
+            var a = items[r];
+            var row = sheet.CreateRow(r + 2);
+            var baseStyle = r % 2 == 1 ? bandedStyle : dataStyle;
+            var textStyle = r % 2 == 1 ? wrapBanded : wrapData;
+            var lastHandled = a.Steps.Where(s => s.HandledAt.HasValue).Select(s => s.HandledAt!.Value).DefaultIfEmpty().Max();
+            SetCell(row, 0,  a.RequestNo, baseStyle);
+            SetCell(row, 1,  a.ApprovalTypeText, baseStyle);
+            SetCell(row, 2,  a.ApplicantEmployeeNo, baseStyle);
+            SetCell(row, 3,  a.ApplicantName, baseStyle);
+            SetCell(row, 4,  a.DeptName ?? "", baseStyle);
+            SetCell(row, 5,  a.ContentText, textStyle);
+            SetCell(row, 6,  a.DurationText, baseStyle);
+            SetCell(row, 7,  a.Reason ?? "", textStyle);
+            SetCell(row, 8,  a.SubmittedAtText, baseStyle);
+            SetCell(row, 9,  a.ApprovalStatusText, baseStyle);
+            SetCell(row, 10, a.StepsText, textStyle);
+            SetCell(row, 11, lastHandled == default ? "" : lastHandled.ToString("yyyy-MM-dd HH:mm"), baseStyle);
+            var lines = Math.Max(1, a.StepsText.Split('\n').Length);
+            if (lines > 1) row.HeightInPoints = Math.Min(15 * lines, 120);   // 多级审批时把这行撑高，方便看全
+        }
+
+        return ToBytes(wb);
+    }
+
     // ── 下面是“样式工厂”：各做一种单元格外观（字体/颜色/边框/对齐）─────────────
 
     // 全部报表统一用这个字体——默认字体是英文的 Arial，中文在 Excel 里显示会发虚，换成微软雅黑更清楚

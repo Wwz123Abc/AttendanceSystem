@@ -57,6 +57,7 @@ public class ApprovalQueryDto
     public int?            ApplicantUserId { get; set; }   // 按申请人
     public ApprovalType?   ApprovalType    { get; set; }   // 按类型
     public ApprovalStatus? ApprovalStatus  { get; set; }   // 按状态
+    public string?         Keyword         { get; set; }   // 关键字：申请人姓名 / 工号 / 申请单号
     public DateTime?       StartDate       { get; set; }   // 提交时间起
     public DateTime?       EndDate         { get; set; }   // 提交时间止
     public int             PageIndex       { get; set; } = 1;    // 第几页
@@ -111,6 +112,36 @@ public class ApprovalRequestDto
     public string   SubmittedAtText => SubmittedAt.ToString("yyyy-MM-dd HH:mm");   // 提交时间文字
 
     public List<ApprovalStepDto> Steps { get; set; } = [];   // 各级审批节点
+
+    /// <summary>申请内容的一句话描述（总审批记录列表/导出用）：补卡=补哪天几点的什么卡；请假/加班/出差=起止时间。</summary>
+    public string ContentText => ApprovalType switch
+    {
+        ApprovalType.PunchReplenishment =>
+            $"补{(PunchType == Enums.PunchType.ClockOut ? "下班" : "上班")}卡 {PunchDate:yyyy-MM-dd} {PunchTime:HH\\:mm}",
+        ApprovalType.Leave =>
+            $"{LeaveTypeText}：{LeaveStartTime:yyyy-MM-dd HH:mm} ~ {LeaveEndTime:yyyy-MM-dd HH:mm}",
+        ApprovalType.Overtime =>
+            $"{OvertimeStartTime:yyyy-MM-dd HH:mm} ~ {OvertimeEndTime:yyyy-MM-dd HH:mm}",
+        ApprovalType.BusinessTrip =>
+            $"{BusinessTripStartTime:yyyy-MM-dd HH:mm} ~ {BusinessTripEndTime:yyyy-MM-dd HH:mm}"
+            + (string.IsNullOrWhiteSpace(BusinessTripDestination) ? "" : $"，目的地：{BusinessTripDestination}"),
+        _ => ""
+    };
+
+    /// <summary>时长文字：请假/加班是小时，出差是天，补卡没有时长。</summary>
+    public string DurationText => ApprovalType switch
+    {
+        ApprovalType.Leave        => LeaveDurationHours.HasValue ? $"{LeaveDurationHours:0.##} 小时" : "",
+        ApprovalType.Overtime     => OvertimeDurationHours.HasValue ? $"{OvertimeDurationHours:0.##} 小时" : "",
+        ApprovalType.BusinessTrip => BusinessTripDurationDays.HasValue ? $"{BusinessTripDurationDays:0.#} 天" : "",
+        _                         => ""
+    };
+
+    /// <summary>各级审批的一段文字（导出用，每级一行）：几级 审批人：结果（处理时间）[意见]。</summary>
+    public string StepsText => string.Join("\n", Steps.Select(s =>
+        $"第{s.StepOrder}级 {s.ApproverName}：{s.StatusText}"
+        + (s.HandledAt.HasValue ? $"（{s.HandledAt:yyyy-MM-dd HH:mm}）" : "")
+        + (string.IsNullOrWhiteSpace(s.Comment) ? "" : $"「{s.Comment}」")));
 }
 
 /// <summary>可选审批人 DTO（员工提交申请时，下拉框里的一个候选人）。</summary>

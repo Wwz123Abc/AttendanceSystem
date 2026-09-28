@@ -1,0 +1,177 @@
+@page
+@using AttendanceSystem.Models.Enums
+@model AttendanceSystem.Pages.Approval.ApprovalRecordsModel
+@{
+    ViewData["Title"] = "总审批记录";
+
+    // 翻页/导出时带上当前筛选条件
+    string Q(int page) =>
+        $"?start={Model.StartDate:yyyy-MM-dd}&end={Model.EndDate:yyyy-MM-dd}&type={Uri.EscapeDataString(Model.Type ?? "")}"
+        + $"&status={Uri.EscapeDataString(Model.Status ?? "")}&deptId={Model.DeptId}&keyword={Uri.EscapeDataString(Model.Keyword ?? "")}&p={page}";
+    var exportUrl =
+        $"?handler=Export&start={Model.StartDate:yyyy-MM-dd}&end={Model.EndDate:yyyy-MM-dd}&type={Uri.EscapeDataString(Model.Type ?? "")}"
+        + $"&status={Uri.EscapeDataString(Model.Status ?? "")}&deptId={Model.DeptId}&keyword={Uri.EscapeDataString(Model.Keyword ?? "")}";
+
+    string StepCss(ApprovalStatus s) => s switch
+    {
+        ApprovalStatus.Approved   => "text-success",
+        ApprovalStatus.Rejected   => "text-danger",
+        ApprovalStatus.Cancelled  => "text-muted",
+        _                         => "text-warning"
+    };
+    var cur = Model.PageIndex;
+    var totalPages = Model.TotalPages;
+    var winFrom = Math.Max(1, cur - 3);
+    var winTo   = Math.Min(totalPages, cur + 3);
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-journal-check me-2 text-primary"></i>总审批记录</h4>
+    <a class="btn btn-success btn-sm @(Model.Total == 0 ? "disabled" : "")" href="@exportUrl">
+        <i class="bi bi-file-earmark-excel me-1"></i>导出 Excel（@Model.Total 条）
+    </a>
+</div>
+
+<div class="alert alert-info py-2 small">
+    <i class="bi bi-info-circle me-1"></i>
+    这里汇总员工提交的全部申请（补卡 / 请假 / 加班 / 出差）和各级审批结果，<strong>只保留最近 @ApprovalRecordsModel.WindowMonths 个月</strong>（@Model.WindowStart.ToString("yyyy-MM-dd") 起提交的）。
+    分公司管理员、文员只能看到自己管理范围内员工的申请，总部管理员看全部。
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-0">提交日期（起）</label>
+                <input type="date" name="start" value="@Model.StartDate.ToString("yyyy-MM-dd")"
+                       min="@Model.WindowStart.ToString("yyyy-MM-dd")" max="@DateTime.Today.ToString("yyyy-MM-dd")" class="form-control form-control-sm" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-0">提交日期（止）</label>
+                <input type="date" name="end" value="@Model.EndDate.ToString("yyyy-MM-dd")"
+                       min="@Model.WindowStart.ToString("yyyy-MM-dd")" max="@DateTime.Today.ToString("yyyy-MM-dd")" class="form-control form-control-sm" />
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-0">类型</label>
+                <select name="type" class="form-select form-select-sm">
+                    <option value="">全部类型</option>
+                    @foreach (var t in Enum.GetValues<ApprovalType>())
+                    {
+                        <option value="@t" selected="@(Model.Type == t.ToString())">@t.ToDisplayName()</option>
+                    }
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-0">状态</label>
+                <select name="status" class="form-select form-select-sm">
+                    <option value="">全部状态</option>
+                    <option value="@nameof(ApprovalStatus.Pending)"    selected="@(Model.Status == nameof(ApprovalStatus.Pending))">待审批</option>
+                    <option value="@nameof(ApprovalStatus.InProgress)" selected="@(Model.Status == nameof(ApprovalStatus.InProgress))">审批中</option>
+                    <option value="@nameof(ApprovalStatus.Approved)"   selected="@(Model.Status == nameof(ApprovalStatus.Approved))">已通过</option>
+                    <option value="@nameof(ApprovalStatus.Rejected)"   selected="@(Model.Status == nameof(ApprovalStatus.Rejected))">已驳回</option>
+                    <option value="@nameof(ApprovalStatus.Cancelled)"  selected="@(Model.Status == nameof(ApprovalStatus.Cancelled))">已撤销</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-2">
+                <label class="form-label small mb-0">部门（含下级）</label>
+                <select name="deptId" class="form-select form-select-sm">
+                    @if (Model.ShowAllDepts)
+                    {
+                        <option value="">全部部门</option>
+                    }
+                    @foreach (var d in Model.DeptOptions)
+                    {
+                        <option value="@d.Id" selected="@(d.Id == Model.DeptId)">@(new string('　', d.Depth))@d.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-12 col-md-2">
+                <label class="form-label small mb-0">姓名 / 工号 / 单号</label>
+                <div class="d-flex gap-1">
+                    <input type="text" name="keyword" value="@Model.Keyword" class="form-control form-control-sm" placeholder="关键字" />
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        @Model.StartDate.ToString("yyyy-MM-dd") 至 @Model.EndDate.ToString("yyyy-MM-dd") 提交的申请（共 @Model.Total 条）
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-sm mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>单号</th>
+                        <th>类型</th>
+                        <th>申请人</th>
+                        <th>部门</th>
+                        <th style="min-width:220px">申请内容</th>
+                        <th>时长</th>
+                        <th style="min-width:160px">申请理由</th>
+                        <th>提交时间</th>
+                        <th>状态</th>
+                        <th style="min-width:220px">审批流程 / 意见</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Model.Items.Any())
+                    {
+                        <tr><td colspan="10" class="empty-state"><i class="bi bi-inbox"></i>没有符合条件的申请记录</td></tr>
+                    }
+                    @foreach (var a in Model.Items)
+                    {
+                        <tr>
+                            <td class="small text-nowrap">@a.RequestNo</td>
+                            <td class="small text-nowrap">@a.ApprovalTypeText</td>
+                            <td class="small text-nowrap">@a.ApplicantName<br /><span class="text-muted">@a.ApplicantEmployeeNo</span></td>
+                            <td class="small">@a.DeptName</td>
+                            <td class="small">@a.ContentText</td>
+                            <td class="small text-nowrap">@a.DurationText</td>
+                            <td class="small">@a.Reason</td>
+                            <td class="small text-nowrap">@a.SubmittedAtText</td>
+                            <td class="small text-nowrap @a.ApprovalStatusCss">@a.ApprovalStatusText</td>
+                            <td class="small">
+                                @foreach (var s in a.Steps)
+                                {
+                                    <div>
+                                        <span class="text-muted">第@(s.StepOrder)级</span> @s.ApproverName：
+                                        <span class="@StepCss(s.Status)">@s.StatusText</span>
+                                        @if (s.HandledAt.HasValue)
+                                        {
+                                            <span class="text-muted">（@s.HandledAt.Value.ToString("MM-dd HH:mm")）</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(s.Comment))
+                                        {
+                                            <span class="text-muted">「@s.Comment」</span>
+                                        }
+                                    </div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @if (totalPages > 1)
+    {
+        <div class="card-footer d-flex justify-content-between align-items-center">
+            <span class="small text-muted">第 @cur / @totalPages 页，每页 @ApprovalRecordsModel.PageSize 条</span>
+            <nav>
+                <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item @(cur <= 1 ? "disabled" : "")"><a class="page-link" href="@Q(cur - 1)">上一页</a></li>
+                    @for (var pg = winFrom; pg <= winTo; pg++)
+                    {
+                        <li class="page-item @(pg == cur ? "active" : "")"><a class="page-link" href="@Q(pg)">@pg</a></li>
+                    }
+                    <li class="page-item @(cur >= totalPages ? "disabled" : "")"><a class="page-link" href="@Q(cur + 1)">下一页</a></li>
+                </ul>
+            </nav>
+        </div>
+    }
+</div>

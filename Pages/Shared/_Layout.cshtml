@@ -413,6 +413,12 @@
                         </a>
                     </li>
                     <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Approval/ApprovalRecords") ? "active" : "")"
+                           href="/Approval/ApprovalRecords">
+                            <i class="bi bi-journal-check"></i>总审批记录
+                        </a>
+                    </li>
+                    <li>
                         <a class="nav-link @(currentPath.StartsWith("/Admin/UserManage") ? "active" : "")"
                            href="/Admin/UserManage">
                             <i class="bi bi-people"></i>员工管理

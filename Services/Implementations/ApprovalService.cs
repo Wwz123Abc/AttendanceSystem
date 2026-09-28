@@ -364,6 +364,11 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         if (q.ApplicantUserId.HasValue) query = query.Where(a => a.ApplicantUserId == q.ApplicantUserId.Value);
         if (q.ApprovalType.HasValue)    query = query.Where(a => a.ApprovalType    == q.ApprovalType.Value);
         if (q.ApprovalStatus.HasValue)  query = query.Where(a => a.ApprovalStatus  == q.ApprovalStatus.Value);
+        if (!string.IsNullOrWhiteSpace(q.Keyword))
+        {
+            var kw = q.Keyword.Trim();
+            query = query.Where(a => a.Applicant.RealName.Contains(kw) || a.Applicant.EmployeeNo.Contains(kw) || a.RequestNo.Contains(kw));
+        }
         if (q.StartDate.HasValue)       query = query.Where(a => a.SubmittedAt     >= q.StartDate.Value);
         if (q.EndDate.HasValue)         query = query.Where(a => a.SubmittedAt     <= q.EndDate.Value);
         if (deptIds is not null)        query = query.Where(a => a.Applicant.DepartmentId != null && deptIds.Contains(a.Applicant.DepartmentId.Value));
