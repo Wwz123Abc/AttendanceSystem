@@ -92,7 +92,7 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     {
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
         var q = db.AttendanceRecords.Include(r => r.User)
-            .Where(r => r.ApprovalNote != null && r.ApprovalNote.StartsWith("管理员手动补卡"));
+            .Where(r => r.ApprovalNote != null && r.ApprovalNote.Contains("管理员手动补卡"));
         if (visibleIds is not null)
             q = q.Where(r => r.User.DepartmentId != null && visibleIds.Contains(r.User.DepartmentId.Value));
         RecentLog = await q

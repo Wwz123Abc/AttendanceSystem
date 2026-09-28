@@ -88,6 +88,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     workDate            = yesterday;
                     openYesterdayRecord = candidate;
                 }
+                // 白班/没排班的人加班过了零点才下班：这张下班卡也是昨天那条记录的（不能变成今天的上班卡）
+                else if (request.PunchType == PunchType.ClockOut
+                         && IsPostMidnightClockOutOfDayShift(now, candidate.ClockInTime!.Value, yesterdayAssignment?.ShiftSchedule,
+                                                             (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule))
+                {
+                    workDate            = yesterday;
+                    openYesterdayRecord = candidate;
+                }
             }
         }
 
@@ -384,6 +392,35 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         return null;
     }
 
+    /// <summary>非跨天班次（白班/中班/没排班）的人加班过了零点才下班：零点后的这张卡是"昨天那条没打下班卡的记录"的下班卡，
+    /// 不是今天的上班卡。判断：昨天有上班卡；这次打卡离昨天上班卡不超过 <see cref="PostMidnightClockOutMaxHours"/> 小时；
+    /// 而且比今天应上班时间早了 <see cref="CrossDayClockInEarlyHours"/> 小时以上（没排班就当 06:00 之前）——
+    /// 这么早不可能是今天的上班卡。昨天排的是跨天班次的走原来的夜班续接（<see cref="IsWithinNightCarryOver"/>），不在这里处理
+    /// （2026-09-28 全项目审查：白班加班到 00:40 下班，当天工时被清零、23:55 还被标未打卡，第二天早上的上班卡又被当成午间卡）。</summary>
+    public static bool IsPostMidnightClockOutOfDayShift(DateTime punchTime, DateTime yesterdayClockIn, ShiftSchedule? yesterdayShift, ShiftSchedule? todayShift)
+    {
+        if (yesterdayShift is { IsCrossDay: true }) return false;
+        if (punchTime <= yesterdayClockIn || punchTime - yesterdayClockIn > TimeSpan.FromHours(PostMidnightClockOutMaxHours)) return false;
+        var day = DateOnly.FromDateTime(punchTime);
+        var cutoff = todayShift is null
+            ? day.ToDateTime(new TimeOnly(6, 0))
+            : day.ToDateTime(todayShift.WorkStartTime).AddHours(-CrossDayClockInEarlyHours);
+        return punchTime < cutoff;
+    }
+
+    /// <summary>白班加班过零点下班：这次打卡最晚离昨天上班卡多少小时以内，才当成昨天的下班卡。</summary>
+    public const int PostMidnightClockOutMaxHours = 20;
+
+    /// <summary>补卡申请里的"下班卡"该落在哪一天：默认是申请的日期；已有上班卡且这个时间点不晚于上班卡，
+    /// 或者班次是跨天班次而且填的时间早于班次的上班时间（即凌晨那段），就是第二天的这个时间。</summary>
+    public static DateTime ResolvePunchReplenishmentClockOut(DateOnly date, TimeOnly time, DateTime? clockIn, ShiftSchedule? shift)
+    {
+        var dt = date.ToDateTime(time);
+        if (clockIn is { } ci) return dt <= ci ? dt.AddDays(1) : dt;
+        if (shift is { IsCrossDay: true } && time < shift.WorkStartTime) return dt.AddDays(1);
+        return dt;
+    }
+
     /// <summary>这次打卡时间，是否还在"昨天那个跨天夜班"允许续接的时间窗内。</summary>
     public static bool IsWithinNightCarryOver(DateOnly shiftDate, ShiftSchedule shift, DateTime punchTime) =>
         punchTime <= shiftDate.ToDateTime(shift.WorkEndTime).AddDays(1).AddHours(NightShiftCarryOverHours);
@@ -413,6 +450,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 var yesterdayAssignment = await GetShiftAssignmentAsync(userId, yesterday);
                 if (yesterdayAssignment?.ShiftSchedule is { IsCrossDay: true } ys && IsWithinNightCarryOver(yesterday, ys, nowTime))
                     record = openYesterday;
+                else if (IsPostMidnightClockOutOfDayShift(nowTime, openYesterday.ClockInTime!.Value, yesterdayAssignment?.ShiftSchedule,
+                                                          (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule))
+                    record = openYesterday;   // 白班加班过零点：这次该打的是昨天那条记录的下班卡
             }
         }
 
@@ -622,7 +662,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 // 现在改成跟月度汇总一样：有记录就正常处理，HireDate 不再在这里过滤任何一天。
                 recByDate.TryGetValue(date, out var rec);
                 assignByDate.TryGetValue(date, out var assign);
-                var holiday      = myHolidays.FirstOrDefault(h => h.HolidayDate == date);
+                var holiday      = ResolveEffectiveHoliday(date, user.AttendanceGroupId, myHolidays);   // 跟"应出勤"同一套优先级（考勤组规则优先、补班优先于放假）
                 var isCompDay    = holiday?.HolidayType == HolidayType.CompensatoryWorkDay;
                 var isHolidayOff = holiday is not null && !isCompDay;                                              // 法定节假日/公司休息（非补班）
                 var isShiftRest  = !isCompDay && IsShiftWeeklyRestDay(date, assign?.ShiftSchedule);  // 排的班自己配置的每周休息日，或没排班时按周末兜底
@@ -630,7 +670,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 // 当天是不是上的夜班：排班里配的是跨天班次/名字带"夜"就算；没排班时按打卡时间兜底
                 // （18 点后上班，或下班跨到了第二天），口径和 ComputeNightShiftDaysRangeAsync 保持一致。
                 var isNightShift = assign is not null && (assign.ShiftSchedule.IsCrossDay || assign.ShiftSchedule.ShiftName.Contains('夜'));
-                if (!isNightShift && rec?.ClockInTime is { } nci)
+                if (!isNightShift && assign is null && rec?.ClockInTime is { } nci)   // 兜底只对"没排班"的日子：排了白班/中班的人休息日晚上来打卡、加班过零点，不算夜班
                 {
                     if (nci.Hour >= 18) isNightShift = true;
                     else if (rec.ClockOutTime is { } nco && nco.Date > nci.Date) isNightShift = true;
@@ -653,7 +693,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     // 完全没有"请假天数"这个概念，导致这份发工资用的报表和月度汇总页对不上
                     // （发现于 2026-09-18 数据核查）。
                     var dailyStdHours = assign?.ShiftSchedule.StandardWorkHours ?? defaultDailyHours;
-                    actualDays += ResolveAttendanceDayCredit(rec, dailyStdHours);
+                    actualDays += ResolveAttendanceDayCredit(rec, dailyStdHours, isHolidayOff || isShiftRest);
                     if (rec.AttendanceStatus == AttendanceStatus.OnLeave)
                         leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);
@@ -894,7 +934,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 重复记满整天——不然半天假的人会变成"出勤 1 天 + 请假 0.5 天"，一天算出 1.5 天（发现于
             // 2026-09-18 发工资前的数据核查）。跟 GenerateTemplateReportAsync 共用 ResolveAttendanceDayCredit。
             summary.ActualWorkdays = records.Sum(r =>
-                ResolveAttendanceDayCredit(r, ResolveDailyStandardHours(shiftByDate.GetValueOrDefault(r.WorkDate), defaultDailyHours)));
+                ResolveAttendanceDayCredit(r, ResolveDailyStandardHours(shiftByDate.GetValueOrDefault(r.WorkDate), defaultDailyHours),
+                    IsNonWorkday(r.WorkDate, user.AttendanceGroupId, holidaysInRange, shiftByDate.GetValueOrDefault(r.WorkDate))));
             // 迟到/早退按「状态」统计（钉钉同步只写状态、不写分钟数，按分钟数会漏算）
             summary.LateCount         = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);
             summary.EarlyLeaveCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.EarlyLeave);
@@ -998,9 +1039,12 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 不能各写一份——之前就是因为两处各算各的，同一个人同一个月两份报表的出勤天数对不上
     /// （发现于 2026-09-18 数据核查）。
     /// </summary>
-    public static decimal ResolveAttendanceDayCredit(AttendanceRecord r, decimal standardHours)
+    public static decimal ResolveAttendanceDayCredit(AttendanceRecord r, decimal standardHours, bool isRestDay = false)
     {
         if (!IsPresent(r)) return 0m;
+        // 休息日/节假日来打卡：不算"出勤天数"（这天没有应出勤，正班工时也是 0；批了加班的，加班时长单独在加班里体现）。
+        // 不然出勤天数会超过应出勤天数，按出勤天数发的全勤奖/补贴会多发（2026-09-28 你定的口径）。请假当天不受影响
+        if (isRestDay && r.AttendanceStatus != AttendanceStatus.OnLeave) return 0m;
         if (r.AttendanceStatus != AttendanceStatus.OnLeave) return 1m;
         return Math.Max(0m, 1m - ResolveLeaveDaysFraction(r.LeaveHours, standardHours));
     }
@@ -1118,7 +1162,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         shift is not null ? shift.IsRestDay(date.DayOfWeek) : date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
 
     /// <summary>
-    /// 判断某天对这个员工算不算"休息日"——只用来决定"没有批准的加班申请就不计工时"，不影响能不能打卡。
+    /// 判断某天对这个员工算不算"休息日"——休息日的正班工时一律记 0（加班只认审批单），不影响能不能打卡。
     /// 法定节假日已经在打卡入口直接拒绝打卡了（见 PunchCoreAsync 的 IsHolidayAsync 判断），走到这里
     /// 只需要看两种情况：排的班次自己配置的每周休息日，或者没排班时按全局周六周日兜底；调班补班日
     /// 不算休息日（公司要求上班，工时照常算）。
@@ -1196,6 +1240,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             }
 
             var punchDt = approval.PunchDate.Value.ToDateTime(approval.PunchTime.Value);
+            if (approval.PunchType == PunchType.ClockOut)
+            {
+                // 补的下班卡如果比上班卡还早，或者夜班（跨天班次）填的是"班次结束的那个凌晨时间"，说明下班在第二天：
+                // 顺延一天。申请只有"日期 + 时间"，没法直接表达跨天，不顺延的话夜班漏打一次下班卡整晚工时都会丢
+                var shiftForPunch = (await GetShiftAssignmentAsync(approval.ApplicantUserId, approval.PunchDate.Value))?.ShiftSchedule;
+                punchDt = ResolvePunchReplenishmentClockOut(approval.PunchDate.Value, approval.PunchTime.Value, record.ClockInTime, shiftForPunch);
+            }
             if (approval.PunchType == PunchType.ClockIn) record.ClockInTime  = punchDt;   // 补上班卡
             else                                          record.ClockOutTime = punchDt;   // 补下班卡
             AppendApprovalNote(record, $"补卡已审批通过（{approval.RequestNo}）");
@@ -1236,9 +1287,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             AppendApprovalNote(record, $"加班已审批通过（{approval.RequestNo}），{otHours:0.##} 小时");
             record.UpdatedAt      = DateTime.Now;
 
-            // 员工可能是先自己打卡上班、事后才补的加班申请——这天如果是休息日，打卡时因为
-            // 当时还没有批准的加班申请，工时会被算成 0（见 ComputeDailyWorkHoursAsync）；
-            // 现在加班批下来了，要把已有的打卡重新算一遍，把工时补回来。
+            // 员工可能是先自己打卡上班、事后才补的加班申请。休息日的正班工时不管有没有批加班都是 0
+            // （加班时长只认审批单，见 ComputeDailyWorkHoursAsync），这里重算一遍主要是让状态/迟到早退等跟着当前规则走；
+            // 如果这天其实是工作日（加班单批在工作日），已有的打卡工时也一并刷新。
             await RecalcWorkHoursAfterManualPunchAsync(record, approval.ApplicantUserId);
             touchedMonths.Add((workDate.Year, workDate.Month));
         }
@@ -1415,6 +1466,18 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         // 而不是让内容被静默截断）
         if (!string.IsNullOrWhiteSpace(remark) && remark.Trim().Length > 100)
             throw new InvalidOperationException("补卡备注不能超过 100 个字");
+
+        // 打卡时间必须落在"这个考勤日当天或第二天"（跨天班次/加班过零点的下班在第二天）：
+        // 选错年月的话（比如日期是 9 月、时间填成 8 月）会算出几百小时的工时，而且没有任何提示
+        foreach (var t in new[] { clockIn, clockOut })
+        {
+            if (t is null) continue;
+            var td = DateOnly.FromDateTime(t.Value);
+            if (td < workDate || td > workDate.AddDays(1))
+                throw new InvalidOperationException($"打卡时间 {t.Value:yyyy-MM-dd HH:mm} 不在考勤日 {workDate:yyyy-MM-dd} 当天或第二天，请检查日期");
+        }
+        if (clockIn.HasValue && clockOut.HasValue && clockOut.Value <= clockIn.Value)
+            throw new InvalidOperationException("下班时间必须晚于上班时间（夜班下班在第二天，请把日期选到第二天）");
 
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
         if (record is null)
@@ -1900,7 +1963,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 批量算某批员工某月的“夜班天数”（不存表，报表读取时实时算）。
     /// 判定：当天实际出勤(打了上班卡)，且满足以下任一：
     ///   ① 当天排的班是夜班(跨天班次 或 班次名含“夜”)；
-    ///   ② 无排班时按打卡时间兜底：18 点后上班，或下班跨到了第二天（适配钉钉数据）。
+    ///   ② 当天没有排班时按打卡时间兜底：18 点后上班，或下班跨到了第二天（适配钉钉数据）；排了白班/中班的不套用。
     /// </summary>
     private Task<Dictionary<int, int>> ComputeNightShiftDaysAsync(List<int> userIds, int year, int month)
     {
@@ -1923,6 +1986,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 .ToListAsync())
             .Select(x => (x.UserId, x.WorkDate)).ToHashSet();
 
+        // 有排班的 (用户, 日期)：兜底判断只对"没排班"的日子生效
+        var anyAssign = (await db.ShiftAssignments
+                .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end)
+                .Select(a => new { a.UserId, a.WorkDate })
+                .ToListAsync())
+            .Select(x => (x.UserId, x.WorkDate)).ToHashSet();
+
         // 当月“打了上班卡”的日记录
         var recs = await db.AttendanceRecords
             .Where(r => userIds.Contains(r.UserId) && r.WorkDate >= start && r.WorkDate <= end && r.ClockInTime != null)
@@ -1932,7 +2002,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         foreach (var r in recs)
         {
             var isNight = nightAssign.Contains((r.UserId, r.WorkDate));
-            if (!isNight && r.ClockInTime is { } ci)
+            if (!isNight && !anyAssign.Contains((r.UserId, r.WorkDate)) && r.ClockInTime is { } ci)
             {
                 if (ci.Hour >= 18) isNight = true;                                   // 晚上 18 点后上班
                 else if (r.ClockOutTime is { } co && co.Date > ci.Date) isNight = true;  // 下班跨天

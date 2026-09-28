@@ -52,13 +52,24 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
         if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return Forbid();   // 防路径穿越
         if (!System.IO.File.Exists(fullPath)) return NotFound();
 
-        var contentType = Path.GetExtension(fullPath).ToLowerInvariant() switch
+        var ext = Path.GetExtension(fullPath).ToLowerInvariant();
+        var contentType = ext switch
         {
             ".png"  => "image/png",
             ".webp" => "image/webp",
+            ".gif"  => "image/gif",
+            ".pdf"  => "application/pdf",
+            ".doc"  => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls"  => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             _       => "image/jpeg"
         };
-        return PhysicalFile(fullPath, contentType);
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        // Word/Excel 浏览器打不开，直接给下载（审批附件允许上传的类型，以前一律按 jpg 返回，PDF/Word/Excel 点开是一张破图）
+        return ext is ".doc" or ".docx" or ".xls" or ".xlsx"
+            ? PhysicalFile(fullPath, contentType, Path.GetFileName(fullPath))
+            : PhysicalFile(fullPath, contentType);
     }
 
     /// <summary>idcards（身份证照片）：目录结构 idcards/{工号}/xxx 或 idcards/registrations/{手机号}/xxx（未确认扫码登记）。

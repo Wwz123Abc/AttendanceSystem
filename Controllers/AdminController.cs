@@ -415,6 +415,8 @@ public class AdminController(
         // 后面算迟到/早退/工时全部会跟着算错，但当时不会报任何错，很难排查
         if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
             return BadRequest(new { Success = false, Message = "非跨天班次的下班时间必须晚于上班时间" });
+        if (req.IsCrossDay && req.WorkEndTime > req.WorkStartTime)
+            return BadRequest(new { Success = false, Message = "跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）" });
         var shift = new ShiftSchedule
         {
             AttendanceGroupId          = req.AttendanceGroupId,
@@ -451,6 +453,8 @@ public class AdminController(
         if (!await IsGroupWritableAsync(shift.AttendanceGroupId)) return Forbid();
         if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
             return BadRequest(new { Success = false, Message = "非跨天班次的下班时间必须晚于上班时间" });
+        if (req.IsCrossDay && req.WorkEndTime > req.WorkStartTime)
+            return BadRequest(new { Success = false, Message = "跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）" });
 
         shift.ShiftName                  = req.ShiftName;
         shift.ShiftType                  = req.ShiftType;

@@ -278,6 +278,8 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             // ComputeWorkHours 算出的在岗分钟数是负的，被 rawMinutes<=0 的保护直接归零，
             // 这个班次的工时会一直算成 0（迟到/早退判断同样会跟着错），且不会有任何报错提示
             if (!CrossDay && we <= ws) throw new Exception("下班时间必须晚于上班时间（如果是跨天班次，请勾选「跨天」）");
+            // 反过来：勾了「跨天」但下班时间比上班时间还晚（比如 08:00~17:00 误勾跨天），会变成 33 小时的班，天天判早退、请假时长算错
+            if (CrossDay && we > ws) throw new Exception("跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）；白班请取消勾选「跨天」");
             if (LateTol is < 0 or > 60) throw new Exception("迟到容忍分钟数请填 0-60 之间");
             if (EarlyTol is < 0 or > 60) throw new Exception("早退容忍分钟数请填 0-60 之间");
             if (EarliestIn < 0) throw new Exception("最多提前打卡分钟数不能为负数");

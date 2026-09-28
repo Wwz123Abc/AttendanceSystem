@@ -869,4 +869,205 @@ public class Round11FixTests : IDisposable
         }
         finally { Directory.Delete(root, recursive: true); }
     }
+
+    // ── ⑮ 2026-09-28 第二轮审查：白班加班过零点、补卡跨天、休息日出勤、夜班天数、报表节假日、手动补卡校验 ──────
+
+    private int SeedDayDeviceWorld()
+    {
+        using var db = CreateContext();
+        var group = new AttendanceGroup { GroupName = "白班设备组" };
+        db.AttendanceGroups.Add(group);
+        db.SaveChanges();
+        var shift = DayShift(); shift.AttendanceGroupId = group.Id;   // 08:30-17:30，周日周六休息
+        db.ShiftSchedules.Add(shift);
+        var user = new User { EmployeeNo = "D1", RealName = "白班员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
+        db.Users.Add(user);
+        var dev = new ZKDevice { SN = "SND", IsActive = true };
+        db.ZKDevices.Add(dev);
+        db.SaveChanges();
+        db.UserZKDevices.Add(new UserZKDevice { UserId = user.Id, ZKDeviceId = dev.Id });
+        foreach (var d in new[] { Mon, Tue })
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = d, ShiftScheduleId = shift.Id });
+        // 周一 08:25 上班，加班中，还没下班
+        db.AttendanceRecords.Add(new AttendanceRecord { UserId = user.Id, WorkDate = Mon, ClockInTime = Mon.ToDateTime(new TimeOnly(8, 25)), AttendanceStatus = AttendanceStatus.Normal });
+        db.SaveChanges();
+        return user.Id;
+    }
+
+    private async Task SyncDayAsync(params DateTime[] times)
+    {
+        using var db = CreateContext();
+        var att = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var svc = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
+        await svc.ProcessAttLogAsync("SND", times.Select(t => new ZKAttLogRow("D1", t, 0, 15)).ToList());
+    }
+
+    [Fact]
+    public async Task 白班加班过零点_周二00点40的下班卡_接到周一那条记录_周一有工时_周二不凭空多出记录()
+    {
+        var uid = SeedDayDeviceWorld();
+        await SyncDayAsync(Tue.ToDateTime(new TimeOnly(0, 40)));
+
+        using var check = CreateContext();
+        var mon = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(0, 40)), mon.ClockOutTime);
+        Assert.True(mon.ActualWorkHours > 0);                                            // 以前是 0
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue));
+    }
+
+    [Fact]
+    public async Task 白班_周一忘打下班卡_周二早上8点28的卡仍然是周二的上班卡_不被吞到周一()
+    {
+        var uid = SeedDayDeviceWorld();
+        await SyncDayAsync(Tue.ToDateTime(new TimeOnly(8, 28)));
+
+        using var check = CreateContext();
+        var mon = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Null(mon.ClockOutTime);
+        var tue = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(8, 28)), tue.ClockInTime);
+    }
+
+    [Theory]
+    [InlineData(0, 40, true)]     // 加班过零点
+    [InlineData(2, 29, true)]     // 离今天 08:30 上班还有 6 小时零 1 分：不可能是今天的上班卡
+    [InlineData(2, 31, false)]    // 离上班不到 6 小时：可能是今天提前来的上班卡
+    [InlineData(8, 28, false)]
+    public void 白班过零点下班的判断_只有比今天上班时间早6小时以上才算昨天的下班卡(int h, int m, bool expected)
+    {
+        var yesterdayIn = Mon.ToDateTime(new TimeOnly(8, 25));
+        Assert.Equal(expected, AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(h, m)), yesterdayIn, DayShift(), DayShift()));
+    }
+
+    [Fact]
+    public void 白班过零点下班的判断_夜班走原来的续接_离昨天上班卡太久的也不算()
+    {
+        var yesterdayIn = Mon.ToDateTime(new TimeOnly(8, 25));
+        Assert.False(AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(0, 40)), yesterdayIn, NightShift(), DayShift()));   // 昨天是夜班：不归这里
+        Assert.False(AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(5, 0)), yesterdayIn, DayShift(), null));           // 离上班卡 20.6 小时，超过 20 小时上限
+        Assert.True(AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(5, 0)), Mon.ToDateTime(new TimeOnly(9, 30)), DayShift(), null));   // 没排班：06:00 之前
+    }
+
+    [Fact]
+    public async Task 白班加班过零点_我的今日打卡状态返回周一那条_下一次该打的是下班卡()
+    {
+        var uid = SeedDayDeviceWorld();
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var rec = await svc.GetTodayAttendanceAsync(uid, Tue.ToDateTime(new TimeOnly(0, 40)));
+        Assert.NotNull(rec);
+        Assert.Equal(Mon, rec!.WorkDate);
+        Assert.Null(await svc.GetTodayAttendanceAsync(uid, Tue.ToDateTime(new TimeOnly(8, 28))));   // 早上正常上班：今天还没有记录
+    }
+
+    [Fact]
+    public async Task 补卡申请_夜班补下班卡填第二天早上的时间点_自动顺延到第二天_工时出现()
+    {
+        var (uid, _) = SeedNightWorld();   // 周一 20:00 上班，没下班
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "BK-T-1", ApplicantUserId = uid, ApprovalType = ApprovalType.PunchReplenishment,
+            PunchDate = Mon, PunchType = PunchType.ClockOut, PunchTime = new TimeOnly(8, 0), Reason = "t"
+        });
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+
+        using var check = CreateContext();
+        var mon = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(8, 0)), mon.ClockOutTime);   // 不是"周一 08:00"（比上班还早、工时 0）
+        Assert.True(mon.ActualWorkHours > 0);
+    }
+
+    [Fact]
+    public void 补卡下班卡落在哪一天_有上班卡的按先后_没上班卡的跨天班次按班次上班时间判断()
+    {
+        var day = Mon;
+        Assert.Equal(Mon.ToDateTime(new TimeOnly(17, 40)), AttendanceService.ResolvePunchReplenishmentClockOut(day, new TimeOnly(17, 40), Mon.ToDateTime(new TimeOnly(8, 30)), DayShift()));
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(8, 0)),   AttendanceService.ResolvePunchReplenishmentClockOut(day, new TimeOnly(8, 0),  Mon.ToDateTime(new TimeOnly(20, 0)), NightShift()));
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(8, 0)),   AttendanceService.ResolvePunchReplenishmentClockOut(day, new TimeOnly(8, 0),  null, NightShift()));      // 没上班卡，夜班：早于 20:00 → 第二天
+        Assert.Equal(Mon.ToDateTime(new TimeOnly(22, 0)),  AttendanceService.ResolvePunchReplenishmentClockOut(day, new TimeOnly(22, 0), null, NightShift()));      // 晚于上班时间：当天
+        Assert.Equal(Mon.ToDateTime(new TimeOnly(8, 0)),   AttendanceService.ResolvePunchReplenishmentClockOut(day, new TimeOnly(8, 0),  null, DayShift()));        // 白班没上班卡：不动
+    }
+
+    [Fact]
+    public void 休息日有打卡_不算出勤天数_请假当天不受影响()
+    {
+        var work = new AttendanceRecord { ClockInTime = Sat.ToDateTime(new TimeOnly(9, 0)), AttendanceStatus = AttendanceStatus.Normal };
+        Assert.Equal(1m, AttendanceService.ResolveAttendanceDayCredit(work, 8, isRestDay: false));
+        Assert.Equal(0m, AttendanceService.ResolveAttendanceDayCredit(work, 8, isRestDay: true));
+        var leave = new AttendanceRecord { ClockInTime = Sat.ToDateTime(new TimeOnly(9, 0)), AttendanceStatus = AttendanceStatus.OnLeave, LeaveHours = 4 };
+        Assert.Equal(0.5m, AttendanceService.ResolveAttendanceDayCredit(leave, 8, isRestDay: true));
+    }
+
+    [Fact]
+    public async Task 月度汇总和模板汇总表_休息日来打卡但没批加班_出勤天数不算_夜班天数也不算()
+    {
+        var (uid, _) = SeedWeekWorld();   // 周五到周一都排了白班，周六周日是休息日
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Fri, ClockInTime = Fri.ToDateTime(new TimeOnly(8, 25)), ClockOutTime = Fri.ToDateTime(new TimeOnly(17, 35)), ActualWorkHours = 8, AttendanceStatus = AttendanceStatus.Normal });
+            // 周六晚上 19:00 来打卡（休息日、没批加班），工时 0
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Sat, ClockInTime = Sat.ToDateTime(new TimeOnly(19, 0)), ClockOutTime = Sat.ToDateTime(new TimeOnly(21, 0)), ActualWorkHours = 0, AttendanceStatus = AttendanceStatus.Normal });
+            db.SaveChanges();
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var report = await svc.GenerateTemplateReportAsync(Fri, Mon, null);
+        var row = report.Rows.Single(r => r.EmployeeNo == "L1");
+        Assert.Equal(1m, row.ActualWorkdays);        // 只有周五；周六不算出勤
+        Assert.Equal(0, row.NightShiftDays);         // 排了白班，周六晚上来打卡不算夜班
+        await svc.GenerateMonthlySummaryAsync(Fri.Year, Fri.Month, new[] { uid });
+        var sum = await db2.MonthlyAttendanceSummaries.AsNoTracking().SingleAsync(x => x.UserId == uid);
+        Assert.Equal(1m, sum.ActualWorkdays);
+    }
+
+    [Fact]
+    public async Task 没排班的日子_夜班天数仍按打卡时间兜底()
+    {
+        var (uid, _) = SeedWeekWorld();
+        using (var db = CreateContext())
+        {
+            // 周一没有排班（把周一的排班删掉），晚上 19:00 上班 → 兜底算夜班
+            db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid && a.WorkDate == Mon));
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Mon, ClockInTime = Mon.ToDateTime(new TimeOnly(19, 0)), AttendanceStatus = AttendanceStatus.Normal });
+            db.SaveChanges();
+        }
+        using var db2 = CreateContext();
+        var report = await new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance).GenerateTemplateReportAsync(Fri, Mon, null);
+        Assert.Equal(1, report.Rows.Single(r => r.EmployeeNo == "L1").NightShiftDays);
+    }
+
+    [Fact]
+    public async Task 模板汇总表_全公司放假加本考勤组补班同一天_按统一优先级算工作日()
+    {
+        var (uid, gid) = SeedWeekWorld();
+        using (var db = CreateContext())
+        {
+            // 周一：全公司放假 + 本考勤组补班。统一规则：考勤组自己的规则优先 → 补班（工作日）
+            db.Holidays.Add(new Holiday { HolidayName = "全公司放假", HolidayDate = Mon, HolidayType = HolidayType.LegalHoliday });
+            db.Holidays.Add(new Holiday { HolidayName = "本组补班", HolidayDate = Mon, HolidayType = HolidayType.CompensatoryWorkDay, AttendanceGroupId = gid });
+            db.SaveChanges();
+        }
+        using var db2 = CreateContext();
+        var report = await new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance).GenerateTemplateReportAsync(Mon, Mon, null);
+        var row = report.Rows.Single(r => r.EmployeeNo == "L1");
+        Assert.False(row.DailyIsRest[0]);            // 补班日：不是休息
+        Assert.Equal(1, row.ExpectedWorkdays);       // 跟"应出勤"一致
+    }
+
+    [Fact]
+    public async Task 管理员手动补卡_打卡时间不在考勤日当天或第二天_直接拒绝_下班早于上班也拒绝()
+    {
+        var (uid, _) = SeedWeekWorld();
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var wrongMonth = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            svc.AdminAdjustPunchAsync(uid, Mon, new DateTime(2026, 8, 7, 8, 30, 0), null, null, "管理员"));
+        Assert.Contains("请检查日期", wrongMonth.Message);
+        var reversed = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(17, 0)), Mon.ToDateTime(new TimeOnly(8, 0)), null, "管理员"));
+        Assert.Contains("下班时间必须晚于上班时间", reversed.Message);
+        // 夜班下班在第二天：允许
+        await svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(20, 0)), Tue.ToDateTime(new TimeOnly(8, 0)), null, "管理员");
+    }
 }

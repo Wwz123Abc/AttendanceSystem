@@ -146,6 +146,16 @@ public class ZKDeviceSyncService(
             {
                 workDate = yesterday;
             }
+            // 白班/没排班的人加班过了零点才下班：零点后的这次打卡是昨天那条没下班卡的记录的下班卡，不是今天的上班卡
+            // （不接的话：昨天缺下班卡、工时清零、23:55 被标未打卡；今天早上真正的上班卡还会被当成午间卡）
+            else if (recordMap.TryGetValue((uid, yesterday), out var ydRec)
+                     && ydRec.ClockInTime is { } ydIn && ydRec.ClockOutTime == null
+                     && !(recordMap.TryGetValue((uid, calendarDate), out var tdRec) && tdRec.ClockInTime != null)
+                     && AttendanceService.IsPostMidnightClockOutOfDayShift(r.Time, ydIn,
+                            shiftByUserDate.GetValueOrDefault((uid, yesterday)), shiftByUserDate.GetValueOrDefault((uid, calendarDate))))
+            {
+                workDate = yesterday;
+            }
             // 夜班刚打完下班卡、几分钟内又刷了一次（重复刷脸）：仍归昨天，后面会按"取更晚"更新下班时间，
             // 不然第二次会落到今天成为一条凭空的上班卡（休息日还会多出 1 天出勤 + 1 次缺卡）
             else if (recordMap.TryGetValue((uid, yesterday), out var yRec)
