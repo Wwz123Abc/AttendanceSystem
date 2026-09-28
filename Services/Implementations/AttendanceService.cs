@@ -91,6 +91,11 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             }
         }
 
+        // 上班卡的合理性校验（夜班下班后重复刷、跨天班次打得太早）：远程打卡页面已经在调付费的人脸识别之前判过一次，
+        // 这里是权威兜底，别的调用方也不会漏掉
+        if (request.PunchType == PunchType.ClockIn && await GetClockInRejectionAsync(userId, now) is { } rejection)
+            return new PunchResponseDto { Success = false, Message = rejection };
+
         // 节假日不用打卡（按 workDate 判断，而不是打卡当下的日历日期——
         // 否则夜班下班卡如果跨到了假期第一天，会被误判成"今日为节假日"而拒绝下班打卡）
         if (await IsHolidayAsync(workDate, user.AttendanceGroupId))
@@ -338,6 +343,46 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 超过就当新一天的打卡，不再接到昨天那条没打下班卡的记录上（否则夜班漏打一次下班卡，
     /// 第二天晚上的上班卡会被当成昨天的下班卡，连环出错——2026-09-24 第 11 轮审查）。</summary>
     public const int NightShiftCarryOverHours = 6;
+
+    /// <summary>跨天班次的上班卡最早能打到应上班时间前多少小时。更早的不当上班卡——比如 20:30 上班的晚班，
+    /// 早上 08:40 打的卡（多半是下班后重复刷、或凌晨补刷）不能记成这天的上班卡，不然真正晚上来上班的那次会被当成午间卡，
+    /// 整天上班卡丢失（2026-09-28 线上出现 13 条）。</summary>
+    public const int CrossDayClockInEarlyHours = 6;
+
+    /// <summary>夜班下班卡打完后多少分钟内，再打一次算"重复刷"，不生成新的上班卡。</summary>
+    public const int RepeatAfterClockOutMinutes = 30;
+
+    /// <summary>跨天班次的上班卡打得太早：离 workDate 当天应上班时间超过 <see cref="CrossDayClockInEarlyHours"/> 小时。</summary>
+    public static bool IsTooEarlyForCrossDayClockIn(DateOnly workDate, DateTime punchTime, ShiftSchedule? shift) =>
+        shift is { IsCrossDay: true }
+        && punchTime < workDate.ToDateTime(shift.WorkStartTime).AddHours(-CrossDayClockInEarlyHours);
+
+    /// <inheritdoc />
+    public async Task<string?> GetClockInRejectionAsync(int userId, DateTime now)
+    {
+        var today = DateOnly.FromDateTime(now);
+        // 今天已经有上班卡了，不是"新的上班卡"，不归这里管
+        if (await db.AttendanceRecords.AnyAsync(r => r.UserId == userId && r.WorkDate == today && r.ClockInTime != null))
+            return null;
+
+        // ① 夜班刚打完下班卡又点了一次：昨天那条记录已经有下班卡、且就在刚刚
+        var yesterday = today.AddDays(-1);
+        var yOut = await db.AttendanceRecords
+            .Where(r => r.UserId == userId && r.WorkDate == yesterday && r.ClockOutTime != null)
+            .Select(r => r.ClockOutTime).FirstOrDefaultAsync();
+        if (yOut is { } outTime && now >= outTime && now - outTime <= TimeSpan.FromMinutes(RepeatAfterClockOutMinutes)
+            && (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule is { IsCrossDay: true })
+            return $"您刚刚（{outTime:HH:mm}）已经打过下班卡，无需重复打卡";
+
+        // ② 跨天班次的上班卡不能打得离应上班时间太早
+        var todayShift = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
+        if (IsTooEarlyForCrossDayClockIn(today, now, todayShift))
+        {
+            var earliest = today.ToDateTime(todayShift!.WorkStartTime).AddHours(-CrossDayClockInEarlyHours);
+            return $"现在不在您班次（{todayShift.WorkStartTime:HH\\:mm} 上班）的上班打卡时间内，最早 {earliest:HH\\:mm} 起可以打上班卡。如果是漏打了上班卡，请提交补卡申请";
+        }
+        return null;
+    }
 
     /// <summary>这次打卡时间，是否还在"昨天那个跨天夜班"允许续接的时间窗内。</summary>
     public static bool IsWithinNightCarryOver(DateOnly shiftDate, ShiftSchedule shift, DateTime punchTime) =>

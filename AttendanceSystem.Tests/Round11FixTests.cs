@@ -588,4 +588,84 @@ public class Round11FixTests : IDisposable
         }));
         Assert.Contains("0.5", ex.Message);
     }
+
+    // ── ⑫ 夜班上班卡合理性：下班后重复刷、打得太早（2026-09-28 线上 13 条夜班记录被弄乱）───────
+
+    private async Task CloseMondayNightShiftAsync(DateTime clockOut)
+    {
+        using var db = CreateContext();
+        var rec = await db.AttendanceRecords.SingleAsync(r => r.WorkDate == Mon);
+        rec.ClockOutTime = clockOut;
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task 夜班刚打完下班卡_52秒后又点了一次_被拒绝_不生成新的上班卡()
+    {
+        var (uid, _) = SeedNightWorld();                                    // 周一 20:00 上班，周二 08:00 下班（跨天班次）
+        await CloseMondayNightShiftAsync(Tue.ToDateTime(new TimeOnly(8, 40)));
+
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var msg = await svc.GetClockInRejectionAsync(uid, Tue.ToDateTime(new TimeOnly(8, 40, 53)));
+        Assert.NotNull(msg);
+        Assert.Contains("刚刚", msg);
+        Assert.Contains("08:40", msg);
+    }
+
+    [Theory]
+    [InlineData(9, 30, true)]     // 下班后 50 分钟：不算"重复刷"，但离周二 20:00 上班还早 → 太早
+    [InlineData(13, 59, true)]    // 上班时间前 6 小时零 1 分钟：太早
+    [InlineData(14, 0, false)]    // 正好前 6 小时：可以
+    [InlineData(19, 51, false)]   // 晚上来上班：可以（肖文城 9/27 那次）
+    public async Task 跨天班次的上班卡_离应上班时间前6小时以外的被拒绝(int h, int m, bool rejected)
+    {
+        var (uid, _) = SeedNightWorld();
+        await CloseMondayNightShiftAsync(Tue.ToDateTime(new TimeOnly(8, 0)));
+
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var msg = await svc.GetClockInRejectionAsync(uid, Tue.ToDateTime(new TimeOnly(h, m)));
+        Assert.Equal(rejected, msg is not null);
+        if (rejected && (h, m) != (9, 30)) Assert.Contains("14:00", msg);   // 提示里写明最早几点可以打
+    }
+
+    [Fact]
+    public async Task 白班的上班卡_不受这条限制()
+    {
+        var (uid, _) = SeedWeekWorld();   // 周五~周一白班 08:30 上班，不是跨天班次
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        Assert.Null(await svc.GetClockInRejectionAsync(uid, Mon.ToDateTime(new TimeOnly(5, 0))));   // 再早也不拦
+    }
+
+    [Fact]
+    public async Task 今天已经有上班卡_不再拦截()
+    {
+        var (uid, _) = SeedNightWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, ClockInTime = Tue.ToDateTime(new TimeOnly(19, 40)) });
+            db.SaveChanges();
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        Assert.Null(await svc.GetClockInRejectionAsync(uid, Tue.ToDateTime(new TimeOnly(9, 0))));
+    }
+
+    [Fact]
+    public async Task 考勤机同步_跨天班次的第一次打卡离上班时间太早_不当上班卡_也不建记录()
+    {
+        var (uid, _) = SeedNightWorld();
+        await CloseMondayNightShiftAsync(Tue.ToDateTime(new TimeOnly(8, 0)));
+        await SyncAsync(Tue.ToDateTime(new TimeOnly(12, 0)));     // 周二中午（离 20:00 上班还有 8 小时）
+
+        using (var check = CreateContext())
+            Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue));   // 以前这里会建一条 12:00 的上班卡
+
+        await SyncAsync(Tue.ToDateTime(new TimeOnly(19, 40)));    // 晚上来上班：正常记上班卡
+        using var check2 = CreateContext();
+        var tue = await check2.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(19, 40)), tue.ClockInTime);
+    }
 }

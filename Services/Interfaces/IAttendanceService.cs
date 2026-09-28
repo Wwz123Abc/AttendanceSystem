@@ -13,6 +13,13 @@ public interface IAttendanceService
     /// </summary>
     Task<PunchResponseDto>         PunchAsync(int userId, PunchRequestDto request, bool skipLocationCheck = false);
     /// <summary>
+    /// 这次"上班卡"该不该被拒绝：返回 null 表示可以打，否则返回给员工看的中文原因。两种情形会拒绝——
+    /// ① 夜班刚打完下班卡（30 分钟内）又点了一次：不该生成一张新的上班卡；
+    /// ② 跨天班次的上班卡打得离应上班时间太早（比如 20:30 上班的班，早上 08:40 打）。
+    /// 远程打卡在调用付费的人脸识别之前先调这个，被拒绝就不浪费识别调用；PunchAsync 内部也会再判一次。
+    /// </summary>
+    Task<string?>                  GetClockInRejectionAsync(int userId, DateTime now);
+    /// <summary>
     /// 校验一个经纬度是否落在指定考勤组配置的允许打卡地点范围内（考勤组没开"定位打卡"/没配置地点则直接算通过）。
     /// 远程打卡在调用付费的人脸识别接口之前会先调这个，人不在允许的地点里就直接拒绝，不浪费识别调用。
     /// accuracyMeters 是浏览器定位返回的精度半径（GPS 信号差时可能到几十上百米），传了的话，

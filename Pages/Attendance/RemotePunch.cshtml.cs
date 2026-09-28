@@ -95,6 +95,11 @@ public class RemotePunchModel(
                 : AttendanceService.IsEligibleClockOutCandidate(DateTime.Now, workDate, todayShift) ? PunchType.ClockOut
                 : PunchType.MidCheck;
 
+            // 上班卡的合理性校验放在所有（付费的）人脸识别之前：夜班刚打完下班卡又点了一次、跨天班次打得离上班时间太早，
+            // 直接提示原因，不生成错的上班卡，也不花识别费用（2026-09-28 线上 13 条夜班记录被这样弄乱）
+            if (type == PunchType.ClockIn && await attendanceService.GetClockInRejectionAsync(CurrentUserId, DateTime.Now) is { } clockInRejection)
+                throw new InvalidOperationException(clockInRejection);
+
             // 成本闸门：跟上面的失败限流是两回事（那个防冒充，这个防"手快连点"造成的重复付费调用）。
             // 命中这里直接拒绝，不产生任何（付费的）阿里云调用；拦截行为会写一条 BlockedReason 记录
             // （供以后做统计看板用），查上面失败限流时会排除这类行，不会互相影响。

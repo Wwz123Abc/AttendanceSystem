@@ -155,6 +155,18 @@ public class ZKDeviceSyncService(
                 workDate = yesterday;
             }
 
+            // 跨天班次的第一次打卡离应上班时间太早（比如 20:30 上班的晚班，中午/早上打的）：不当上班卡，也不为它建记录——
+            // 不然真正晚上来上班的那次会被当成午间卡，整天上班卡丢失。考勤机没法给员工弹提示，只记日志；
+            // 漏打上班卡的走补卡申请（2026-09-28）。已经有上班卡的不受影响（那是午间/下班卡）
+            if (shiftByUserDate.TryGetValue((uid, workDate), out var earlyCheckShift)
+                && earlyCheckShift is not null
+                && !(recordMap.TryGetValue((uid, workDate), out var earlyCheckRec) && earlyCheckRec.ClockInTime != null)
+                && AttendanceService.IsTooEarlyForCrossDayClockIn(workDate, r.Time, earlyCheckShift))
+            {
+                logger.LogInformation("考勤机 {SN} 上工号 {Pin} 在 {Time} 的打卡离跨天班次应上班时间太早，不作为上班卡处理", sn, r.Pin, r.Time);
+                continue;
+            }
+
             if (!recordMap.TryGetValue((uid, workDate), out var record))
             {
                 record = new AttendanceRecord { UserId = uid, WorkDate = workDate };
