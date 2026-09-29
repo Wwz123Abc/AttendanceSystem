@@ -80,10 +80,13 @@ public class AttendanceBackgroundService(
                     _lastSummaryDate = now;
                 }
 
-                // 每天 03:00 且今天还没清理过 → 清理考勤机过期数据
+                // 每天 03:00 且今天还没清理过 → 清理考勤机过期数据 + 智能助手限流计数器里过期的天数
+                // （AgentRateLimiter.CleanupExpired 以前没有任何地方调用，字典只增不减；量级很小，
+                // 顺手在这里每天清一次，2026-09-29 审查发现 L3）
                 if (now.Hour == 3 && _lastCleanupDate.Date < now.Date)
                 {
                     await CleanupZKDeviceDataAsync();
+                    AgentRateLimiter.CleanupExpired();
                     _lastCleanupDate = now;
                 }
             }

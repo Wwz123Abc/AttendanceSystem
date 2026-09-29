@@ -115,7 +115,9 @@ public class AgentActionService(
         "scope_change_propose"
     ];
 
-    private static string ToolDisplayName(string toolName) => toolName switch
+    /// <summary>工具名的中文显示名——待确认动作列表、动作审计页共用这一份，不要再各写一份（以前
+    /// 动作审计页自己复制了一份，漏加了"代提交申请"这一项，显示成英文工具名，2026-09-29 审查发现 L4）。</summary>
+    internal static string ToolDisplayName(string toolName) => toolName switch
     {
         "punch_adjust_propose"        => "补卡",
         "registration_reject_propose" => "驳回登记",
@@ -493,8 +495,8 @@ public class AgentActionService(
             await db.SaveChangesAsync();
             if (wantActive.HasValue && wantActive.Value != u.IsActive)
             {
-                if (wantActive.Value) await userService.ActivateUserAsync(u.Id);
-                else await userService.DeactivateUserAsync(u.Id);
+                if (wantActive.Value) await userService.ActivateUserAsync(u.Id, operatorUserId);
+                else await userService.DeactivateUserAsync(u.Id, operatorUserId);
             }
             return $"已还原员工 {u.RealName}（{u.EmployeeNo}）";
         }
@@ -521,8 +523,8 @@ public class AgentActionService(
                     var wantActive = row.TryGetProperty("IsActive", out var ia) && ia.ValueKind == JsonValueKind.True;
                     (wantActive ? toActivate : toDeactivate).Add(id);
                 }
-                if (toActivate.Count > 0) await userService.SetActiveBatchAsync(toActivate, true);
-                if (toDeactivate.Count > 0) await userService.SetActiveBatchAsync(toDeactivate, false);
+                if (toActivate.Count > 0) await userService.SetActiveBatchAsync(toActivate, true, operatorUserId);
+                if (toDeactivate.Count > 0) await userService.SetActiveBatchAsync(toDeactivate, false, operatorUserId);
                 return (true, $"已还原 {toActivate.Count + toDeactivate.Count} 名员工的在职状态");
             }
             case "reg":
@@ -547,7 +549,7 @@ public class AgentActionService(
                 var uid = root.GetProperty("userId").GetInt32();
                 var u = await db.Users.AsNoTracking().Where(x => x.Id == uid).Select(x => new { x.Id, x.RealName, x.EmployeeNo }).FirstOrDefaultAsync();
                 if (u is null) return (false, "要撤回的建号记录已不存在");
-                await userService.DeleteUserAsync(u.Id);
+                await userService.DeleteUserAsync(u.Id, operatorUserId);
                 if (root.GetProperty("type").GetString() == "confirm")
                 {
                     var regId = root.GetProperty("registrationId").GetInt32();
@@ -772,13 +774,13 @@ public class AgentActionService(
         if (action == "deactivate")
         {
             if (!user.IsActive) return (false, "该员工已是停用状态");
-            await userService.DeactivateUserAsync(user.Id);
+            await userService.DeactivateUserAsync(user.Id, operatorUserId);
             return (true, $"已停用 {user.RealName}（{user.EmployeeNo}）");
         }
         else
         {
             if (user.IsActive) return (false, "该员工本来就在职");
-            await userService.ActivateUserAsync(user.Id);
+            await userService.ActivateUserAsync(user.Id, operatorUserId);
             return (true, $"已启用 {user.RealName}（{user.EmployeeNo}）");
         }
     }
@@ -859,7 +861,7 @@ public class AgentActionService(
         if (!ok2) return (false, err2!);
         if (user!.IsBlacklisted) return (false, "黑名单员工请先移出黑名单再删除（保留黑名单记录防重复用工）");
 
-        await userService.DeleteUserAsync(user.Id);
+        await userService.DeleteUserAsync(user.Id, operatorUserId);
         return (true, $"已彻底删除员工 {user.RealName}（{user.EmployeeNo}）。该操作不可恢复，其考勤/审批历史已一并清除。");
     }
 
@@ -878,13 +880,13 @@ public class AgentActionService(
         if (action == "blacklist")
         {
             if (user!.IsBlacklisted) return (false, "该员工已在黑名单");
-            await userService.BlacklistUserAsync(user.Id);
+            await userService.BlacklistUserAsync(user.Id, operatorUserId);
             return (true, $"已将 {user.RealName}（{user.EmployeeNo}）拉黑：禁止登录、工号永不再用（黑名单全公司共享）。");
         }
         else
         {
             if (!user!.IsBlacklisted) return (false, "该员工不在黑名单");
-            await userService.RemoveFromBlacklistAsync(user.Id);
+            await userService.RemoveFromBlacklistAsync(user.Id, operatorUserId);
             return (true, $"已把 {user.RealName}（{user.EmployeeNo}）移出黑名单（当前为停用状态，需要可再启用）。");
         }
     }
@@ -900,8 +902,8 @@ public class AgentActionService(
         if (!ok2) return (false, err2!);
         var u = target!;
 
-        var pwd = await userService.ResetPasswordAsync(u.Id);   // 不传参=随机生成
-        return (true, $"已重置 {u.RealName}（{u.EmployeeNo}）的登录密码。新密码：{pwd}\n（新密码只在本次页面上显示这一次，请立即转告本人，首次登录会要求改密）");
+        var pwd = await userService.ResetPasswordAsync(u.Id, operatorUserId);   // newPassword 不传=随机生成
+        return (true, $"已重置 {u.RealName}（{u.EmployeeNo}）的登录密码。新密码：{pwd}\n（新密码只在本次页面上显示这一次，请立即转告本人；系统不会强制首次登录改密，建议提醒本人自行改一次）");
     }
 
     private async Task<(bool, string)> ExecuteScopeChangeAsync(int operatorUserId, JsonElement args)
@@ -948,7 +950,7 @@ public class AgentActionService(
 
     /// <summary>
     /// 认领一条待确认登记并正式建档（镜像"员工管理→待确认→确认录入"页面逻辑）：
-    /// 校验登记与目标部门/上级在范围内 → 原子认领登记 → 建员工（初始密码 123456，首登强制改密）→ 登记标记已确认。
+    /// 校验登记与目标部门/上级在范围内 → 原子认领登记 → 建员工（初始密码 123456，系统不会强制改密，需要提醒本人自行修改）→ 登记标记已确认。
     /// 注意：认领动作是幂等抢锁；若建档失败登记会被消费掉（与页面行为一致，需人工善后）。
     /// </summary>
     private async Task<(bool, string)> ExecuteConfirmRegistrationAsync(int operatorUserId, JsonElement args)
@@ -1034,7 +1036,7 @@ public class AgentActionService(
             };
             await userService.CreateUserAsync(newUser, "123456");   // 固定初始密码，首登强制改
             await registrationService.MarkConfirmedAsync(reg.Id, newUser.Id);
-            return (true, $"已将登记 #{reg.Id}（{reg.RealName}）建档：工号 {finalEmployeeNo}，部门【{deptName}】，直属上级 {sup.RealName}。初始密码 123456（首次登录强制改密）");
+            return (true, $"已将登记 #{reg.Id}（{reg.RealName}）建档：工号 {finalEmployeeNo}，部门【{deptName}】，直属上级 {sup.RealName}。初始密码 123456（系统不会强制改密，请提醒本人自行修改）");
         }
         catch (Exception ex)
         {
@@ -1133,7 +1135,7 @@ public class AgentActionService(
             UpdatedAt         = DateTime.Now
         };
         await userService.CreateUserAsync(user, "123456");
-        return (true, $"已新建员工 {realName}（{finalEno}），部门【{deptName}】。初始密码 123456（首次登录强制改密）");
+        return (true, $"已新建员工 {realName}（{finalEno}），部门【{deptName}】。初始密码 123456（系统不会强制改密，请提醒本人自行修改）");
     }
 
     private async Task<(bool, string)> ExecuteUpdateEmployeeAsync(int operatorUserId, JsonElement args)
@@ -1191,14 +1193,14 @@ public class AgentActionService(
         }
 
         user.UpdatedAt = DateTime.Now;
-        await userService.UpdateUserAsync(user);
+        await userService.UpdateUserAsync(user, operatorUserId);
         return (true, $"已更新员工 {user.RealName}（{user.EmployeeNo}）的资料");
     }
 
     private async Task<(bool, string)> ExecuteChangeRoleAsync(int operatorUserId, JsonElement args)
     {
         var uid   = GetInt(args, "userId");
-        var roleS = GetString(args, "role");
+        var roleS = GetString(args, "role")?.ToLowerInvariant();   // 存的参数已统一小写，这里再兜底一次不怕旧格式的待处理动作
         if (!uid.HasValue || uid.Value <= 0) return (false, "参数缺失：userId");
         AttendanceSystem.Models.Enums.UserRole? targetRole = roleS switch
         {
@@ -1217,7 +1219,7 @@ public class AgentActionService(
 
         var target = await db.Users.AsNoTracking()
             .Where(u => u.Id == uid.Value)
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.Role })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.Role, u.ScopedDepartmentId })
             .FirstOrDefaultAsync();
         if (target is null) return (false, "目标员工不存在");
         if (visibleIds is not null && (target.DepartmentId is null || !visibleIds.Contains(target.DepartmentId.Value)))
@@ -1227,6 +1229,12 @@ public class AgentActionService(
         var isHq = cu.Role == AttendanceSystem.Models.Enums.UserRole.Admin && cu.ScopedDepartmentId is null;
         if ((targetRole is AttendanceSystem.Models.Enums.UserRole.Admin or AttendanceSystem.Models.Enums.UserRole.Clerk) && !isHq)
             return (false, "管理员/文员角色只有总部超级管理员能设置（受限管理员不能创建无范围文员）");
+        // 反过来：目标现在就是管理员的话，把他改成别的角色（等于剥夺管理权限）同样只有总部超级管理员能做——
+        // 这条以前完全没查，配合 role 大小写的修复一起补上（不然大小写一修好，文员就能把总部管理员直接
+        // 降级成普通员工，2026-09-29 审查发现）。这里没走 UserService.UpdateUserAsync（下面是直接改字段），
+        // 所以要在这里单独查一次，不能只指望服务层那道检查
+        if (!Middlewares.CurrentUser.CanManageAccountCore(cu.Role, cu.ScopedDepartmentId, target.Role, target.ScopedDepartmentId))
+            return (false, "无权调整该账号的角色（角色层级限制）");
 
         var u = await db.Users.FindAsync(uid.Value);
         u!.Role = targetRole.Value;
@@ -1270,7 +1278,7 @@ public class AgentActionService(
             : users.Where(u => !u.IsActive).Select(u => u.Id).ToList();
         if (targets.Count == 0) return (false, "这些员工已处于目标状态");
 
-        var n = await userService.SetActiveBatchAsync(targets, action == "activate");
+        var n = await userService.SetActiveBatchAsync(targets, action == "activate", operatorUserId);
         return (true, $"已{(action == "deactivate" ? "停用" : "启用")} {n} 名员工");
     }
 
@@ -1374,6 +1382,7 @@ public class AgentActionService(
         var leaveTypeI = GetInt(args, "leaveType");
         var destination = GetString(args, "destination");
         var reason = GetString(args, "reason");
+        var approverUserId = GetInt(args, "approverUserId");
         if (!userId.HasValue || type is not ("leave" or "overtime" or "businesstrip")
             || !DateTime.TryParse(startS, out var start) || !DateTime.TryParse(endS, out var end))
             return (false, "参数不正确：需要 userId/type/startTime/endTime");
@@ -1390,7 +1399,7 @@ public class AgentActionService(
         if (visibleIds is not null && (target.DepartmentId is null || !visibleIds.Contains(target.DepartmentId.Value)))
             return (false, "该员工不在你的管理范围内");
 
-        var dto = new AttendanceSystem.Models.DTOs.SubmitApprovalDto { Reason = reason };
+        var dto = new AttendanceSystem.Models.DTOs.SubmitApprovalDto { Reason = reason, ApproverUserId = approverUserId };
         switch (type)
         {
             case "leave":

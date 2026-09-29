@@ -6,6 +6,7 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Services.Implementations;
 
 namespace AttendanceSystem.Pages.Agent;
 
@@ -66,7 +67,7 @@ public class LogsModel(AttendanceDbContext db) : PageModel
         var rows = raw.Select(l => new AgentActionLogDto
         {
             Id               = l.Id,
-            ToolNameText     = ToolName(l.ToolName),
+            ToolNameText     = AgentActionService.ToolDisplayName(l.ToolName),
             OperatorName     = NameOf(l.OperatorUserId),
             ApproverName     = l.ApproverUserId.HasValue ? NameOf(l.ApproverUserId.Value) : "—",
             ReviewActionText = l.ReviewAction switch
@@ -90,27 +91,4 @@ public class LogsModel(AttendanceDbContext db) : PageModel
         Rows = rows;
     }
 
-    private static string ToolName(string t) => t switch
-    {
-        "punch_adjust_propose"        => "补卡",
-        "registration_reject_propose" => "驳回登记",
-        "user_toggle_propose"         => "启用/停用",
-        "user_delete_propose"         => "删除员工",
-        "user_blacklist_propose"      => "拉黑/移出黑名单",
-        "password_reset_propose"      => "重置密码",
-        "scope_change_propose"        => "调整管理范围",
-        "registration_confirm_propose" => "登记建档",
-        "employee_create_propose"      => "新建员工",
-        "employee_update_propose"      => "修改员工资料",
-        "employee_role_propose"        => "调整角色",
-        "employee_batch_toggle_propose" => "批量启停",
-        "holiday_add_propose"          => "新增假期",
-        "holiday_delete_propose"       => "删除假期",
-        "approval_handle_propose"      => "审批处理",
-        "announcement_publish_propose" => "发布公告",
-        "announcement_withdraw_propose" => "撤下公告",
-        "device_register_propose"      => "登记考勤机",
-        "device_update_propose"        => "修改考勤机",
-        _                             => t
-    };
 }

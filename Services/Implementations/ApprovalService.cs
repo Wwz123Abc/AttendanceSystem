@@ -57,6 +57,11 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException("请填写完整的补卡日期、类型和时间");
                 if (dto.PunchDate.Value > DateOnly.FromDateTime(DateTime.Today))
                     throw new InvalidOperationException("补卡日期不能晚于今天");
+                // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点——以前只检查了日期不晚于今天，
+                // 没检查具体时间点：员工早上就能提交"今天 17:30 下班卡"，只要审批人批得快，中午提前走人
+                // 也会按 17:30 结算工时（2026-09-29 审查发现 M5）
+                if (dto.PunchDate.Value.ToDateTime(dto.PunchTime.Value) > DateTime.Now)
+                    throw new InvalidOperationException("补卡时间不能是还没到的时间点，请填写真实已经发生的打卡时间");
                 if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
                         && a.ApprovalType == ApprovalType.PunchReplenishment && activeStatuses.Contains(a.ApprovalStatus)
                         && a.PunchDate == dto.PunchDate && a.PunchType == dto.PunchType))

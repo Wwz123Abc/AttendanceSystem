@@ -14,24 +14,27 @@ public interface IUserService
     /// <summary>修改密码（需校验原密码）。</summary>
     Task<bool>    ChangePasswordAsync(int userId, string oldPassword, string newPassword);
     /// <summary>
-    /// 重置密码并返回明文（供管理员告知员工）。
+    /// 重置密码并返回明文（供管理员告知员工）。<paramref name="actingUserId"/> 是发起操作的账号，
+    /// 用来校验角色层级（文员不能动任何管理员、谁都不能动总部超级管理员，见 <c>CurrentUser.CanManageAccount</c>）——
+    /// 不信任调用方已经查过这一点，服务层自己会再查一次。
     /// <paramref name="newPassword"/> 留空/空白则随机生成；指定了就用管理员输入的密码（至少 6 位）。
     /// </summary>
-    Task<string>  ResetPasswordAsync(int userId, string? newPassword = null);
-    /// <summary>更新员工基本信息（不含密码），顺带把最新工号+姓名排进考勤机下发队列。</summary>
-    Task<bool>    UpdateUserAsync(User user);
+    Task<string>  ResetPasswordAsync(int userId, int actingUserId, string? newPassword = null);
+    /// <summary>更新员工基本信息（不含密码），顺带把最新工号+姓名排进考勤机下发队列。<paramref name="actingUserId"/>
+    /// 用来按目标"当前"的角色/范围校验操作者能不能管这个账号。</summary>
+    Task<bool>    UpdateUserAsync(User user, int actingUserId);
     /// <summary>停用员工（离职）：IsActive=false，禁止登录，但保留记录可查询。</summary>
-    Task<bool>    DeactivateUserAsync(int userId);
+    Task<bool>    DeactivateUserAsync(int userId, int actingUserId);
     /// <summary>重新启用员工（IsActive=true）。黑名单员工需先移出黑名单。</summary>
-    Task<bool>    ActivateUserAsync(int userId);
+    Task<bool>    ActivateUserAsync(int userId, int actingUserId);
     /// <summary>拉黑员工（标记永不录用并禁止登录）。</summary>
-    Task<bool>    BlacklistUserAsync(int userId);
+    Task<bool>    BlacklistUserAsync(int userId, int actingUserId);
     /// <summary>移出黑名单（仍为已停用，需再手动启用）。</summary>
-    Task<bool>    RemoveFromBlacklistAsync(int userId);
+    Task<bool>    RemoveFromBlacklistAsync(int userId, int actingUserId);
     /// <summary>彻底删除员工（级联删除其考勤/审批/通知等数据）。</summary>
-    Task<bool>    DeleteUserAsync(int userId);
-    /// <summary>批量启用/停用（启用会跳过黑名单员工），返回实际处理条数。</summary>
-    Task<int>     SetActiveBatchAsync(IEnumerable<int> userIds, bool active);
+    Task<bool>    DeleteUserAsync(int userId, int actingUserId);
+    /// <summary>批量启用/停用（启用会跳过黑名单员工，操作者管不到的账号也会被跳过），返回实际处理条数。</summary>
+    Task<int>     SetActiveBatchAsync(IEnumerable<int> userIds, bool active, int actingUserId);
     /// <summary>按部门/考勤组/角色/状态/关键字分页查询员工。</summary>
     Task<(List<User> Users, int Total)> GetUsersAsync(
         int? deptId = null, int? groupId = null, UserRole? role = null,

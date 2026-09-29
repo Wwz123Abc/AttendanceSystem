@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
+using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
@@ -24,6 +25,23 @@ public class UserService(
     IDeptScopeService deptScopeService,
     ILogger<UserService> logger) : IUserService
 {
+    /// <summary>角色层级校验：操作者（<paramref name="actingUserId"/>）能不能对目标账号的现状执行
+    /// 重置密码/停用/启用/拉黑/移出黑名单/删除这类高风险操作。跟 <see cref="CurrentUser.CanManageAccount"/>
+    /// 用同一个公式（<see cref="CurrentUser.CanManageAccountCore"/>），从数据库现读操作者当前的角色和范围，
+    /// 不信任调用方传来的任何身份信息。
+    /// 以前这道检查只写在 <c>UserManage</c> 页面和 <c>AdminController</c> 里，服务层本身完全不检查——
+    /// 智能助手（AGENT）直接调用这几个方法，绕开了页面这道检查，文员能借助助手重置/删除总部超级管理员的
+    /// 账号（2026-09-29 全项目审查发现，S1，严重）。现在下沉到这里，所有调用方（页面、API、助手）都会
+    /// 经过同一道检查，不用各自记得查一遍、也不会再有入口漏掉。</summary>
+    private async Task EnsureCanManageAsync(int actingUserId, UserRole targetRole, int? targetScopedDepartmentId)
+    {
+        var acting = await db.Users.AsNoTracking().Where(u => u.Id == actingUserId)
+            .Select(u => new { u.Role, u.ScopedDepartmentId }).FirstOrDefaultAsync()
+            ?? throw new InvalidOperationException("操作者账号不存在");
+        if (!CurrentUser.CanManageAccountCore(acting.Role, acting.ScopedDepartmentId, targetRole, targetScopedDepartmentId))
+            throw new InvalidOperationException("无权操作该账号（角色层级限制）");
+    }
+
     /// <summary>校验工号+密码。成功返回用户；工号/密码错、账号已停用、或账号被临时锁定，统一返回 null
     /// （登录页看到的提示不区分这几种情况——区分开会让人拿不同提示反推出哪些工号是真实存在的账号，
     /// 等于账号可被枚举）。</summary>
@@ -233,10 +251,11 @@ public class UserService(
     /// 管理员重置密码：指定了新密码就用管理员输入的（至少 6 位），
     /// 留空则生成一个随机新密码；返回明文以便告知员工。
     /// </summary>
-    public async Task<string> ResetPasswordAsync(int userId, string? newPassword = null)
+    public async Task<string> ResetPasswordAsync(int userId, int actingUserId, string? newPassword = null)
     {
         var user = await db.Users.FindAsync(userId)
             ?? throw new KeyNotFoundException($"用户 {userId} 不存在");
+        await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
         string password;
         if (string.IsNullOrWhiteSpace(newPassword))
@@ -264,10 +283,13 @@ public class UserService(
     }
 
     /// <summary>更新员工基本信息（不含密码）。会检查工号是否被别人占用，顺带把最新工号+姓名排进考勤机下发队列。</summary>
-    public async Task<bool> UpdateUserAsync(User user)
+    public async Task<bool> UpdateUserAsync(User user, int actingUserId)
     {
         var existing = await db.Users.FindAsync(user.Id);
         if (existing is null) return false;
+        // 按目标"现在"的角色/范围检查（不是即将改成的新角色）：挡住"文员想借这个接口把总部管理员的
+        // 角色改成普通员工"这类间接提权/破坏（2026-09-29 审查，跟角色调整 M2 一起处理）
+        await EnsureCanManageAsync(actingUserId, existing.Role, existing.ScopedDepartmentId);
 
         ValidateEmployeeNoFormat(user.EmployeeNo);
 
@@ -306,10 +328,11 @@ public class UserService(
 
     /// <summary>停用员工（离职）：本地不删除，只是禁止登录，考勤/审批等记录仍保留、可查询；
     /// 顺带把这个工号从考勤机上删掉，离职后不该还能在设备上刷脸打卡。</summary>
-    public async Task<bool> DeactivateUserAsync(int userId)
+    public async Task<bool> DeactivateUserAsync(int userId, int actingUserId)
     {
         var user = await db.Users.FindAsync(userId);
         if (user is null) return false;
+        await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
         user.IsActive      = false;
         user.DeactivatedAt = DateTime.Now;
@@ -321,10 +344,11 @@ public class UserService(
 
     /// <summary>重新启用员工。黑名单员工不能直接启用，需先移出黑名单。停用时考勤机上的记录被删过，
     /// 重新启用要顺带补发一次下发，不然设备上刷不了脸。</summary>
-    public async Task<bool> ActivateUserAsync(int userId)
+    public async Task<bool> ActivateUserAsync(int userId, int actingUserId)
     {
         var user = await db.Users.FindAsync(userId);
         if (user is null) return false;
+        await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
         if (user.IsBlacklisted)
             throw new InvalidOperationException("该员工在黑名单中，请先「移出黑名单」再启用");
 
@@ -338,10 +362,11 @@ public class UserService(
 
     /// <summary>拉黑员工：标记黑名单（永不录用）并同时禁止登录，顺带把这个工号从考勤机上删掉
     /// （被拉黑的人不该还能在设备上刷脸打卡）。</summary>
-    public async Task<bool> BlacklistUserAsync(int userId)
+    public async Task<bool> BlacklistUserAsync(int userId, int actingUserId)
     {
         var user = await db.Users.FindAsync(userId);
         if (user is null) return false;
+        await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
         user.IsBlacklisted = true;
         user.IsActive      = false;   // 黑名单必然禁止登录
@@ -353,10 +378,11 @@ public class UserService(
     }
 
     /// <summary>移出黑名单：只去掉黑名单标记，账号仍是「已停用」状态，需再手动启用。</summary>
-    public async Task<bool> RemoveFromBlacklistAsync(int userId)
+    public async Task<bool> RemoveFromBlacklistAsync(int userId, int actingUserId)
     {
         var user = await db.Users.FindAsync(userId);
         if (user is null) return false;
+        await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
         user.IsBlacklisted = false;
         user.UpdatedAt     = DateTime.Now;
@@ -366,10 +392,11 @@ public class UserService(
 
     /// <summary>彻底删除员工（连同其考勤记录/打卡/审批/通知按外键级联一并删除），顺带把这个工号从
     /// 考勤机上删掉。慎用。</summary>
-    public async Task<bool> DeleteUserAsync(int userId)
+    public async Task<bool> DeleteUserAsync(int userId, int actingUserId)
     {
         var user = await db.Users.FindAsync(userId);
         if (user is null) return false;
+        await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
         // 先检查这个人是不是还挂在某个考勤组的"审批人"名单里——数据库不允许删除还被这样引用着的人
         var approverOfGroups = await db.AttendanceGroupApprovers
@@ -410,10 +437,18 @@ public class UserService(
     /// <summary>批量启用/停用。启用时会跳过黑名单员工（黑名单需先移出）。返回实际处理条数。
     /// 批量停用的员工，和单个停用一样会顺带从考勤机上删掉；批量启用的员工，和单个启用（ActivateUserAsync）
     /// 一样要顺带补发一次下发，不然设备上刷不了脸。</summary>
-    public async Task<int> SetActiveBatchAsync(IEnumerable<int> userIds, bool active)
+    public async Task<int> SetActiveBatchAsync(IEnumerable<int> userIds, bool active, int actingUserId)
     {
         var ids   = userIds.Distinct().ToList();
         var users = await db.Users.Where(u => ids.Contains(u.Id)).ToListAsync();
+
+        // 角色层级：批量操作里操作者管不到的账号直接跳过，不报错中断整批——跟部门范围过滤是同一个"静默收窄"
+        // 的处理方式；单个操作用 EnsureCanManageAsync 直接抛异常，批量操作场景不一样，抛出来会让合法的
+        // 其它几百条一起失败（2026-09-29 审查，S1：以前批量启停完全不查角色层级）
+        var acting = await db.Users.AsNoTracking().Where(u => u.Id == actingUserId)
+            .Select(u => new { u.Role, u.ScopedDepartmentId }).FirstOrDefaultAsync()
+            ?? throw new InvalidOperationException("操作者账号不存在");
+        users = users.Where(u => CurrentUser.CanManageAccountCore(acting.Role, acting.ScopedDepartmentId, u.Role, u.ScopedDepartmentId)).ToList();
 
         var changed = 0;
         var deactivatedEmployeeNos = new List<(string EmployeeNo, int UserId)>();

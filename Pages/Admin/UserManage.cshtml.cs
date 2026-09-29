@@ -319,7 +319,7 @@ public class UserManageModel(
                 if (followedGroupId.HasValue) user.AttendanceGroupId = followedGroupId.Value;
             }
             bool ok;
-            try { ok = await userService.UpdateUserAsync(user); }
+            try { ok = await userService.UpdateUserAsync(user, HttpContext.GetCurrentUser()!.UserId); }
             catch
             {
                 if (wroteNewPhoto) DeleteIdCardFile(user.IdCardPhotoUrl);
@@ -357,7 +357,7 @@ public class UserManageModel(
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.DeactivateUserAsync(id);
+            await userService.DeactivateUserAsync(id, HttpContext.GetCurrentUser()!.UserId);
             SuccessMessage = "已停用该账号（无法登录）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -375,7 +375,7 @@ public class UserManageModel(
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.ActivateUserAsync(id); SuccessMessage = "已启用该账号";
+            await userService.ActivateUserAsync(id, HttpContext.GetCurrentUser()!.UserId); SuccessMessage = "已启用该账号";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -392,7 +392,7 @@ public class UserManageModel(
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.BlacklistUserAsync(id); SuccessMessage = "已拉黑该员工（禁止登录，工号永不再用）";
+            await userService.BlacklistUserAsync(id, HttpContext.GetCurrentUser()!.UserId); SuccessMessage = "已拉黑该员工（禁止登录，工号永不再用）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -409,7 +409,7 @@ public class UserManageModel(
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.RemoveFromBlacklistAsync(id); SuccessMessage = "已移出黑名单（当前为“已停用”，如需恢复请再点“启用”）";
+            await userService.RemoveFromBlacklistAsync(id, HttpContext.GetCurrentUser()!.UserId); SuccessMessage = "已移出黑名单（当前为“已停用”，如需恢复请再点“启用”）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -426,7 +426,7 @@ public class UserManageModel(
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.DeleteUserAsync(id);
+            await userService.DeleteUserAsync(id, HttpContext.GetCurrentUser()!.UserId);
             SuccessMessage = "已彻底删除该员工";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -471,7 +471,7 @@ public class UserManageModel(
         {
             if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            var pwd = await userService.ResetPasswordAsync(id, ResetPasswordValue); SuccessMessage = $"密码已重置为：{pwd}";
+            var pwd = await userService.ResetPasswordAsync(id, HttpContext.GetCurrentUser()!.UserId, ResetPasswordValue); SuccessMessage = $"密码已重置为：{pwd}";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -488,7 +488,7 @@ public class UserManageModel(
     public async Task<IActionResult> OnPostBatchActivateAsync()
     {
         try { var ids = await FilterAccessibleUserIdsAsync(ParseIds(BatchIds));
-              var n = await userService.SetActiveBatchAsync(ids, true);
+              var n = await userService.SetActiveBatchAsync(ids, true, HttpContext.GetCurrentUser()!.UserId);
               SuccessMessage = $"已启用 {n} 名员工（黑名单员工已跳过）"; }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -502,7 +502,7 @@ public class UserManageModel(
     public async Task<IActionResult> OnPostBatchDeactivateAsync()
     {
         try { var ids = await FilterAccessibleUserIdsAsync(ParseIds(BatchIds));
-              var n = await userService.SetActiveBatchAsync(ids, false);
+              var n = await userService.SetActiveBatchAsync(ids, false, HttpContext.GetCurrentUser()!.UserId);
               SuccessMessage = $"已停用 {n} 名员工"; }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)

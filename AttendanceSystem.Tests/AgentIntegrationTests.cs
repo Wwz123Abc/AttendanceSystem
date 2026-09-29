@@ -1,4 +1,5 @@
 using AttendanceSystem.Data;
+using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
@@ -36,9 +37,9 @@ public class AgentIntegrationTests : IDisposable
     private AttendanceDbContext CreateContext() =>
         new(new DbContextOptionsBuilder<AttendanceDbContext>().UseSqlite(_connection).Options);
 
-    private sealed record World(int DeptA, int DeptB, int HqAdmin, int BranchAdmin, int UserA, int UserB, int ConvHq, int ConvBranch);
+    private sealed record World(int DeptA, int DeptB, int HqAdmin, int BranchAdmin, int UserA, int UserB, int ConvHq, int ConvBranch, int HqClerk, int ConvClerk);
 
-    /// <summary>总部（不受限）管理员 + 分公司 A 的管理员（范围=部门 A）；员工 A 在 A 部门、员工 B 在 B 部门。</summary>
+    /// <summary>总部（不受限）管理员 + 分公司 A 的管理员（范围=部门 A）+ 总部（不受限）文员；员工 A 在 A 部门、员工 B 在 B 部门。</summary>
     private World SeedWorld()
     {
         using var db = CreateContext();
@@ -54,18 +55,22 @@ public class AgentIntegrationTests : IDisposable
             LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 8, RestDaysOfWeek = "0,6"
         };
         db.ShiftSchedules.Add(shift);
-        var hq = new User { EmployeeNo = "HQ1", RealName = "总部管理员", PasswordHash = "x", IsActive = true, Role = UserRole.Admin };
+        // DepartmentId 故意挂在分公司 A 下（总部管理员的组织归属常常这样），只靠部门范围挡不住——
+        // 必须额外查角色层级（ScopedDepartmentId 才是"能不能被别人管"的口径，见 CanManageAccountCore）
+        var hq = new User { EmployeeNo = "HQ1", RealName = "总部管理员", PasswordHash = "x", IsActive = true, Role = UserRole.Admin, DepartmentId = deptA.Id };
         var branch = new User { EmployeeNo = "BR1", RealName = "分公司A管理员", PasswordHash = "x", IsActive = true, Role = UserRole.Admin, DepartmentId = deptA.Id, ScopedDepartmentId = deptA.Id };
+        var clerk = new User { EmployeeNo = "CL1", RealName = "总部文员", PasswordHash = "x", IsActive = true, Role = UserRole.Clerk, DepartmentId = deptA.Id };
         var ua = new User { EmployeeNo = "A1", RealName = "员工A", PasswordHash = "x", IsActive = true, DepartmentId = deptA.Id, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
         var ub = new User { EmployeeNo = "B1", RealName = "员工B", PasswordHash = "x", IsActive = true, DepartmentId = deptB.Id, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
-        db.Users.AddRange(hq, branch, ua, ub);
+        db.Users.AddRange(hq, branch, clerk, ua, ub);
         db.SaveChanges();
         db.ShiftAssignments.Add(new ShiftAssignment { UserId = ua.Id, WorkDate = Wed, ShiftScheduleId = shift.Id });
         var c1 = new AgentConversation { UserId = hq.Id, Title = "hq" };
         var c2 = new AgentConversation { UserId = branch.Id, Title = "branch" };
-        db.AgentConversations.AddRange(c1, c2);
+        var c3 = new AgentConversation { UserId = clerk.Id, Title = "clerk" };
+        db.AgentConversations.AddRange(c1, c2, c3);
         db.SaveChanges();
-        return new World(deptA.Id, deptB.Id, hq.Id, branch.Id, ua.Id, ub.Id, c1.Id, c2.Id);
+        return new World(deptA.Id, deptB.Id, hq.Id, branch.Id, ua.Id, ub.Id, c1.Id, c2.Id, clerk.Id, c3.Id);
     }
 
     private AgentToolExecutor Tools(AttendanceDbContext db) =>
@@ -264,5 +269,208 @@ public class AgentIntegrationTests : IDisposable
             Assert.Equal(statusBefore, r.AttendanceStatus);         // 状态回到补卡前
             Assert.NotNull(r.ClockInTime);                          // 上班卡还在
         }
+    }
+
+    // ── S1（2026-09-29 全项目审查·严重）：文员/受限管理员不能借助手动总部超管或别人管不到的账号 ──────
+
+    private async Task<int> ProposeAsync(int operatorUserId, int conv, string tool, object args)
+    {
+        using var db = CreateContext();
+        var msg = await Tools(db).ExecuteAsync(operatorUserId, conv, tool, Args(args), default);
+        Assert.Contains("不会自动执行", msg);
+        return (await db.AgentPendingActions.OrderByDescending(a => a.Id).FirstAsync()).Id;
+    }
+
+    [Fact]
+    public async Task 总部文员_不能通过助手重置总部超管的密码()
+    {
+        var w = SeedWorld();
+        string hashBefore;
+        using (var db = CreateContext()) hashBefore = (await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).PasswordHash;
+
+        var actionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "password_reset_propose", new { userId = w.HqAdmin });
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqClerk, actionId, approve: true);
+        Assert.False(ok);
+        Assert.Contains("角色层级", message);
+
+        using var check = CreateContext();
+        Assert.Equal(hashBefore, (await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).PasswordHash);
+    }
+
+    [Fact]
+    public async Task 总部文员_不能通过助手删除总部超管()
+    {
+        var w = SeedWorld();
+        var actionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "user_delete_propose", new { userId = w.HqAdmin });
+        using var db = CreateContext();
+        var (ok, _) = await Actions(db).ReviewAsync(w.HqClerk, actionId, approve: true);
+        Assert.False(ok);
+        using var check = CreateContext();
+        Assert.True(await check.Users.AnyAsync(u => u.Id == w.HqAdmin));   // 人还在
+    }
+
+    [Fact]
+    public async Task 总部文员_不能通过助手拉黑或停用总部超管()
+    {
+        var w = SeedWorld();
+        var blacklistActionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "user_blacklist_propose", new { userId = w.HqAdmin, action = "blacklist" });
+        var toggleActionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "user_toggle_propose", new { userId = w.HqAdmin, action = "deactivate" });
+        using (var db = CreateContext())
+            Assert.False((await Actions(db).ReviewAsync(w.HqClerk, blacklistActionId, approve: true)).ok);
+        using (var db = CreateContext())
+            Assert.False((await Actions(db).ReviewAsync(w.HqClerk, toggleActionId, approve: true)).ok);
+        using var check = CreateContext();
+        var hq = await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
+        Assert.True(hq.IsActive);
+        Assert.False(hq.IsBlacklisted);
+    }
+
+    [Fact]
+    public async Task 分公司管理员_同样管不到总部超管_批量启停也会静默跳过()
+    {
+        var w = SeedWorld();
+        using var db = CreateContext();
+        var users = new UserService(db, new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions,
+            new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance)), AppOptions, new DeptScopeService(db), NullLogger<UserService>.Instance);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => users.DeactivateUserAsync(w.HqAdmin, w.BranchAdmin));
+        var n = await users.SetActiveBatchAsync([w.HqAdmin, w.UserA], false, w.BranchAdmin);
+        Assert.Equal(1, n);   // 只处理了管得到的 UserA，总部超管被静默跳过、不报错打断整批
+        var hq = await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
+        Assert.True(hq.IsActive);
+    }
+
+    [Fact]
+    public async Task 总部超管_仍然可以正常重置分公司管理员的密码_修复没有误伤合法操作()
+    {
+        var w = SeedWorld();
+        var actionId = await ProposeAsync(w.HqAdmin, w.ConvHq, "password_reset_propose", new { userId = w.BranchAdmin });
+        using var db = CreateContext();
+        var (ok, message) = await Actions(db).ReviewAsync(w.HqAdmin, actionId, approve: true);
+        Assert.True(ok, message);
+    }
+
+    // ── M2（角色调整大小写 bug + 角色层级校验一起修）─────────────────────────────
+
+    [Fact]
+    public async Task 调整角色_确认执行不再因为大小写报错_总部超管把普通员工调成主管()
+    {
+        var w = SeedWorld();
+        var actionId = await ProposeAsync(w.HqAdmin, w.ConvHq, "employee_role_propose", new { userId = w.UserA, role = "supervisor" });
+        using var db = CreateContext();
+        var (ok, message) = await Actions(db).ReviewAsync(w.HqAdmin, actionId, approve: true);
+        Assert.True(ok, message);
+        using var check = CreateContext();
+        Assert.Equal(UserRole.Supervisor, (await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.UserA)).Role);
+    }
+
+    [Fact]
+    public async Task 总部文员_不能通过调整角色把总部超管降级()
+    {
+        var w = SeedWorld();
+        // 这条在"生成待确认动作"这一步就会被拦下（比等确认执行才失败更早、提示更直接），
+        // 不会像别的高风险操作那样先落一条提案
+        using var db = CreateContext();
+        var msg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "employee_role_propose", Args(new { userId = w.HqAdmin, role = "employee" }), default);
+        Assert.Contains("角色层级", msg);
+        Assert.Equal(0, await db.AgentPendingActions.CountAsync());
+        using var check = CreateContext();
+        Assert.Equal(UserRole.Admin, (await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).Role);
+    }
+
+    [Fact]
+    public async Task 总部文员_不能通过调整角色把总部超管降级_确认执行这一层也单独挡住()
+    {
+        // 防御性测试：即使有一条绕过了提案阶段检查而落库的动作（比如修复上线前生成的旧提案），
+        // 确认执行这一步（ExecuteChangeRoleAsync）也要独立拦下来，不能只靠提案阶段那一道检查
+        var w = SeedWorld();
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var action = new AgentPendingAction
+            {
+                ConversationId = w.ConvClerk, ToolName = "employee_role_propose",
+                ParamJson = Args(new { userId = w.HqAdmin, role = "employee" }),
+                SummaryText = "t", Status = AgentActionStatus.Pending, CreatedBy = w.HqClerk,
+                CreatedAt = DateTime.Now, ExpiresAt = DateTime.Now.AddMinutes(15)
+            };
+            db.AgentPendingActions.Add(action);
+            await db.SaveChangesAsync();
+            actionId = action.Id;
+        }
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqClerk, actionId, approve: true);
+        Assert.False(ok);
+        Assert.Contains("角色层级", message);
+        using var check = CreateContext();
+        Assert.Equal(UserRole.Admin, (await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).Role);
+    }
+
+    // ── M1：代提交申请遇到配置了审批人名单的考勤组 ──────────────────────────────
+
+    [Fact]
+    public async Task 代提交申请_考勤组配了审批人名单_不指定审批人时报错并给出名单_指定后能成功()
+    {
+        var w = SeedWorld();
+        int approverId;
+        using (var db = CreateContext())
+        {
+            var groupId = (await db.Users.Where(u => u.Id == w.UserA).Select(u => u.AttendanceGroupId).SingleAsync())!.Value;
+            var approver = new User { EmployeeNo = "AP1", RealName = "审批人甲", PasswordHash = "x", IsActive = true, Role = UserRole.Supervisor, DepartmentId = w.DeptA };
+            db.Users.Add(approver);
+            db.SaveChanges();
+            db.AttendanceGroupApprovers.Add(new AttendanceGroupApprover { AttendanceGroupId = groupId, UserId = approver.Id });
+            db.SaveChanges();
+            approverId = approver.Id;
+        }
+        // 提交申请（跟审批一样）用的是真实的 DateTime.Now 做"开始时间不能太久以前"的校验，
+        // 不能像别的用例那样用固定的历史日期，改用"现在"往后一点的时间段
+        var start = DateTime.Now.AddHours(1).ToString("yyyy-MM-dd HH:mm");
+        var end   = DateTime.Now.AddHours(4).ToString("yyyy-MM-dd HH:mm");
+        using (var db = CreateContext())
+        {
+            var msg = await Tools(db).ExecuteAsync(w.HqAdmin, w.ConvHq, "approval_submit_on_behalf_propose", Args(new
+            {
+                userId = w.UserA, type = "leave", leaveType = "personal",
+                startTime = start, endTime = end, reason = "test"
+            }), default);
+            Assert.Contains("必须指定其中一位", msg);
+            Assert.Contains("审批人甲", msg);
+            Assert.Equal(0, await db.AgentPendingActions.CountAsync());   // 没有生成半成品的待确认动作
+        }
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var msg = await Tools(db).ExecuteAsync(w.HqAdmin, w.ConvHq, "approval_submit_on_behalf_propose", Args(new
+            {
+                userId = w.UserA, type = "leave", leaveType = "personal",
+                startTime = start, endTime = end, reason = "test", approverUserId = approverId
+            }), default);
+            Assert.Contains("不会自动执行", msg);
+            actionId = (await db.AgentPendingActions.SingleAsync()).Id;
+        }
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqAdmin, actionId, approve: true);
+        Assert.True(ok, message);
+        Assert.True(await db2.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == w.UserA));
+    }
+
+    // ── M5：补卡不能补"还没到"的时间点 ───────────────────────────────────────────
+
+    [Fact]
+    public async Task 补卡申请_时间点还没到_提交被拒绝()
+    {
+        var w = SeedWorld();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        // 只加 5 分钟：不会跨到第二天（不然会先撞上"补卡日期不能晚于今天"，跟这条测试想验证的规则是两回事）
+        var future = DateTime.Now.AddMinutes(5);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(w.UserA, new SubmitApprovalDto
+        {
+            ApprovalType = AttendanceSystem.Models.Enums.ApprovalType.PunchReplenishment,
+            PunchDate = DateOnly.FromDateTime(future), PunchType = AttendanceSystem.Models.Enums.PunchType.ClockOut,
+            PunchTime = TimeOnly.FromDateTime(future), Reason = "t"
+        }));
+        Assert.Contains("还没到", ex.Message);
     }
 }

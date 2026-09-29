@@ -68,13 +68,13 @@ public class AgentToolExecutor(
             "【仅总部·高风险·写操作·需管理员确认】把某人设为某部门的管理范围（分公司管理员）或清空其范围（恢复不受限）。只生成待确认动作；非总部超级管理员不可用。",
             """{"type":"object","properties":{"userId":{"type":"integer","description":"目标账号 userId","minimum":1},"action":{"type":"string","enum":["set","clear"],"description":"set=指定范围(需deptId)；clear=清空范围"},"deptId":{"type":"integer","description":"action=set 时必填：管理范围部门 id"}},"required":["userId","action"]}"""),
         new("registration_confirm_propose",
-            "【写操作·需管理员确认】把某条待确认的扫码登记正式建档为员工（认领登记：先调 pending_registration_list 拿登记 id；系统按所选部门自动生成工号，初始密码统一 123456 首次登录强制改）。只生成待确认动作。",
+            "【写操作·需管理员确认】把某条待确认的扫码登记正式建档为员工（认领登记：先调 pending_registration_list 拿登记 id；系统按所选部门自动生成工号，初始密码统一 123456，系统不会强制改密，需要提醒本人自行修改）。只生成待确认动作。",
             """{"type":"object","properties":{"registrationId":{"type":"integer","description":"待确认登记 id（pending_registration_list 返回的 #号数字）","minimum":1},"deptId":{"type":"integer","description":"员工归属部门 id（必须是 user_search/部门树里可见的部门）","minimum":1},"supervisorId":{"type":"integer","description":"直属上级 userId（须为该部门下角色=主管的在职员工）","minimum":1},"employeeNo":{"type":"string","description":"可选：手动指定工号（字母数字下划线短横线）；缺省自动生成"}},"required":["registrationId","deptId","supervisorId"]}"""),
         new("holiday_list",
             "查询某日期范围内配置的假期（法定/公司休息日/调班补班），返回每条假期的 id（holidayId），供增删工具引用。",
             """{"type":"object","properties":{"start":{"type":"string","description":"开始日期 yyyy-MM-dd"},"end":{"type":"string","description":"结束日期 yyyy-MM-dd，可空=默认全年"},"limit":{"type":"integer","description":"最多条数，默认50，上限200"}},"required":[]}"""),
         new("employee_create_propose",
-            "【写操作·需管理员确认】普通建档：新建一名员工（无扫码登记场景）。初始密码统一 123456、首次登录强制改密。只生成待确认动作。",
+            "【写操作·需管理员确认】普通建档：新建一名员工（无扫码登记场景）。初始密码统一 123456，系统不会强制改密，需要提醒本人自行修改。只生成待确认动作。",
             """{"type":"object","properties":{"realName":{"type":"string","description":"真实姓名，必填"},"deptId":{"type":"integer","description":"归属部门 id（范围内），必填"},"supervisorId":{"type":"integer","description":"直属上级 userId（须为该部门在职主管/班组长），必填"},"phone":{"type":"string","description":"11 位手机号，必填"},"employeeNo":{"type":"string","description":"可选工号；缺省自动生成"},"position":{"type":"string","description":"岗位，可选"},"contractCompany":{"type":"string","description":"劳务/合同公司，可选"},"hireDate":{"type":"string","description":"入职日期 yyyy-MM-dd，可选"}},"required":["realName","deptId","supervisorId","phone"]}"""),
         new("employee_update_propose",
             "【写操作·需管理员确认】修改员工资料（部门/姓名/岗位/手机号/合同公司/直属上级/入职日期）。换部门会自动跟随该部门绑定的考勤组。只生成待确认动作。",
@@ -98,8 +98,8 @@ public class AgentToolExecutor(
             "【写操作·需管理员确认】处理指派给自己的待审批单（通过/驳回；驳回需填意见）。通过会回写考勤/请假/加班等记录。只生成待确认动作。",
             """{"type":"object","properties":{"requestId":{"type":"integer","description":"审批单 id（approval_pending_list 返回的 #号数字）","minimum":1},"approve":{"type":"boolean","description":"true=通过 false=驳回"},"comment":{"type":"string","description":"审批意见（驳回时必填，通过可空）"}},"required":["requestId","approve"]}"""),
         new("approval_submit_on_behalf_propose",
-            "【写操作·需管理员确认】代范围内某员工提交一条请假/加班/出差申请（员工本人不方便操作系统时，由管理员代为录入）。提交后仍会走正常审批流程（指派给该员工的审批人，不是直接生效），管理员可在「待我审批」或「审批记录」里跟踪。只生成待确认动作。",
-            """{"type":"object","properties":{"userId":{"type":"integer","description":"申请人 userId（先用 user_search 查到）","minimum":1},"type":{"type":"string","enum":["leave","overtime","businesstrip"],"description":"leave=请假；overtime=加班；businesstrip=出差"},"startTime":{"type":"string","description":"开始时间，yyyy-MM-dd HH:mm，必填"},"endTime":{"type":"string","description":"结束时间，yyyy-MM-dd HH:mm，必填"},"leaveType":{"type":"string","enum":["sick","personal","annual","marriage","maternity","bereavement","compensatory"],"description":"type=leave 时必填：请假类型"},"destination":{"type":"string","description":"type=businesstrip 时必填：出差目的地"},"reason":{"type":"string","description":"申请理由，必填"}},"required":["userId","type","startTime","endTime","reason"]}"""),
+            "【写操作·需管理员确认】代范围内某员工提交一条请假/加班/出差申请（员工本人不方便操作系统时，由管理员代为录入）。提交后仍会走正常审批流程（指派给该员工的审批人，不是直接生效），管理员可在「待我审批」或「审批记录」里跟踪。如果该员工所在考勤组配置了审批人名单，必须指定 approverUserId（不指定会报错并列出可选名单，拿到名单后照着再调一次）。只生成待确认动作。",
+            """{"type":"object","properties":{"userId":{"type":"integer","description":"申请人 userId（先用 user_search 查到）","minimum":1},"type":{"type":"string","enum":["leave","overtime","businesstrip"],"description":"leave=请假；overtime=加班；businesstrip=出差"},"startTime":{"type":"string","description":"开始时间，yyyy-MM-dd HH:mm，必填"},"endTime":{"type":"string","description":"结束时间，yyyy-MM-dd HH:mm，必填"},"leaveType":{"type":"string","enum":["sick","personal","annual","marriage","maternity","bereavement","compensatory"],"description":"type=leave 时必填：请假类型"},"destination":{"type":"string","description":"type=businesstrip 时必填：出差目的地"},"reason":{"type":"string","description":"申请理由，必填"},"approverUserId":{"type":"integer","description":"审批人 userId：只有该员工所在考勤组配置了审批人名单时才需要，不确定就先不填，工具会报错并给出名单","minimum":1}},"required":["userId","type","startTime","endTime","reason"]}"""),
         new("announcement_publish_propose",
             "【写操作·需管理员确认】发布系统公告（标题+正文+范围：all=全公司[仅总部]、department=部门、attendancegroup=考勤组）。会通知范围内所有在职员工。只生成待确认动作。",
             """{"type":"object","properties":{"title":{"type":"string","description":"标题（≤200字）"},"content":{"type":"string","description":"正文（≤2000字）"},"scope":{"type":"string","enum":["all","department","attendancegroup"],"description":"发布范围"},"scopeId":{"type":"integer","description":"scope=department 填部门id；attendancegroup 填考勤组id"},"audienceNote":{"type":"string","description":"可选：告诉管理员大概发给谁（如：按你给出的范围自动计算），仅作备注"}},"required":["title","content","scope"]}"""),
@@ -965,22 +965,27 @@ public class AgentToolExecutor(
 
         var target = await db.Users.AsNoTracking()
             .Where(u => u.Id == uid.Value)
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.Role })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.Role, u.ScopedDepartmentId })
             .FirstOrDefaultAsync(ct);
         if (target is null) return "错误：目标员工不存在";
         if (visibleIds is not null && (target.DepartmentId is null || !visibleIds.Contains(target.DepartmentId.Value)))
             return "错误：该员工不在你的管理范围内";
 
-        // 权限闸：admin/clerk 只有总部（不受限且 Admin 角色）能设
         var op = await db.Users.AsNoTracking()
             .Where(u => u.Id == operatorUserId)
             .Select(u => new { u.Role, u.ScopedDepartmentId })
             .FirstOrDefaultAsync(ct);
         var isHq = op is { Role: UserRole.Admin } && op.ScopedDepartmentId is null;
+        // 权限闸：admin/clerk 只有总部（不受限且 Admin 角色）能设
         if ((newRole is UserRole.Admin or UserRole.Clerk) && !isHq)
             return "错误：管理员/文员角色只有总部超级管理员能设置（受限管理员不能创建无范围文员）";
+        // 反过来也要挡：目标现在就是管理员的话，改成别的角色（等于剥夺他的管理权限）同样只有总部超级管理员能做，
+        // 跟 CanManageAccount 同一套角色层级（2026-09-29 审查发现，配合下面的 role 大小写修复一起改，
+        // 不然大小写一修好，文员就能把总部管理员直接降级成普通员工）
+        if (op is null || !Middlewares.CurrentUser.CanManageAccountCore(op.Role, op.ScopedDepartmentId, target.Role, target.ScopedDepartmentId))
+            return "错误：无权调整该账号的角色（角色层级限制）";
 
-        var param = JsonSerializer.Serialize(new { userId = target.Id, role = newRole.Value.ToString() });
+        var param = JsonSerializer.Serialize(new { userId = target.Id, role = newRole.Value.ToString().ToLowerInvariant() });
         var summary = $"调整员工 {target.RealName}（{target.EmployeeNo}）角色：{RoleText(target.Role)} → {RoleText(newRole.Value)}";
         var (proposal, perr) = await CreateProposalAsync(operatorUserId, conversationId, "employee_role_propose", param, summary, ct);
         return perr is not null ? perr
@@ -1110,17 +1115,37 @@ public class AgentToolExecutor(
 
         var target = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId.Value)
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.IsActive, u.IsBlacklisted })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.AttendanceGroupId, u.IsActive, u.IsBlacklisted })
             .FirstOrDefaultAsync(ct);
         if (target is null) return "错误：目标员工不存在";
         if (!target.IsActive || target.IsBlacklisted) return "错误：该员工已停用或在黑名单中，不能代为提交申请";
         if (visibleIds is not null && (target.DepartmentId is null || !visibleIds.Contains(target.DepartmentId.Value)))
             return "错误：该员工不在你的管理范围内";
 
+        // 该员工所在考勤组如果配了审批人名单，代提交必须指定其中一个（跟 SubmitApprovalAsync 里
+        // CreateApprovalStepsAsync 的口径一致：配了名单就必须选，不能自动退回直属上级）；不指定
+        // 会在这里直接报错并给出名单，而不是让确认执行的时候才报"请选择有效的审批人"
+        // （2026-09-29 审查发现 M1：以前完全没传这个参数，配了审批人名单的考勤组代提交必然失败）
+        var groupApprovers = target.AttendanceGroupId.HasValue
+            ? await db.AttendanceGroupApprovers.Where(a => a.AttendanceGroupId == target.AttendanceGroupId.Value)
+                .Include(a => a.Approver).Where(a => a.Approver.IsActive)
+                .Select(a => new { a.UserId, a.Approver.RealName, a.Approver.EmployeeNo }).ToListAsync(ct)
+            : [];
+        var approverUserId = IntArg(root, "approverUserId");
+        if (groupApprovers.Count > 0)
+        {
+            if (!approverUserId.HasValue || approverUserId.Value == target.Id
+                || !groupApprovers.Any(a => a.UserId == approverUserId.Value))
+            {
+                var options = string.Join("、", groupApprovers.Select(a => $"{a.RealName}（{a.EmployeeNo}，userId:{a.UserId}）"));
+                return $"错误：该员工所在考勤组配置了审批人名单，代提交必须指定其中一位（approverUserId），可选：{options}";
+            }
+        }
+
         var param = JsonSerializer.Serialize(new
         {
             userId = target.Id, type, startTime = start.ToString("yyyy-MM-dd HH:mm"), endTime = end.ToString("yyyy-MM-dd HH:mm"),
-            leaveType = leaveType.HasValue ? (int)leaveType.Value : (int?)null, destination, reason
+            leaveType = leaveType.HasValue ? (int)leaveType.Value : (int?)null, destination, reason, approverUserId
         });
         var typeText = type switch { "leave" => $"请假（{LeaveTypeText(leaveType!.Value)}）", "overtime" => "加班", _ => $"出差（{destination}）" };
         var summary = $"代 {target.RealName}（{target.EmployeeNo}）提交{typeText}申请：{start:MM-dd HH:mm} ~ {end:MM-dd HH:mm}，理由：{reason}"

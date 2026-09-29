@@ -135,7 +135,7 @@ public class AdminController(
             AllowRemotePunch        = current?.AllowRemotePunch ?? false,
             IsAttendanceExempt      = current?.IsAttendanceExempt ?? false   // 接口请求里没有这个字段，沿用库里现值
         };
-        var ok = await userService.UpdateUserAsync(user);
+        var ok = await userService.UpdateUserAsync(user, Cu.UserId);
         if (ok)
         {
             if (req.DeviceIds is not null)
@@ -150,7 +150,7 @@ public class AdminController(
     public async Task<IActionResult> DeactivateUser(int id)
     {
         if (!await CanAccessUserAsync(id)) return Forbid();
-        var ok = await userService.DeactivateUserAsync(id);
+        var ok = await userService.DeactivateUserAsync(id, Cu.UserId);
         return Ok(new { Success = ok, Message = ok ? "已停用" : "用户不存在" });
     }
 
@@ -159,7 +159,7 @@ public class AdminController(
     public async Task<IActionResult> ResetPassword(int id)
     {
         if (!await CanAccessUserAsync(id)) return Forbid();
-        var newPwd = await userService.ResetPasswordAsync(id);
+        var newPwd = await userService.ResetPasswordAsync(id, Cu.UserId);
         return Ok(new { Success = true, Message = "密码已重置", NewPassword = newPwd });
     }
 

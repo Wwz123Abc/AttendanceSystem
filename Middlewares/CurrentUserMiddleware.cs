@@ -42,12 +42,24 @@ public sealed class CurrentUser
     /// "总部管理员"（Admin 且没设范围），文员也不能动任何管理员；分公司管理员之间维持可操作。
     /// </summary>
     public bool CanManageAccount(UserRole targetRole, int? targetScopedDepartmentId) =>
-        IsHqSuperAdmin
-        || (targetRole == UserRole.Admin
-            ? targetScopedDepartmentId.HasValue && Role == UserRole.Admin
-            // 范围为空的文员=能看/管全公司的"总部文员"：受范围限制的账号（分公司管理员/分公司文员）不能操作他，
-            // 不然重置他的密码就能接管一个不受限的账号（2026-09-24 第 11 轮审查，用户确认禁止）。总部文员之间不受影响
-            : !(IsScoped && targetRole == UserRole.Clerk && !targetScopedDepartmentId.HasValue));
+        CanManageAccountCore(Role, ScopedDepartmentId, targetRole, targetScopedDepartmentId);
+
+    /// <summary>角色层级判断的核心公式，抽成静态方法：页面用 <see cref="CanManageAccount"/>（基于当前登录者），
+    /// <c>UserService</c> 内部也调这同一个公式（从数据库现读操作者/目标的角色和范围，不用先拼一个完整的
+    /// <see cref="CurrentUser"/>）。以前只有这一个类有这份判断，服务层完全不知道"操作者是谁"，
+    /// 智能助手（AGENT）绕过页面直接调用 <c>UserService</c> 的写方法，文员因此能通过助手重置/删除
+    /// 总部超级管理员的账号（2026-09-29 审查发现，S1，严重）。现在两处共用同一份公式，不会再各写一遍、
+    /// 也不会再有调用方漏掉这道检查。</summary>
+    public static bool CanManageAccountCore(UserRole actingRole, int? actingScopedDepartmentId, UserRole targetRole, int? targetScopedDepartmentId)
+    {
+        var actingIsHqSuperAdmin = actingRole == UserRole.Admin && actingScopedDepartmentId is null;
+        if (actingIsHqSuperAdmin) return true;
+        if (targetRole == UserRole.Admin)
+            return targetScopedDepartmentId.HasValue && actingRole == UserRole.Admin;
+        // 范围为空的文员=能看/管全公司的"总部文员"：受范围限制的账号（分公司管理员/分公司文员）不能操作他，
+        // 不然重置他的密码就能接管一个不受限的账号（2026-09-24 第 11 轮审查，用户确认禁止）。总部文员之间不受影响
+        return !(actingScopedDepartmentId is not null && targetRole == UserRole.Clerk && targetScopedDepartmentId is null);
+    }
 }
 
 // 「中间件」= 每个网络请求都会先经过的一道“关卡”。

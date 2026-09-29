@@ -435,10 +435,15 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 不是今天的上班卡。判断：昨天有上班卡；这次打卡离昨天上班卡不超过 <see cref="PostMidnightClockOutMaxHours"/> 小时；
     /// 而且比今天应上班时间早了 <see cref="CrossDayClockInEarlyHours"/> 小时以上（没排班就当 06:00 之前）——
     /// 这么早不可能是今天的上班卡。昨天排的是跨天班次的走原来的夜班续接（<see cref="IsWithinNightCarryOver"/>），不在这里处理
-    /// （2026-09-28 全项目审查：白班加班到 00:40 下班，当天工时被清零、23:55 还被标未打卡，第二天早上的上班卡又被当成午间卡）。</summary>
+    /// （2026-09-28 全项目审查：白班加班到 00:40 下班，当天工时被清零、23:55 还被标未打卡，第二天早上的上班卡又被当成午间卡）。
+    /// ★ 要求昨天或今天至少有一天排了班（哪怕不是跨天班次）：完全没排班的人没有"班次"这个参照，没法判断
+    /// 这算不算合理的加班延续，径直按最长 <see cref="PostMidnightClockOutMaxHours"/> 小时合并，会把两个本来
+    /// 无关的独立工作时段错拼成一个 18 小时以上的"班"（2026-09-29 审查发现 H1：没排班的人昨天 10:00 上班忘打
+    /// 下班卡，第二天 05:30 到岗打卡，被当成昨天的下班卡算出 18 小时）。</summary>
     public static bool IsPostMidnightClockOutOfDayShift(DateTime punchTime, DateTime yesterdayClockIn, ShiftSchedule? yesterdayShift, ShiftSchedule? todayShift)
     {
         if (yesterdayShift is { IsCrossDay: true }) return false;
+        if (yesterdayShift is null && todayShift is null) return false;
         if (punchTime <= yesterdayClockIn || punchTime - yesterdayClockIn > TimeSpan.FromHours(PostMidnightClockOutMaxHours)) return false;
         var day = DateOnly.FromDateTime(punchTime);
         var cutoff = todayShift is null
@@ -450,12 +455,21 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// <summary>白班加班过零点下班：这次打卡最晚离昨天上班卡多少小时以内，才当成昨天的下班卡。</summary>
     public const int PostMidnightClockOutMaxHours = 20;
 
-    /// <summary>补卡申请里的"下班卡"该落在哪一天：默认是申请的日期；已有上班卡且这个时间点不晚于上班卡，
-    /// 或者班次是跨天班次而且填的时间早于班次的上班时间（即凌晨那段），就是第二天的这个时间。</summary>
+    /// <summary>补卡申请里的"下班卡"该落在哪一天：默认是申请的日期。已有上班卡、且这个时间点不晚于上班卡时，
+    /// 只有看起来像是跨天班次的下班（班次本身跨天，或者填的时间在凌晨——真的很像"第二天早上几点下班"）才
+    /// 顺延到第二天；否则保留在当天，让下班早于/等于上班这个矛盾按原有的"时间异常"规则被标出来，等人工核实。
+    /// 没有上班卡时，班次是跨天班次且填的时间早于班次上班时间，也当成第二天。
+    /// ★ 不能任何"填反了"的时间都无条件顺延：普通白班/没排班的人补卡把 18:00 手滑填成 08:00（比上班时间还早）
+    /// 不像夜班，顺延成第二天会算出一个 22 小时的班，反而把明显的数据错误悄悄放过去了
+    /// （2026-09-29 审查发现 H1，以前这种情况会被标"时间异常"提醒人工核实，不该被这次改动误伤）。</summary>
     public static DateTime ResolvePunchReplenishmentClockOut(DateOnly date, TimeOnly time, DateTime? clockIn, ShiftSchedule? shift)
     {
         var dt = date.ToDateTime(time);
-        if (clockIn is { } ci) return dt <= ci ? dt.AddDays(1) : dt;
+        if (clockIn is { } ci && dt <= ci)
+        {
+            var looksLikeCrossDay = shift is { IsCrossDay: true } || time < new TimeOnly(6, 0);
+            return looksLikeCrossDay ? dt.AddDays(1) : dt;
+        }
         if (shift is { IsCrossDay: true } && time < shift.WorkStartTime) return dt.AddDays(1);
         return dt;
     }

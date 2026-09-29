@@ -989,6 +989,76 @@ public class Round11FixTests : IDisposable
         Assert.Equal(Mon.ToDateTime(new TimeOnly(8, 0)),   AttendanceService.ResolvePunchReplenishmentClockOut(day, new TimeOnly(8, 0),  null, DayShift()));        // 白班没上班卡：不动
     }
 
+    // ── H1（2026-09-29 第二轮审查·高）：没排班的人不该被这两条"跨天顺延"规则多算十几个小时 ──────
+
+    [Fact]
+    public void 完全没排班的人_昨天上班没打下班卡_今天凌晨的卡不会被强行接成昨天的下班卡()
+    {
+        var yesterdayIn = Mon.ToDateTime(new TimeOnly(10, 0));
+        // 昨天、今天都没排班：以前只要没超过 20 小时、时间在 06:00 之前就会接，10:00 上班到次日 05:30 会被
+        // 算成 18 小时的"班"；现在昨天/今天至少要有一天排了班（哪怕不是跨天班次）才继续判断
+        Assert.False(AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(5, 30)), yesterdayIn, null, null));
+    }
+
+    [Fact]
+    public void 排了班的人_同样场景仍然按原规则接续()
+    {
+        var yesterdayIn = Mon.ToDateTime(new TimeOnly(10, 0));
+        // 昨天排了班（哪怕不是跨天班次）：不受这次收紧影响，照常判断"凌晨 06:00 之前"这条规则
+        Assert.True(AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(5, 30)), yesterdayIn, DayShift(), null));
+        // 今天排了班：判断口径改成看"今天这个班次自己的上班时间提前 6 小时"，08:30 上班时 05:30 不算"太早"
+        // （不满足"太早"就不会被当成昨天延续过来的下班卡——这是本来就有的、跟这次收紧无关的既有规则）
+        Assert.False(AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(5, 30)), yesterdayIn, null, DayShift()));
+        Assert.True(AttendanceService.IsPostMidnightClockOutOfDayShift(Tue.ToDateTime(new TimeOnly(1, 30)), yesterdayIn, null, DayShift()));
+    }
+
+    [Fact]
+    public void 补卡下班卡_没有班次可参照时_填反的时间不再被强行顺延到第二天()
+    {
+        // 没排班的人把 18:00 手滑填成 08:00（比上班还早）：以前不管三七二十一顺延到第二天，
+        // 会算出一个 22 小时的班；现在原样保留在当天，交给"下班时间早于上班时间"的时间异常规则去提醒人工核实
+        var result = AttendanceService.ResolvePunchReplenishmentClockOut(Mon, new TimeOnly(8, 0), Mon.ToDateTime(new TimeOnly(8, 30)), null);
+        Assert.Equal(Mon.ToDateTime(new TimeOnly(8, 0)), result);
+    }
+
+    [Fact]
+    public void 补卡下班卡_没有班次但填的是凌晨时间_仍然顺延到第二天()
+    {
+        // 没有班次信息，但填的时间在凌晨（<06:00），看起来确实像是"第二天早上几点下班"，继续允许顺延
+        var result = AttendanceService.ResolvePunchReplenishmentClockOut(Mon, new TimeOnly(5, 0), Mon.ToDateTime(new TimeOnly(8, 30)), null);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(5, 0)), result);
+    }
+
+    [Fact]
+    public async Task 设备同步_完全没排班的人_昨天10点上班忘打下班卡_今天凌晨的卡不会被并成18小时的班()
+    {
+        int uid;
+        using (var db = CreateContext())
+        {
+            var user = new User { EmployeeNo = "NS1", RealName = "没排班员工", PasswordHash = "x", IsActive = true, HireDate = new DateOnly(2026, 1, 1) };
+            db.Users.Add(user);
+            var dev = new ZKDevice { SN = "SNNS", IsActive = true };
+            db.ZKDevices.Add(dev);
+            db.SaveChanges();
+            db.UserZKDevices.Add(new UserZKDevice { UserId = user.Id, ZKDeviceId = dev.Id });
+            // 昨天 10:00 上班，没打下班卡；今天、昨天都没有任何排班（ShiftAssignment 一条都不建）
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = user.Id, WorkDate = Mon, ClockInTime = Mon.ToDateTime(new TimeOnly(10, 0)), AttendanceStatus = AttendanceStatus.Normal });
+            db.SaveChanges();
+            uid = user.Id;
+        }
+        using (var db = CreateContext())
+        {
+            var att = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var svc = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
+            await svc.ProcessAttLogAsync("SNNS", [new ZKAttLogRow("NS1", Tue.ToDateTime(new TimeOnly(5, 30)), 0, 15)]);
+        }
+        using var check = CreateContext();
+        var mon = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Null(mon.ClockOutTime);                              // 昨天那条记录没被这次凌晨的卡接走
+        var tue = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);   // 今天单独有自己的记录
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(5, 30)), tue.ClockInTime);
+    }
+
     [Fact]
     public void 休息日有打卡_不算出勤天数_请假当天不受影响()
     {
