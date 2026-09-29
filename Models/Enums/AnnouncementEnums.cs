@@ -6,7 +6,8 @@ public enum AnnouncementScopeType
     All             = 1,  // 全公司
     Department      = 2,  // 指定部门（含其所有下级子部门）
     AttendanceGroup = 3,  // 指定考勤组
-    DirectReports   = 4   // 发布人自己的直属下属（班组长/主管发布时锁死用这个）
+    DirectReports   = 4,  // 发布人自己的直属下属（班组长/主管发布时锁死用这个）
+    Role            = 5   // 指定角色（可多选，如"管理员+文员"）；跟"全公司"一样跨部门，只有总部能发
 }
 
 /// <summary>AnnouncementScopeType 的辅助方法。</summary>
@@ -18,6 +19,7 @@ public static class AnnouncementScopeTypeExtensions
         AnnouncementScopeType.Department      => "指定部门",
         AnnouncementScopeType.AttendanceGroup => "指定考勤组",
         AnnouncementScopeType.DirectReports   => "我的直属下属",
+        AnnouncementScopeType.Role            => "指定角色",
         _                                     => "未知"
     };
 }

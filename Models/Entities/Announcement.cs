@@ -26,9 +26,14 @@ public class Announcement
 
     /// <summary>
     /// 配合 ScopeType 用：ScopeType=Department 时是部门 Id，=AttendanceGroup 时是考勤组 Id；
-    /// =All 或 =DirectReports 这两种范围不需要用到，留空。
+    /// =All、=DirectReports、=Role 这三种范围不需要用到，留空。
     /// </summary>
     public int? ScopeId { get; set; }
+
+    /// <summary>ScopeType=Role 时用：选中的角色，逗号分隔的 UserRole 数字（如"1,2"=管理员+文员）。
+    /// 其它 ScopeType 留空。跟 ShiftSchedule.RestDaysOfWeek 一样的存法，不用建关联表。</summary>
+    [MaxLength(50)]
+    public string? ScopeRoles { get; set; }
 
     /// <summary>是否有效：撤下时置为 false，不做物理删除（保留发布历史和已读记录）。</summary>
     public bool IsActive { get; set; } = true;

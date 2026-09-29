@@ -19,14 +19,17 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
 
         // 班组长/主管只能发给自己的直属下属：范围在服务端强制锁死，不采信页面传来的 ScopeType/ScopeId，
         // 避免有人改改前端请求就能越权发给别的部门/考勤组
-        var isManager = publisherRole is UserRole.Admin or UserRole.Clerk;
-        var scopeType = isManager ? dto.ScopeType : AnnouncementScopeType.DirectReports;
-        int? scopeId  = isManager ? dto.ScopeId : null;
+        var isManager   = publisherRole is UserRole.Admin or UserRole.Clerk;
+        var scopeType   = isManager ? dto.ScopeType : AnnouncementScopeType.DirectReports;
+        int? scopeId    = isManager ? dto.ScopeId : null;
+        var scopeRoles  = isManager && scopeType == AnnouncementScopeType.Role ? dto.ScopeRoles : null;
 
         if (isManager && scopeType is AnnouncementScopeType.Department or AnnouncementScopeType.AttendanceGroup && scopeId is null)
             throw new InvalidOperationException("请选择具体的部门/考勤组");
+        if (isManager && scopeType == AnnouncementScopeType.Role && (scopeRoles is null || scopeRoles.Count == 0))
+            throw new InvalidOperationException("请至少选择一个角色");
 
-        var audienceIds = await ResolveAudienceAsync(publisherUserId, scopeType, scopeId);
+        var audienceIds = await ResolveAudienceAsync(publisherUserId, scopeType, scopeId, scopeRoles);
         if (audienceIds.Count == 0)
             throw new InvalidOperationException("这个范围里没有任何在职员工，无法发布");
 
@@ -38,6 +41,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
             PublisherUserId = publisherUserId,
             ScopeType       = scopeType,
             ScopeId         = scopeId,
+            ScopeRoles      = scopeRoles is null ? null : string.Join(",", scopeRoles.Select(r => (int)r)),
             IsActive        = true,
             CreatedAt       = now,
             UpdatedAt       = now
@@ -98,7 +102,8 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         switch (a.ScopeType)
         {
             case AnnouncementScopeType.All:
-                return false;   // 全公司范围的公告只有总部能撤/查已读名单
+            case AnnouncementScopeType.Role:
+                return false;   // 全公司/按角色范围的公告跨部门，只有总部能撤/查已读名单
             case AnnouncementScopeType.Department:
                 return a.ScopeId.HasValue && visibleDeptIds.Contains(a.ScopeId.Value);
             case AnnouncementScopeType.AttendanceGroup:
@@ -184,6 +189,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
                 AnnouncementScopeType.Department      => deptNames.GetValueOrDefault(a.ScopeId ?? 0, "（部门已删除）"),
                 AnnouncementScopeType.AttendanceGroup => groupNames.GetValueOrDefault(a.ScopeId ?? 0, "（考勤组已删除）"),
                 AnnouncementScopeType.DirectReports   => "我的直属下属",
+                AnnouncementScopeType.Role            => FormatScopeRoles(a.ScopeRoles),
                 _                                     => "—"
             },
             IsActive   = a.IsActive,
@@ -255,13 +261,28 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
             || deptIds.All(visibleDeptIds.Contains)).ToList();
     }
 
+    /// <summary>把 Announcement.ScopeRoles 存的逗号分隔角色编号还原成中文名，拼成"管理员、文员"这样的展示文字。</summary>
+    private static string FormatScopeRoles(string? scopeRoles)
+    {
+        if (string.IsNullOrEmpty(scopeRoles)) return "—";
+        return string.Join("、", scopeRoles.Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => ((UserRole)int.Parse(s)).ToDisplayName()));
+    }
+
     /// <summary>按发布范围算出这次公告实际要发给哪些（在职）员工的 Id 列表。</summary>
-    private async Task<List<int>> ResolveAudienceAsync(int publisherUserId, AnnouncementScopeType scopeType, int? scopeId)
+    private async Task<List<int>> ResolveAudienceAsync(int publisherUserId, AnnouncementScopeType scopeType, int? scopeId, List<UserRole>? scopeRoles = null)
     {
         switch (scopeType)
         {
             case AnnouncementScopeType.All:
                 return await db.Users.Where(u => u.IsActive).Select(u => u.Id).ToListAsync();
+
+            case AnnouncementScopeType.Role:
+            {
+                if (scopeRoles is null || scopeRoles.Count == 0) return [];
+                return await db.Users.Where(u => u.IsActive && scopeRoles.Contains(u.Role))
+                    .Select(u => u.Id).ToListAsync();
+            }
 
             case AnnouncementScopeType.Department:
             {

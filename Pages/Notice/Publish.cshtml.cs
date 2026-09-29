@@ -32,6 +32,7 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
     [BindProperty] public string Body      { get; set; } = string.Empty;   // 公告正文（不叫 Content，避免和 PageModel.Content() 这个继承方法同名）
     [BindProperty] public string ScopeType { get; set; } = nameof(AttendanceSystem.Models.Enums.AnnouncementScopeType.All);
     [BindProperty] public int?  ScopeId    { get; set; }
+    [BindProperty] public List<string> ScopeRoleList { get; set; } = [];
 
     private UserRole CurrentRole => HttpContext.GetCurrentUser()?.Role ?? UserRole.Employee;
 
@@ -72,6 +73,8 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
                 {
                     if (scopeType == AnnouncementScopeType.All)
                         throw new InvalidOperationException("无权发布全公司范围的公告");
+                    if (scopeType == AnnouncementScopeType.Role)
+                        throw new InvalidOperationException("无权按角色发布公告（跨部门，只有总部能发）");
                     if (scopeType == AnnouncementScopeType.Department)
                     {
                         if (!await deptScopeService.CanAccessDeptAsync(cu, ScopeId))
@@ -93,12 +96,17 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
                 }
             }
 
+            var scopeRoles = ScopeRoleList
+                .Select(s => Enum.TryParse<UserRole>(s, out var r) ? r : (UserRole?)null)
+                .Where(r => r.HasValue).Select(r => r!.Value).ToList();
+
             await announcementService.PublishAsync(CurrentUserId, CurrentRole, new PublishAnnouncementDto
             {
-                Title     = Title,
-                Content   = Body,
-                ScopeType = scopeType,
-                ScopeId   = ScopeId
+                Title      = Title,
+                Content    = Body,
+                ScopeType  = scopeType,
+                ScopeId    = ScopeId,
+                ScopeRoles = scopeRoles
             });
             SuccessMessage = "公告已发布";
         }

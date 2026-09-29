@@ -40,6 +40,7 @@
                             <option value="All">全公司</option>
                             <option value="Department">指定部门</option>
                             <option value="AttendanceGroup">指定考勤组</option>
+                            <option value="Role">指定角色</option>
                         </select>
                     </div>
                     <div class="col-md-8" id="scopeDeptWrap" style="display:none">
@@ -57,6 +58,32 @@
                             @foreach (var g in Model.GroupOptions)
                             { <option value="@g.Id">@g.Name</option> }
                         </select>
+                    </div>
+                    <div class="col-md-8" id="scopeRoleWrap" style="display:none">
+                        <label class="form-label fw-semibold">选择角色（可多选）</label>
+                        <div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="ScopeRoleList" value="Admin" id="roleAdmin">
+                                <label class="form-check-label" for="roleAdmin">管理员</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="ScopeRoleList" value="Clerk" id="roleClerk">
+                                <label class="form-check-label" for="roleClerk">文员</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="ScopeRoleList" value="Supervisor" id="roleSupervisor">
+                                <label class="form-check-label" for="roleSupervisor">主管</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="ScopeRoleList" value="TeamLeader" id="roleTeamLeader">
+                                <label class="form-check-label" for="roleTeamLeader">班组长</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" name="ScopeRoleList" value="Employee" id="roleEmployee">
+                                <label class="form-check-label" for="roleEmployee">普通员工</label>
+                            </div>
+                        </div>
+                        <div class="form-text text-muted">跟"全公司"一样跨部门，只有总部管理员能选这个范围。</div>
                     </div>
                 }
                 else
@@ -157,11 +184,13 @@ if (scopeTypeSelect) {
     function updateScopeUI() {
         const deptWrap  = document.getElementById('scopeDeptWrap');
         const groupWrap = document.getElementById('scopeGroupWrap');
+        const roleWrap  = document.getElementById('scopeRoleWrap');
         const deptSelect  = document.getElementById('scopeDeptSelect');
         const groupSelect = document.getElementById('scopeGroupSelect');
         const val = scopeTypeSelect.value;
         deptWrap.style.display  = val === 'Department'      ? '' : 'none';
         groupWrap.style.display = val === 'AttendanceGroup' ? '' : 'none';
+        roleWrap.style.display  = val === 'Role'            ? '' : 'none';
         // ScopeId 这个隐藏绑定字段跟着当前显示的那个下拉框走
         deptSelect.name  = val === 'Department'      ? 'ScopeId' : '';
         groupSelect.name = val === 'AttendanceGroup'  ? 'ScopeId' : '';

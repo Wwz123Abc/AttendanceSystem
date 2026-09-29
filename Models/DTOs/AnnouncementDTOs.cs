@@ -15,6 +15,9 @@ public class PublishAnnouncementDto
 
     /// <summary>配合 ScopeType=Department/AttendanceGroup 用，填对应的部门/考勤组 Id。</summary>
     public int? ScopeId { get; set; }
+
+    /// <summary>配合 ScopeType=Role 用，选中的角色（可多选）。</summary>
+    public List<UserRole>? ScopeRoles { get; set; }
 }
 
 /// <summary>公告栏（员工侧）展示一条公告。</summary>
