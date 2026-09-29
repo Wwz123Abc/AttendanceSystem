@@ -154,13 +154,13 @@
                         </div>
                         <div class="col-md-3">
                             <label class="form-label fw-semibold">午休时长（分钟）</label>
-                            <input asp-for="LunchBreak" id="fLunch" type="number" min="0" max="120" class="form-control" />
-                            <div class="form-text text-muted">2026-09-29 起工时计算改成全公司统一按固定时段（12:00-13:00 等）扣减，这里填的数值不再影响工时。</div>
+                            <input asp-for="LunchBreak" id="fLunch" type="number" min="0" max="120" class="form-control" disabled />
+                            <div class="form-text text-muted">2026-09-29 起工时计算改成全公司统一按固定时段（12:00-13:00 等）扣减，这里的数值不再影响工时，已停用编辑（仅供查看历史设置）。</div>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label fw-semibold">晚餐时长（分钟）</label>
-                            <input asp-for="DinnerBreak" id="fDinner" type="number" min="0" max="120" class="form-control" />
-                            <div class="form-text text-muted">同上，不再影响工时计算。</div>
+                            <input asp-for="DinnerBreak" id="fDinner" type="number" min="0" max="120" class="form-control" disabled />
+                            <div class="form-text text-muted">同上，不再影响工时计算，已停用编辑。</div>
                         </div>
 
                         <div class="col-12">

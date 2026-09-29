@@ -1308,4 +1308,92 @@ public class Round11FixTests : IDisposable
         Assert.False(valid);
         Assert.Contains("超出有效范围", message);
     }
+
+    // ── 补卡审批：夜班下班卡顺延到第二天后，仍不能是"还没到"的未来时间点 ──────────────
+    // （2026-09-29 第 12 轮审查发现：上一轮 M5 只在提交时比较"申请日期+申请时间"，没考虑夜班顺延；
+    // 顺延是在审批通过时才发生的，提交时早于现在的申请，顺延后可能变成未来——两处都要按同一套
+    // 顺延规则重新算一遍再比较，用动态的"今天/昨天/前天"而不是固定历史日期，因为这条 bug 的本质
+    // 就是"结果是否晚于真实的 DateTime.Now"）
+
+    private (int userId, int supervisorId) SeedNightWorldForFutureCheck(DateOnly shiftDate)
+    {
+        using var db = CreateContext();
+        var group = new AttendanceGroup { GroupName = "夜班组-未来校验" };
+        db.AttendanceGroups.Add(group);
+        db.SaveChanges();
+        var shift = NightShift(); shift.AttendanceGroupId = group.Id;   // 20:00-08:00 跨天
+        db.ShiftSchedules.Add(shift);
+        var supervisor = new User { EmployeeNo = "SUPF", RealName = "上级", PasswordHash = "x", IsActive = true, Role = UserRole.Supervisor };
+        db.Users.Add(supervisor);
+        db.SaveChanges();
+        var user = new User
+        {
+            EmployeeNo = "NF1", RealName = "夜班员工-未来校验", PasswordHash = "x", IsActive = true,
+            AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1), SupervisorUserId = supervisor.Id
+        };
+        db.Users.Add(user);
+        db.SaveChanges();
+        db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = shiftDate, ShiftScheduleId = shift.Id });
+        db.SaveChanges();
+        return (user.Id, supervisor.Id);
+    }
+
+    [Fact]
+    public async Task 补卡申请_夜班下班卡顺延后落在未来_提交时直接拒绝()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var (uid, _) = SeedNightWorldForFutureCheck(today);   // 今天排的是跨天夜班，一次卡都没打
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        // 没有上班卡、班次跨天、06:00 早于 20:00 的上班时间 → 顺延到"明天 06:00"——不管现在几点，
+        // 明天都还没到，这是本条 bug 的核心场景
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.PunchReplenishment,
+            PunchDate = today, PunchType = PunchType.ClockOut, PunchTime = new TimeOnly(6, 0),
+            Reason = "t"
+        }));
+        Assert.Contains("还没到", ex.Message);
+    }
+
+    [Fact]
+    public async Task 补卡申请_夜班下班卡顺延后落在过去_提交正常通过()
+    {
+        var twoDaysAgo = DateOnly.FromDateTime(DateTime.Today).AddDays(-2);
+        var (uid, _) = SeedNightWorldForFutureCheck(twoDaysAgo);
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        // 顺延到"前天+1天=昨天 06:00"——不管现在几点，昨天一定已经过去
+        var request = await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.PunchReplenishment,
+            PunchDate = twoDaysAgo, PunchType = PunchType.ClockOut, PunchTime = new TimeOnly(6, 0),
+            Reason = "t"
+        });
+        Assert.NotNull(request);
+    }
+
+    [Fact]
+    public async Task 补卡审批通过回写_顺延结果晚于现在_审批失败_考勤记录不变()
+    {
+        // 提交时的检查只堵了"提交那一刻"：如果提交时上班卡还没补上（顺延结果算出来是过去），
+        // 审批人拖到"顺延结果变成未来"才点通过，审批回写这一步要独立兜底拦下来
+        var tomorrow = DateOnly.FromDateTime(DateTime.Today).AddDays(1);
+        var (uid, _) = SeedNightWorldForFutureCheck(tomorrow);
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "BK-FUT-1", ApplicantUserId = uid, ApprovalType = ApprovalType.PunchReplenishment,
+            PunchDate = tomorrow, PunchType = PunchType.ClockOut, PunchTime = new TimeOnly(6, 0), Reason = "t"
+        });
+
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateAttendanceAfterApprovalAsync(id));
+            Assert.Contains("还没到", ex.Message);
+        }
+
+        using var check = CreateContext();
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == tomorrow));   // 没有留下改了一半的记录
+    }
 }

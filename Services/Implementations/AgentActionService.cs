@@ -476,6 +476,25 @@ public class AgentActionService(
             var id = row.TryGetProperty("Id", out var idEl) && idEl.TryGetInt32(out var idv) ? idv : 0;
             var u = await db.Users.FindAsync(id);
             if (u is null) return $"员工(id:{id})已不存在，无法还原";
+
+            // 角色层级检查：撤回会把快照整行（含角色、管理范围）直接写回数据库，以前完全没查这道检查，
+            // 变成了唯一能绕过它的入口——文员改了普通员工资料，之后此人被总部提拔成管理员，文员再撤回
+            // 那次动作，会把管理员账号原样降级、清空管理范围（2026-09-29 第 12 轮审查发现，严重）。
+            // 必须在改任何字段之前查完两道：① 目标"现在"的角色/范围管不管得到；② 快照里要恢复成的
+            // 角色/范围管不管得到（防止借撤回把人恢复成管理员/不受限文员）。
+            var op = await db.Users.AsNoTracking()
+                .Where(x => x.Id == operatorUserId)
+                .Select(x => new { x.Role, x.ScopedDepartmentId })
+                .FirstOrDefaultAsync()
+                ?? throw new InvalidOperationException("操作者账号不存在");
+            if (!AttendanceSystem.Middlewares.CurrentUser.CanManageAccountCore(op.Role, op.ScopedDepartmentId, u.Role, u.ScopedDepartmentId))
+                throw new InvalidOperationException("无权撤回：该账号现在的角色超出你的管理权限（角色层级限制）");
+            var snapRole = row.TryGetProperty("Role", out var srEl) && srEl.ValueKind == JsonValueKind.Number
+                ? (AttendanceSystem.Models.Enums.UserRole)srEl.GetInt32() : u.Role;
+            var snapScope = RowInt(row, "ScopedDepartmentId");
+            if (!AttendanceSystem.Middlewares.CurrentUser.CanManageAccountCore(op.Role, op.ScopedDepartmentId, snapRole, snapScope))
+                throw new InvalidOperationException("无权撤回：要恢复成的角色超出你的管理权限（角色层级限制）");
+
             if (row.TryGetProperty("RealName", out var rn)) u.RealName = rn.ValueKind == JsonValueKind.String ? rn.GetString()! : u.RealName;
             u.DepartmentId = RowInt(row, "DepartmentId");
             u.AttendanceGroupId = RowInt(row, "AttendanceGroupId");

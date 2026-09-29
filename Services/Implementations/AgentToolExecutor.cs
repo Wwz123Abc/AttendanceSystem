@@ -679,11 +679,19 @@ public class AgentToolExecutor(
 
         var user = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId.Value)
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.IsActive, u.IsBlacklisted })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.IsActive, u.IsBlacklisted, u.Role, u.ScopedDepartmentId })
             .FirstOrDefaultAsync(ct);
         if (user is null) return "错误：目标员工不存在";
         if (visibleIds is not null && (user.DepartmentId is null || !visibleIds.Contains(user.DepartmentId.Value)))
             return "错误：该员工不在你的管理范围内";
+
+        var toggleOp = await db.Users.AsNoTracking()
+            .Where(u => u.Id == operatorUserId)
+            .Select(u => new { u.Role, u.ScopedDepartmentId })
+            .FirstOrDefaultAsync(ct);
+        if (toggleOp is null || !Middlewares.CurrentUser.CanManageAccountCore(toggleOp.Role, toggleOp.ScopedDepartmentId, user.Role, user.ScopedDepartmentId))
+            return "错误：无权操作该账号（角色层级限制）";
+
         if (user.IsBlacklisted) return "错误：黑名单员工请用员工管理页的专门功能";
         if (action == "deactivate" && !user.IsActive) return "错误：该员工已是停用状态";
         if (action == "activate" && user.IsActive) return "错误：该员工本来就在职";
@@ -698,7 +706,10 @@ public class AgentToolExecutor(
 
     // ── 高风险提案（删除/拉黑/重置密码/改管理范围——同样只落提案）────────────────────
 
-    /// <summary>提案级校验：目标员工存在且非本人且在范围内；返回 (userId, 名字, 错误)。</summary>
+    /// <summary>提案级校验：目标员工存在且非本人且在范围内、且操作者管得到这个角色（角色层级限制，
+    /// 跟确认执行时 UserService.EnsureCanManageAsync 同一套口径——以前生成待确认动作这一步完全不查，
+    /// 文员对总部超管发起重置密码/删除/拉黑照样能生成一张卡片，只是确认时才报错，容易误导管理员
+    /// 以为这个操作是被允许的，2026-09-29 第 12 轮审查发现）；返回 (userId, 名字, 错误)。</summary>
     private async Task<(int? userId, string? display, string? error)> ResolveTargetAsync(
         int operatorUserId, HashSet<int>? visibleIds, int? rawUserId)
     {
@@ -709,11 +720,19 @@ public class AgentToolExecutor(
 
         var u = await db.Users.AsNoTracking()
             .Where(x => x.Id == rawUserId.Value)
-            .Select(x => new { x.Id, x.RealName, x.EmployeeNo, x.DepartmentId })
+            .Select(x => new { x.Id, x.RealName, x.EmployeeNo, x.DepartmentId, x.Role, x.ScopedDepartmentId })
             .FirstOrDefaultAsync();
         if (u is null) return (null, null, "错误：目标员工不存在");
         if (visibleIds is not null && (u.DepartmentId is null || !visibleIds.Contains(u.DepartmentId.Value)))
             return (null, null, "错误：该员工不在你的管理范围内");
+
+        var op = await db.Users.AsNoTracking()
+            .Where(x => x.Id == operatorUserId)
+            .Select(x => new { x.Role, x.ScopedDepartmentId })
+            .FirstOrDefaultAsync();
+        if (op is null || !Middlewares.CurrentUser.CanManageAccountCore(op.Role, op.ScopedDepartmentId, u.Role, u.ScopedDepartmentId))
+            return (null, null, "错误：无权操作该账号（角色层级限制）");
+
         return (u.Id, $"{u.RealName}（{u.EmployeeNo}）", null);
     }
 
@@ -1427,11 +1446,18 @@ public class AgentToolExecutor(
         if (err is not null) return err;
         var target = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId.Value)
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.Role, u.ScopedDepartmentId })
             .FirstOrDefaultAsync(ct);
         if (target is null) return "错误：目标员工不存在";
         if (visibleIds is not null && (target.DepartmentId is null || !visibleIds.Contains(target.DepartmentId.Value)))
             return "错误：该员工不在你的管理范围内";
+
+        var updateOp = await db.Users.AsNoTracking()
+            .Where(u => u.Id == operatorUserId)
+            .Select(u => new { u.Role, u.ScopedDepartmentId })
+            .FirstOrDefaultAsync(ct);
+        if (updateOp is null || !Middlewares.CurrentUser.CanManageAccountCore(updateOp.Role, updateOp.ScopedDepartmentId, target.Role, target.ScopedDepartmentId))
+            return "错误：无权操作该账号（角色层级限制）";
 
         var finalDeptId = deptId ?? target.DepartmentId;
         string? newDeptName = null;
@@ -1488,7 +1514,7 @@ public class AgentToolExecutor(
 
         var users = await db.Users.AsNoTracking()
             .Where(u => rawIds.Contains(u.Id))
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.IsActive, u.IsBlacklisted })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.IsActive, u.IsBlacklisted, u.Role, u.ScopedDepartmentId })
             .ToListAsync(ct);
         if (users.Count != rawIds.Count) return "错误：部分目标员工不存在";
         var oob = users.Where(u => visibleIds is not null && (u.DepartmentId is null || !visibleIds.Contains(u.DepartmentId.Value)))
@@ -1497,14 +1523,26 @@ public class AgentToolExecutor(
         var bl = users.Where(u => u.IsBlacklisted).Select(u => u.EmployeeNo).ToList();
         if (bl.Count > 0) return $"错误：黑名单员工请单独处理（{string.Join("、", bl.Take(5))}）";
 
+        // 角色层级：管不到的账号（比如文员提交里混了一个管理员）静默剔除、不中断整批——跟确认执行时
+        // UserService.SetActiveBatchAsync 同一套"批量语义"（2026-09-29 第 12 轮审查发现）
+        var batchOp = await db.Users.AsNoTracking()
+            .Where(u => u.Id == operatorUserId)
+            .Select(u => new { u.Role, u.ScopedDepartmentId })
+            .FirstOrDefaultAsync(ct);
+        if (batchOp is null) return "错误：操作者账号不存在";
+        var unmanageable = users.Where(u => !Middlewares.CurrentUser.CanManageAccountCore(batchOp.Role, batchOp.ScopedDepartmentId, u.Role, u.ScopedDepartmentId))
+            .Select(u => u.EmployeeNo).ToList();
+        users = users.Where(u => Middlewares.CurrentUser.CanManageAccountCore(batchOp.Role, batchOp.ScopedDepartmentId, u.Role, u.ScopedDepartmentId)).ToList();
+
         var filtered = action == "deactivate"
             ? users.Where(u => u.IsActive).Select(u => u.Id).ToList()
             : users.Where(u => !u.IsActive).Select(u => u.Id).ToList();
-        if (filtered.Count == 0) return "错误：这些员工已处于目标状态，无需操作";
+        if (filtered.Count == 0) return "错误：这些员工已处于目标状态，或都无权操作，无需操作";
 
         var param = JsonSerializer.Serialize(new { userIds = filtered, action });
         var verb = action == "deactivate" ? "批量停用" : "批量启用";
-        var summary = $"{verb} {filtered.Count} 名员工（提交 {users.Count} 人，已剔除无需操作的）";
+        var skipHint = unmanageable.Count > 0 ? $"，已跳过 {unmanageable.Count} 个无权操作的账号（{string.Join("、", unmanageable.Take(5))}）" : "";
+        var summary = $"{verb} {filtered.Count} 名员工（提交 {rawIds.Count} 人，已剔除无需操作的{skipHint}）";
         var (proposal, perr) = await CreateProposalAsync(operatorUserId, conversationId, "employee_batch_toggle_propose", param, summary, ct);
         return perr is not null ? perr
             : $"已生成待确认动作 #{proposal!.Id}：{summary}。该动作【不会自动执行】，请管理员点「确认执行」；15 分钟内有效。";

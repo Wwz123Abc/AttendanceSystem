@@ -1296,6 +1296,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 var shiftForPunch = (await GetShiftAssignmentAsync(approval.ApplicantUserId, approval.PunchDate.Value))?.ShiftSchedule;
                 punchDt = ResolvePunchReplenishmentClockOut(approval.PunchDate.Value, approval.PunchTime.Value, record.ClockInTime, shiftForPunch);
             }
+            // 提交时已经按同一套顺延规则查过一次（SubmitApprovalAsync），这里是审批时的兜底：提交之后、
+            // 审批之前员工又补上了上班卡，顺延结果可能从"过去"变成"未来"（2026-09-29 第 12 轮审查发现，
+            // M5 只堵了提交那一刻，没堵审批这一刻）。这里直接抛异常，让外层事务整单回滚，不会出现
+            // "改了一半"的记录。
+            if (punchDt > DateTime.Now)
+                throw new InvalidOperationException(
+                    $"补卡时间 {punchDt:MM-dd HH:mm} 还没到，现在不能审批通过（夜班下班卡会算到第二天），请到时间后再审批或驳回");
             if (approval.PunchType == PunchType.ClockIn) record.ClockInTime  = punchDt;   // 补上班卡
             else                                          record.ClockOutTime = punchDt;   // 补下班卡
             AppendApprovalNote(record, $"补卡已审批通过（{approval.RequestNo}）");

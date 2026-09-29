@@ -188,6 +188,68 @@ public class AgentIntegrationTests : IDisposable
         }
     }
 
+    // 2026-09-29 第 12 轮审查发现（严重）：撤回（RestoreUserRowAsync）会把快照整行（含角色、管理范围）
+    // 直接写回数据库，完全不查角色层级，是唯一能绕过"角色层级检查下沉到 UserService"这道防线的入口。
+    // 复现：文员改了普通员工的资料，之后此人被总部提拔成管理员，文员再撤回那次动作，
+    // 会把管理员账号原样降级、管理范围被清空。
+    [Fact]
+    public async Task 撤回不查角色层级_文员改过的员工后来被提拔成管理员_撤回被拦下_角色和范围不变()
+    {
+        var w = SeedWorld();
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var msg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "employee_update_propose",
+                Args(new { userId = w.UserA, phone = "13900000000" }), default);
+            Assert.Contains("不会自动执行", msg);
+            actionId = (await db.AgentPendingActions.SingleAsync()).Id;
+        }
+        using (var db = CreateContext())
+            Assert.True((await Actions(db).ReviewAsync(w.HqClerk, actionId, approve: true)).ok);
+
+        // 模拟"总部把员工A提拔成分公司管理员"（跳过应用层直接改库，只是为了复现场景，不是这条测试要验证的点）
+        using (var db = CreateContext())
+        {
+            var ua = await db.Users.FindAsync(w.UserA);
+            ua!.Role = UserRole.Admin;
+            ua.ScopedDepartmentId = w.DeptA;
+            await db.SaveChangesAsync();
+        }
+
+        using (var db = CreateContext())
+        {
+            var (ok, m) = await Actions(db).UndoAsync(w.HqClerk, actionId);
+            Assert.False(ok);
+            Assert.Contains("角色层级", m);
+        }
+
+        using var check = CreateContext();
+        var final = await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.UserA);
+        Assert.Equal(UserRole.Admin, final.Role);          // 没有被撤回悄悄降级
+        Assert.Equal(w.DeptA, final.ScopedDepartmentId);   // 管理范围也没被清空
+    }
+
+    [Fact]
+    public async Task 撤回_角色全程没变_照常成功()
+    {
+        var w = SeedWorld();
+        int actionId;
+        using (var db = CreateContext())
+        {
+            await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "employee_update_propose", Args(new { userId = w.UserA, phone = "13900000000" }), default);
+            actionId = (await db.AgentPendingActions.SingleAsync()).Id;
+        }
+        using (var db = CreateContext())
+            Assert.True((await Actions(db).ReviewAsync(w.HqClerk, actionId, approve: true)).ok);
+        using (var db = CreateContext())
+        {
+            var (ok, m) = await Actions(db).UndoAsync(w.HqClerk, actionId);
+            Assert.True(ok, m);
+        }
+        using var check = CreateContext();
+        Assert.Null((await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.UserA)).Phone);   // 恢复成改之前的样子
+    }
+
     [Fact]
     public async Task 拒绝的动作不改数据()
     {
@@ -281,6 +343,11 @@ public class AgentIntegrationTests : IDisposable
         return (await db.AgentPendingActions.OrderByDescending(a => a.Id).FirstAsync()).Id;
     }
 
+    // 2026-09-29 第 12 轮审查发现：以前"生成待确认动作"这一步完全不查角色层级，文员对总部超管发起
+    // 重置密码/删除/拉黑/停用，助手照样会生成一张卡片，只有确认执行那一步才报错——容易误导管理员以为
+    // 这个操作是被允许的。现在挡在生成阶段，下面三条改成断言"生成阶段就报错、不生成任何待确认动作"
+    // （跟"分公司管理员_对别的分公司的员工提停用_直接报错_不生成动作"是同一种断言方式）。
+    // 执行阶段（UserService.EnsureCanManageAsync）那道检查仍然保留、仍然生效，见下面"确认执行这一层"的测试。
     [Fact]
     public async Task 总部文员_不能通过助手重置总部超管的密码()
     {
@@ -288,11 +355,11 @@ public class AgentIntegrationTests : IDisposable
         string hashBefore;
         using (var db = CreateContext()) hashBefore = (await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).PasswordHash;
 
-        var actionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "password_reset_propose", new { userId = w.HqAdmin });
         using var db2 = CreateContext();
-        var (ok, message) = await Actions(db2).ReviewAsync(w.HqClerk, actionId, approve: true);
-        Assert.False(ok);
-        Assert.Contains("角色层级", message);
+        var msg = await Tools(db2).ExecuteAsync(w.HqClerk, w.ConvClerk, "password_reset_propose", Args(new { userId = w.HqAdmin }), default);
+        Assert.StartsWith("错误", msg);
+        Assert.Contains("角色层级", msg);
+        Assert.Equal(0, await db2.AgentPendingActions.CountAsync());
 
         using var check = CreateContext();
         Assert.Equal(hashBefore, (await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).PasswordHash);
@@ -302,28 +369,60 @@ public class AgentIntegrationTests : IDisposable
     public async Task 总部文员_不能通过助手删除总部超管()
     {
         var w = SeedWorld();
-        var actionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "user_delete_propose", new { userId = w.HqAdmin });
         using var db = CreateContext();
-        var (ok, _) = await Actions(db).ReviewAsync(w.HqClerk, actionId, approve: true);
-        Assert.False(ok);
-        using var check = CreateContext();
-        Assert.True(await check.Users.AnyAsync(u => u.Id == w.HqAdmin));   // 人还在
+        var msg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "user_delete_propose", Args(new { userId = w.HqAdmin }), default);
+        Assert.StartsWith("错误", msg);
+        Assert.Contains("角色层级", msg);
+        Assert.Equal(0, await db.AgentPendingActions.CountAsync());
+        Assert.True(await db.Users.AnyAsync(u => u.Id == w.HqAdmin));   // 人还在
     }
 
     [Fact]
     public async Task 总部文员_不能通过助手拉黑或停用总部超管()
     {
         var w = SeedWorld();
-        var blacklistActionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "user_blacklist_propose", new { userId = w.HqAdmin, action = "blacklist" });
-        var toggleActionId = await ProposeAsync(w.HqClerk, w.ConvClerk, "user_toggle_propose", new { userId = w.HqAdmin, action = "deactivate" });
-        using (var db = CreateContext())
-            Assert.False((await Actions(db).ReviewAsync(w.HqClerk, blacklistActionId, approve: true)).ok);
-        using (var db = CreateContext())
-            Assert.False((await Actions(db).ReviewAsync(w.HqClerk, toggleActionId, approve: true)).ok);
-        using var check = CreateContext();
-        var hq = await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
+        using var db = CreateContext();
+        var blacklistMsg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "user_blacklist_propose", Args(new { userId = w.HqAdmin, action = "blacklist" }), default);
+        var toggleMsg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "user_toggle_propose", Args(new { userId = w.HqAdmin, action = "deactivate" }), default);
+        Assert.Contains("角色层级", blacklistMsg);
+        Assert.Contains("角色层级", toggleMsg);
+        Assert.Equal(0, await db.AgentPendingActions.CountAsync());
+
+        var hq = await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
         Assert.True(hq.IsActive);
         Assert.False(hq.IsBlacklisted);
+    }
+
+    /// <summary>确认执行阶段（UserService.EnsureCanManageAsync）那道检查独立覆盖：直接往
+    /// AgentPendingActions 表插一条动作（绕开刚加的生成阶段检查），确认执行时仍然要被拦下。</summary>
+    [Fact]
+    public async Task 总部文员_不能通过助手重置总部超管的密码_确认执行这一层也单独挡住()
+    {
+        var w = SeedWorld();
+        string hashBefore;
+        int actionId;
+        using (var db = CreateContext())
+        {
+            hashBefore = (await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).PasswordHash;
+            var action = new AgentPendingAction
+            {
+                ConversationId = w.ConvClerk, ToolName = "password_reset_propose",
+                ParamJson = Args(new { userId = w.HqAdmin }),
+                SummaryText = "t", Status = AgentActionStatus.Pending, CreatedBy = w.HqClerk,
+                CreatedAt = DateTime.Now, ExpiresAt = DateTime.Now.AddMinutes(15)
+            };
+            db.AgentPendingActions.Add(action);
+            await db.SaveChangesAsync();
+            actionId = action.Id;
+        }
+
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqClerk, actionId, approve: true);
+        Assert.False(ok);
+        Assert.Contains("角色层级", message);
+
+        using var check = CreateContext();
+        Assert.Equal(hashBefore, (await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin)).PasswordHash);
     }
 
     [Fact]
@@ -338,6 +437,35 @@ public class AgentIntegrationTests : IDisposable
         Assert.Equal(1, n);   // 只处理了管得到的 UserA，总部超管被静默跳过、不报错打断整批
         var hq = await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
         Assert.True(hq.IsActive);
+    }
+
+    // 2026-09-29 第 12 轮审查发现：EmployeeUpdateProposeAsync/EmployeeBatchToggleProposeAsync 这两处
+    // 生成待确认动作时也只查了部门范围、没查角色层级，同样属于"生成阶段没挡、确认执行才报错"的问题。
+    [Fact]
+    public async Task 总部文员_不能通过助手修改总部超管的资料()
+    {
+        var w = SeedWorld();
+        using var db = CreateContext();
+        var msg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "employee_update_propose",
+            Args(new { userId = w.HqAdmin, phone = "13800000000" }), default);
+        Assert.StartsWith("错误", msg);
+        Assert.Contains("角色层级", msg);
+        Assert.Equal(0, await db.AgentPendingActions.CountAsync());
+    }
+
+    [Fact]
+    public async Task 总部文员_批量停用混了总部超管_会静默跳过只处理管得到的()
+    {
+        var w = SeedWorld();
+        using var db = CreateContext();
+        var msg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "employee_batch_toggle_propose",
+            Args(new { userIds = new[] { w.HqAdmin, w.UserA }, action = "deactivate" }), default);
+        Assert.Contains("已生成待确认动作", msg);
+        Assert.Contains("已跳过", msg);
+        var action = await db.AgentPendingActions.OrderByDescending(a => a.Id).FirstAsync();
+        var pIds = System.Text.Json.JsonDocument.Parse(action.ParamJson).RootElement
+            .GetProperty("userIds").EnumerateArray().Select(x => x.GetInt32()).ToList();
+        Assert.Equal([w.UserA], pIds);   // 总部超管被剔除，只剩员工A
     }
 
     [Fact]

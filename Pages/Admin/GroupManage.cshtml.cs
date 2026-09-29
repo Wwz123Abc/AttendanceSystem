@@ -196,8 +196,6 @@ public class GroupManageModel(
     {
         if (string.IsNullOrWhiteSpace(GroupName)) { ErrorMessage = "考勤组名称不能为空"; return RedirectToPage(); }
         if (GroupName.Trim().Length > 100) { ErrorMessage = "考勤组名称不能超过 100 个字"; return RedirectToPage(); }
-        if (LunchBreak is < 0 or > 120) { ErrorMessage = "午休时长请填 0-120 分钟之间"; return RedirectToPage(); }
-        if (DinnerBreak is < 0 or > 120) { ErrorMessage = "晚餐时长请填 0-120 分钟之间"; return RedirectToPage(); }
         if (ApproverUserIds.Count == 0) { ErrorMessage = "请至少选择一位审批人"; return RedirectToPage(); }
         if (!Enum.TryParse<Models.Enums.ApprovalLevelType>(ApprovalLevel, out var approvalLevel)) approvalLevel = Models.Enums.ApprovalLevelType.Level1;
         foreach (var loc in Locations)
@@ -239,8 +237,8 @@ public class GroupManageModel(
                 {
                     GroupName           = GroupName.Trim(),
                     EnableLocationPunch = EnableLocation,
-                    LunchBreakMinutes   = LunchBreak,
-                    DinnerBreakMinutes  = DinnerBreak,
+                    // LunchBreakMinutes/DinnerBreakMinutes 不再从表单读取：字段已停用编辑（不影响工时计算，
+                    // 见 2026-09-29 口径变更），新建考勤组就用实体自带的默认值，不用表单里那个恒为 0 的禁用输入框
                     ApprovalLevel       = approvalLevel,
                     IsActive            = true,
                     CreatedAt           = DateTime.Now,
@@ -257,8 +255,8 @@ public class GroupManageModel(
                 {
                     g.GroupName           = GroupName.Trim();
                     g.EnableLocationPunch = EnableLocation;
-                    g.LunchBreakMinutes   = LunchBreak;
-                    g.DinnerBreakMinutes  = DinnerBreak;
+                    // LunchBreakMinutes/DinnerBreakMinutes 保持原值不动：字段已停用编辑，不能被禁用输入框
+                    // 恒为 0 的提交值覆盖掉（虽然这两个值现在不影响任何计算，但也不该无声无息被清零）
                     g.ApprovalLevel       = approvalLevel;
                     g.UpdatedAt           = DateTime.Now;
                     SuccessMessage = $"考勤组「{GroupName}」已更新";

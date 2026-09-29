@@ -46,14 +46,24 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
         if (ValidateComment(required: false) is { } err)
             return await FailAsync(err);
 
-        var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
+        // 补卡的审批时兜底校验（顺延后落到未来）会抛 InvalidOperationException——以前这里没接，
+        // 会直接跳到全局错误页，审批人看不到原因（2026-09-29 第 12 轮审查发现）
+        try
         {
-            ApprovalRequestId = RequestId,
-            IsApproved        = true,
-            Comment           = Comment
-        });
-        Message   = ok ? "已通过该申请" : "操作失败，请重试";
-        IsSuccess = ok;
+            var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
+            {
+                ApprovalRequestId = RequestId,
+                IsApproved        = true,
+                Comment           = Comment
+            });
+            Message   = ok ? "已通过该申请" : "操作失败，请重试";
+            IsSuccess = ok;
+        }
+        catch (InvalidOperationException ex)
+        {
+            Message   = ex.Message;
+            IsSuccess = false;
+        }
         await ReloadListsAsync();   // 刷新列表
         return Page();
     }
@@ -64,14 +74,22 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
         if (ValidateComment(required: true) is { } err)
             return await FailAsync(err);
 
-        var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
+        try
         {
-            ApprovalRequestId = RequestId,
-            IsApproved        = false,
-            Comment           = Comment
-        });
-        Message   = ok ? "已驳回该申请" : "操作失败，请重试";
-        IsSuccess = ok;
+            var ok = await approvalService.HandleApprovalAsync(CurrentUserId, new HandleApprovalDto
+            {
+                ApprovalRequestId = RequestId,
+                IsApproved        = false,
+                Comment           = Comment
+            });
+            Message   = ok ? "已驳回该申请" : "操作失败，请重试";
+            IsSuccess = ok;
+        }
+        catch (InvalidOperationException ex)
+        {
+            Message   = ex.Message;
+            IsSuccess = false;
+        }
         await ReloadListsAsync();
         return Page();
     }
