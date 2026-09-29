@@ -906,9 +906,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             .Where(h => h.HolidayDate >= start && h.HolidayDate <= end)
             .ToListAsync();
 
-        var groupIds   = users.Where(u => u.AttendanceGroupId.HasValue).Select(u => u.AttendanceGroupId!.Value).Distinct().ToList();
-        var groupsById = await db.AttendanceGroups.Where(g => groupIds.Contains(g.Id)).ToDictionaryAsync(g => g.Id);
-
         var existingSummaries = await db.MonthlyAttendanceSummaries
             .Where(s => candidateIds.Contains(s.UserId) && s.Year == year && s.Month == month)
             .ToDictionaryAsync(s => s.UserId);
@@ -937,9 +934,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 这里直接求和即可。仅对「历史遗留、写入时还没补算过」的记录（ActualWorkHours 仍是 0 但有上下班时间）
             // 现场补算，并且顺手写回记录本身——这样老数据只要被打开一次月度报表就能自愈，
             // 不会出现「日明细显示 0、月合计却不是 0」这种对不上的情况。
-            var group  = user.AttendanceGroupId.HasValue ? groupsById.GetValueOrDefault(user.AttendanceGroupId.Value) : null;
-            var lunch  = group?.LunchBreakMinutes  ?? 60;
-            var dinner = group?.DinnerBreakMinutes ?? 30;
             decimal totalWork = 0, totalOt = 0;
             foreach (var r in records)
             {
@@ -968,7 +962,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                             : [];
                         var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds);
                         var effCo = ClampEffectiveClockOut(r.WorkDate, co, shift, ResolveSecondHalfAbsentBoundary(r.WorkDate, shift, midCheckResults));
-                        var computedHours = ComputeWorkHours(effCi, effCo, lunch, dinner);
+                        var computedHours = ComputeWorkHours(effCi, effCo);
                         r.ActualWorkHours = r.AttendanceStatus == AttendanceStatus.OnLeave
                             ? ApplyLeaveHoursCap(computedHours, r.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
                             : computedHours;
@@ -1327,12 +1321,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 加班时长按"申请的起止时间"重新算一遍再记：超过 6 小时扣午休、超过 9 小时再扣晚餐（跟提交时同一个函数）。
             // 不直接用单子上存的时长，是因为改规则之前提交、还没批的老单子存的是不扣饭点的总长度；
             // 算完顺手把单子上的时长也改成实际记入的数，审批列表/记录里看到的和考勤上记的一致
-            var otApplicant = await db.Users.FindAsync(approval.ApplicantUserId);
-            var otGroup = otApplicant?.AttendanceGroupId.HasValue == true
-                ? await db.AttendanceGroups.FindAsync(otApplicant.AttendanceGroupId.Value) : null;
             var otHours = approval.OvertimeEndTime.HasValue
-                ? ComputeWorkHours(approval.OvertimeStartTime.Value, approval.OvertimeEndTime.Value,
-                    otGroup?.LunchBreakMinutes ?? 60, otGroup?.DinnerBreakMinutes ?? 30)
+                ? ComputeWorkHours(approval.OvertimeStartTime.Value, approval.OvertimeEndTime.Value)
                 : approval.OvertimeDurationHours.Value;
             approval.OvertimeDurationHours = otHours;
 
@@ -1360,12 +1350,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 .Where(r => r.UserId == approval.ApplicantUserId && r.WorkDate >= sd && r.WorkDate <= ed)
                 .ToDictionaryAsync(r => r.WorkDate);
 
-            // 算每天请假时长要用到考勤组的午休/晚餐扣时（跟 LeaveDurationHours 提交时用的同一套算法），
-            // 以及这天排的班次的标准工时（没排班就用公司默认标准工时）给 ComputeLeaveHoursForDay 封顶用，
-            // 都只查一次，下面循环里每天复用。
+            // 这天排的班次的标准工时（没排班就用公司默认标准工时）给 ComputeLeaveHoursForDay 封顶用，
+            // 只查一次，下面循环里每天复用。
             var applicant = await db.Users.FindAsync(approval.ApplicantUserId);
-            var leaveGroup = applicant?.AttendanceGroupId.HasValue == true
-                ? await db.AttendanceGroups.FindAsync(applicant.AttendanceGroupId.Value) : null;
             var leaveShiftsInRange = (await db.ShiftAssignments
                     .Include(a => a.ShiftSchedule)
                     .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= sd && a.WorkDate <= ed)
@@ -1396,8 +1383,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 if (skipNonWorkdays && IsNonWorkday(d, applicant?.AttendanceGroupId, leaveHolidays, leaveShift)) continue;
 
                 var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-                var leaveHoursToday = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd,
-                    leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30, dailyCap, leaveShift);
+                var leaveHoursToday = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd, dailyCap, leaveShift);
 
                 // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
                 // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
@@ -1437,8 +1423,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     var leaveSegStart = approval.LeaveStartTime.Value > dayStart ? approval.LeaveStartTime.Value : dayStart;
                     if (workedCi < leaveSegStart)
                     {
-                        var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart,
-                            leaveGroup?.LunchBreakMinutes ?? 60, leaveGroup?.DinnerBreakMinutes ?? 30);
+                        var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart);
                         record.ActualWorkHours = ApplyLeaveHoursCap(estimatedWork, record.LeaveHours, dailyCap);
                     }
                 }
@@ -1664,15 +1649,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         return AttendanceStatus.Normal;
     }
 
-    /// <summary>
-    /// 算实际工时（小时）：上下班时间差，再扣午休/晚餐。
-    /// 规则：超过 6 小时扣午休，超过 9 小时再扣晚餐；休息时长取自考勤组（默认午休60/晚餐30分钟）。
-    /// </summary>
-    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut, int? groupId)
-    {
-        var group = groupId.HasValue ? db.AttendanceGroups.Find(groupId.Value) : null;
-        return ComputeWorkHours(clockIn, clockOut, group?.LunchBreakMinutes ?? 60, group?.DinnerBreakMinutes ?? 30);
-    }
+    /// <summary>算实际工时（小时）：上下班时间差，扣掉压到公司统一"不算钱"时段的部分。</summary>
+    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut) => ComputeWorkHours(clockIn, clockOut);
 
     /// <summary>
     /// 算某天的实际工时（正班），并处理"休息日自己打卡、没有批准的加班申请就不算工时"这条规则：
@@ -1690,7 +1668,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (await IsNonCompRestDayAsync(db, workDate, shift, groupId))
             return 0;
         var effectiveClockOut = ClampEffectiveClockOut(workDate, clockOut, shift, secondHalfBoundary);
-        return CalcWorkHours(effectiveClockIn, effectiveClockOut, groupId);
+        return CalcWorkHours(effectiveClockIn, effectiveClockOut);
     }
 
     /// <summary>
@@ -1893,44 +1871,74 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// </summary>
     public static decimal FloorToHalf(decimal hours) => Math.Floor(hours * 2) / 2;
 
+    /// <summary>公司统一的"不算钱"时间段——不再按考勤组配置，谁的工作/加班/请假区间压到这几段，
+    /// 重叠的那部分一律不计入时长：12:00-13:00（白班午间）、17:30-18:00（中班晚餐）、
+    /// 00:00-01:00（夜班宵夜，跨天班次里相当于"午间"的那顿）、05:30-06:00（早班/夜班交接前的早餐）
+    /// （2026-09-29 用户确认，替换原来"原始在岗超过 6/9 小时才整段扣 60/30 分钟"的口径——那种"超过
+    /// 阈值才扣整段"的算法会出现"6h00m 不扣、6h01m 反而倒扣近 1 小时"的悬崖，多干一分钟工时反而更少）。</summary>
+    private static readonly (TimeOnly Start, TimeOnly End)[] UnpaidBreakWindows =
+    [
+        (new TimeOnly(12, 0), new TimeOnly(13, 0)),
+        (new TimeOnly(17, 30), new TimeOnly(18, 0)),
+        (new TimeOnly(0, 0), new TimeOnly(1, 0)),
+        (new TimeOnly(5, 30), new TimeOnly(6, 0)),
+    ];
+
+    /// <summary>算 [start, end) 这段时间里，落在 <see cref="UnpaidBreakWindows"/> 里的分钟数——不管这段
+    /// 区间横跨几天、本身多长，只按实际重叠的分钟数算，没有"超过多久才触发"这种门槛，天然不会有悬崖。</summary>
+    internal static double ComputeUnpaidBreakOverlapMinutes(DateTime start, DateTime end)
+    {
+        if (end <= start) return 0;
+        double total = 0;
+        for (var day = DateOnly.FromDateTime(start.Date); day <= DateOnly.FromDateTime(end.Date); day = day.AddDays(1))
+        {
+            foreach (var (winStart, winEnd) in UnpaidBreakWindows)
+            {
+                var overlapStart = Max(day.ToDateTime(winStart), start);
+                var overlapEnd   = Min(day.ToDateTime(winEnd), end);
+                if (overlapEnd > overlapStart)
+                    total += (overlapEnd - overlapStart).TotalMinutes;
+            }
+        }
+        return total;
+
+        static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
+        static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
+    }
+
     /// <summary>
-    /// 纯计算：由上下班时间 + 午休/晚餐扣时算实际工时（小时）。上班超 6h 扣午休、超 9h 再扣晚餐。
+    /// 纯计算：由上下班时间算实际工时（小时），扣掉压到公司统一"不算钱"时段（<see cref="UnpaidBreakWindows"/>）
+    /// 的那部分。
     /// ★ 全系统唯一的工时公式：本地打卡、钉钉同步、补卡回写、月度汇总都调这一个，保证口径一致（工资按工时结算）。
     /// 出口统一按半小时取整（<see cref="FloorToHalf"/>）——之前这里是 2 位小数，跟月度汇总"逐日
     /// 半小时取整再累加"的口径不一致，同一份数据在"我的记录"页会出现日明细 8.37、月合计却按 8.0
     /// 累加，员工自己相加对不上（2026-09-17 复审发现，口径登记表 §2/§5 决定统一到半小时）。
     /// </summary>
-    public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut, int lunchBreak, int dinnerBreak)
+    public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut)
     {
         var rawMinutes = (decimal)(clockOut - clockIn).TotalMinutes;   // 在岗总分钟（夜班下班在第二天也没问题）
         if (rawMinutes <= 0) return 0;
-        // 两道阈值判断都要用没扣过的原始在岗分钟数——之前第二道判断用的是已经减掉午休之后的分钟数，
-        // 导致原始在岗时长落在"9~10 小时"这个区间时（减完午休正好又跌回 9 小时以内），
-        // 晚餐时长会被漏扣，多算了工时。取整放在最后一步，不能提前，否则会影响这两道阈值判断。
-        var minutes = rawMinutes;
-        if (rawMinutes > 6 * 60) minutes -= lunchBreak;
-        if (rawMinutes > 9 * 60) minutes -= dinnerBreak;
+        var minutes = rawMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(clockIn, clockOut);
         return FloorToHalf(Math.Max(0, minutes / 60));
     }
 
     /// <summary>
     /// 算请假区间落在某一天里的时长（小时），供提交申请时的预估总时长、审批通过后逐日回写共用
     /// （★ 全系统唯一口径，两处必须调同一个函数才不会算出两个不一样的数字）。
-    /// 跟真实工时公式一样扣午休/晚餐，但封顶在 <paramref name="dailyCapHours"/>（这天排的班次的标准
-    /// 工时，没排班传公司默认标准工时）——不能直接把"这一天和请假区间的交集"套用工时公式：那个公式
-    /// 是给真实上下班打卡时间设计的，套在跨天请假的"整天"区间上，会把一整晚的睡眠时间也当成
-    /// "在岗时长"一起扣两道餐时，算出一天 22.5 小时这种荒谬数字（发现于 2026-09-17 代码审查）。
+    /// 跟真实工时公式一样扣公司统一的"不算钱"时段，但封顶在 <paramref name="dailyCapHours"/>（这天排的
+    /// 班次的标准工时，没排班传公司默认标准工时）——不能直接把"这一天和请假区间的交集"套用工时公式：
+    /// 那个公式是给真实上下班打卡时间设计的，套在跨天请假的"整天"区间上，会把一整晚的睡眠时间也当成
+    /// "在岗时长"一起扣，算出一天 22.5 小时这种荒谬数字（发现于 2026-09-17 代码审查）。
     /// 用标准工时封顶后，请一整天假最多算一天的标准工时，符合"请假时长"这个数字本来的业务含义。
     /// </summary>
     public static decimal ComputeLeaveHoursForDay(
-        DateOnly day, DateTime leaveStart, DateTime leaveEnd, int lunchBreak, int dinnerBreak, decimal dailyCapHours,
-        ShiftSchedule? shift = null)
+        DateOnly day, DateTime leaveStart, DateTime leaveEnd, decimal dailyCapHours, ShiftSchedule? shift = null)
     {
         var (winStart, winEnd) = ResolveLeaveWindow(day, shift);
         var segStart = leaveStart > winStart ? leaveStart : winStart;
         var segEnd   = leaveEnd   < winEnd   ? leaveEnd   : winEnd;
         if (segEnd <= segStart) return 0;
-        var raw = ComputeWorkHours(segStart, segEnd, lunchBreak, dinnerBreak);
+        var raw = ComputeWorkHours(segStart, segEnd);
         return Math.Min(raw, dailyCapHours);
     }
 

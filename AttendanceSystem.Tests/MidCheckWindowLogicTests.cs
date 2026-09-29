@@ -51,7 +51,7 @@ public class MidCheckWindowLogicTests
         Assert.Equal(WorkDate.ToDateTime(new TimeOnly(12, 0)), effOut); // 下班收窄到午休开始
 
         // 跟用户在事故复盘时口算的一致：早上 8:30~12:00 = 3.5 小时，午休及以后一律不算
-        var hours = AttendanceService.ComputeWorkHours(effIn, effOut, lunchBreak: 60, dinnerBreak: 30);
+        var hours = AttendanceService.ComputeWorkHours(effIn, effOut);
         Assert.Equal(3.5m, hours);
     }
 
@@ -132,18 +132,82 @@ public class MidCheckWindowLogicTests
         Assert.False(AttendanceService.IsEligibleClockOutCandidate(midnightPunch, WorkDate, shift));
     }
 
-    // ── 工时计算公式本身：半小时进位、6/9 小时两道扣时阈值 ──────────────────────────
+    // ── 工时计算公式本身：半小时进位、压中公司统一的固定饭点时段就扣对应重叠 ──────────────
     [Theory]
-    [InlineData(8, 30, 17, 30, 8.0)]    // 9 小时在岗，超 6 小时扣午休（60），不超 9 小时不扣晚餐 → 8.0
-    [InlineData(8, 0, 19, 0, 9.5)]      // 11 小时在岗，超 9 小时再扣晚餐（30） → 660-60-30=570min=9.5
-    [InlineData(9, 0, 11, 0, 2.0)]      // 2 小时在岗，不超 6 小时，不扣任何休息时间
+    [InlineData(8, 30, 17, 30, 8.0)]    // 9 小时在岗，压中午间 12:00-13:00 整段 → 扣 60 分钟 → 8.0
+    [InlineData(8, 0, 19, 0, 9.5)]      // 11 小时在岗，压中午间+晚餐两段 → 扣 90 分钟 → 660-90=570min=9.5
+    [InlineData(9, 0, 11, 0, 2.0)]      // 2 小时在岗，不挨着任何固定时段，不扣
     [InlineData(8, 30, 17, 23, 7.5)]    // 2026-09-17 口径统一：出口按半小时取整，不再是 2 位小数——
-                                         // 8:53 在岗扣午休=473min=7.8833h，以前会存成 7.88，现在向下取整到 7.5
-    public void 工时计算按阈值正确扣除午休晚餐(int inH, int inM, int outH, int outM, decimal expected)
+                                         // 8:53 在岗压中午间扣 60 分钟=473min=7.8833h，向下取整到 7.5
+    public void 工时计算按固定饭点时段正确扣除重叠部分(int inH, int inM, int outH, int outM, decimal expected)
     {
         var clockIn  = WorkDate.ToDateTime(new TimeOnly(inH, inM));
         var clockOut = WorkDate.ToDateTime(new TimeOnly(outH, outM));
-        Assert.Equal(expected, AttendanceService.ComputeWorkHours(clockIn, clockOut, lunchBreak: 60, dinnerBreak: 30));
+        Assert.Equal(expected, AttendanceService.ComputeWorkHours(clockIn, clockOut));
+    }
+
+    // ── 2026-09-29 用户确认：取消"超过 6/9 小时才扣整段"的时长门槛，改成按实际重叠时长精确扣减，
+    // 不会再出现"多干一分钟反而少算近一小时"的悬崖 ────────────────────────────────────
+
+    [Fact]
+    public void 恰好6小时且压中午间_按新规则照样扣_不再是老规则的不扣()
+    {
+        // 9:00-15:00 正好 6 小时，完整压中 12:00-13:00：老规则"未超过 6 小时不扣"会算出 6 小时，
+        // 新规则只看有没有重叠，一律扣掉重叠的 60 分钟，变成 5 小时
+        var clockIn  = WorkDate.ToDateTime(new TimeOnly(9, 0));
+        var clockOut = WorkDate.ToDateTime(new TimeOnly(15, 0));
+        Assert.Equal(5.0m, AttendanceService.ComputeWorkHours(clockIn, clockOut));
+    }
+
+    [Fact]
+    public void 没有悬崖_多打卡一分钟工时不会反而变少()
+    {
+        // 老规则的"悬崖"：6h00m 不扣、6h01m 突然扣掉整整 60 分钟，反而比工作时间短的人算得还少。
+        // 新规则按实际重叠算，工时应该随在岗时长单调不减——多干一分钟，工时最多持平，不会变少。
+        var clockIn = WorkDate.ToDateTime(new TimeOnly(9, 0));
+        var h1 = AttendanceService.ComputeWorkHours(clockIn, WorkDate.ToDateTime(new TimeOnly(15, 0)));   // 6h00m
+        var h2 = AttendanceService.ComputeWorkHours(clockIn, WorkDate.ToDateTime(new TimeOnly(15, 1)));   // 6h01m
+        Assert.True(h2 >= h1);
+    }
+
+    [Fact]
+    public void 只工作了半个午休_只扣重叠的那一半_不是整段60分钟()
+    {
+        // 11:45-12:15：只跟午间时段（12:00-13:00）重叠 15 分钟，原始 30 分钟只扣 15 分钟，剩 15 分钟=0.25h，
+        // 按半小时取整舍去变成 0——验证的是"只扣实际重叠"而不是"沾到点边就扣整段 60 分钟"
+        var clockIn  = WorkDate.ToDateTime(new TimeOnly(11, 45));
+        var clockOut = WorkDate.ToDateTime(new TimeOnly(12, 15));
+        Assert.Equal(0m, AttendanceService.ComputeWorkHours(clockIn, clockOut));
+    }
+
+    [Fact]
+    public void 全程都在午间时段里_工时算0()
+    {
+        // 12:10-12:40 整段都在 12:00-13:00 里面，压根没在"上班"，工时应该是 0
+        var clockIn  = WorkDate.ToDateTime(new TimeOnly(12, 10));
+        var clockOut = WorkDate.ToDateTime(new TimeOnly(12, 40));
+        Assert.Equal(0m, AttendanceService.ComputeWorkHours(clockIn, clockOut));
+    }
+
+    [Theory]
+    [InlineData(17, 0, 18, 30, 1.0)]     // 压中晚餐 17:30-18:00（30分钟）：1.5h-0.5h=1.0h
+    [InlineData(23, 30, 0, 0, 0.5)]      // 23:30 到次日 00:00：正好在 00:00-01:00 开始前结束，没有重叠，半小时原样不扣
+    [InlineData(5, 0, 6, 30, 1.0)]       // 压中早餐 05:30-06:00：1.5h-0.5h=1.0h
+    public void 晚餐和早餐时段也按同样规则扣(int inH, int inM, int outH, int outM, decimal expected)
+    {
+        var clockIn  = WorkDate.ToDateTime(new TimeOnly(inH, inM));
+        var clockOut = outH == 0 && outM == 0 ? WorkDate.AddDays(1).ToDateTime(TimeOnly.MinValue) : WorkDate.ToDateTime(new TimeOnly(outH, outM));
+        Assert.Equal(expected, AttendanceService.ComputeWorkHours(clockIn, clockOut));
+    }
+
+    [Fact]
+    public void 跨天夜班_同时压中宵夜和早餐两段()
+    {
+        // 20:00 上班到次日 08:00 下班：跨过 00:00-01:00（宵夜）和 05:30-06:00（早餐）两段，各扣一次
+        var clockIn  = WorkDate.ToDateTime(new TimeOnly(20, 0));
+        var clockOut = WorkDate.AddDays(1).ToDateTime(new TimeOnly(8, 0));
+        // 原始 12 小时，扣 1 小时宵夜 + 0.5 小时早餐 = 10.5 小时
+        Assert.Equal(10.5m, AttendanceService.ComputeWorkHours(clockIn, clockOut));
     }
 
     [Fact]
@@ -153,7 +217,7 @@ public class MidCheckWindowLogicTests
         // 数学基础（月合计本来就是"逐日 FloorToHalf 后累加"，日值现在也按这个口径取整，再取一次要不变）
         var clockIn  = WorkDate.ToDateTime(new TimeOnly(8, 30));
         var clockOut = WorkDate.ToDateTime(new TimeOnly(17, 30));
-        var once  = AttendanceService.ComputeWorkHours(clockIn, clockOut, 60, 30);
+        var once  = AttendanceService.ComputeWorkHours(clockIn, clockOut);
         var twice = AttendanceService.FloorToHalf(once);
         Assert.Equal(once, twice);
     }
@@ -163,7 +227,7 @@ public class MidCheckWindowLogicTests
     {
         var clockIn  = WorkDate.ToDateTime(new TimeOnly(13, 0));
         var clockOut = WorkDate.ToDateTime(new TimeOnly(12, 0));   // 倒挂（比如漏打导致的异常数据）
-        Assert.Equal(0m, AttendanceService.ComputeWorkHours(clockIn, clockOut, 60, 30));
+        Assert.Equal(0m, AttendanceService.ComputeWorkHours(clockIn, clockOut));
     }
 
     [Theory]

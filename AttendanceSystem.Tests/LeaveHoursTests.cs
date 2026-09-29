@@ -30,7 +30,7 @@ public class LeaveHoursTests
         var start = day.ToDateTime(TimeOnly.MinValue);          // 当天 00:00
         var end   = day.AddDays(1).ToDateTime(TimeOnly.MinValue); // 次日 00:00（跨天请假的中间整天）
 
-        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, Lunch, Dinner, StandardHours);
+        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, StandardHours);
 
         Assert.Equal(StandardHours, hours);   // 封顶在标准工时，不是 22.5
     }
@@ -42,9 +42,9 @@ public class LeaveHoursTests
         var start = new DateTime(2026, 9, 9, 14, 0, 0);
         var end   = new DateTime(2026, 9, 11, 12, 0, 0);
 
-        var day1 = AttendanceService.ComputeLeaveHoursForDay(new DateOnly(2026, 9, 9),  start, end, Lunch, Dinner, StandardHours);
-        var day2 = AttendanceService.ComputeLeaveHoursForDay(new DateOnly(2026, 9, 10), start, end, Lunch, Dinner, StandardHours);
-        var day3 = AttendanceService.ComputeLeaveHoursForDay(new DateOnly(2026, 9, 11), start, end, Lunch, Dinner, StandardHours);
+        var day1 = AttendanceService.ComputeLeaveHoursForDay(new DateOnly(2026, 9, 9),  start, end, StandardHours);
+        var day2 = AttendanceService.ComputeLeaveHoursForDay(new DateOnly(2026, 9, 10), start, end, StandardHours);
+        var day3 = AttendanceService.ComputeLeaveHoursForDay(new DateOnly(2026, 9, 11), start, end, StandardHours);
 
         // 中间那天（09-10）是完整的一天，必须被封顶在标准工时，不能是 22.5
         Assert.Equal(StandardHours, day2);
@@ -53,15 +53,17 @@ public class LeaveHoursTests
     }
 
     [Fact]
-    public void 半天请假_按实际时长扣午休_不封顶到标准工时以上()
+    public void 半天请假_压中公司统一的午间时段_扣掉重叠的那一段()
     {
+        // 上午请假 9:00-13:00：原始 4 小时，跟公司统一的午间不算钱时段 12:00-13:00 整段重叠，
+        // 扣掉重叠的 1 小时，结果 3 小时（2026-09-29 起改成按实际重叠扣减，不再看"是否超过 6 小时"）
         var day   = new DateOnly(2026, 9, 10);
         var start = day.ToDateTime(new TimeOnly(9, 0));
-        var end   = day.ToDateTime(new TimeOnly(13, 0));   // 上午请假 9:00-13:00，4 小时，不足 6 小时不扣午休
+        var end   = day.ToDateTime(new TimeOnly(13, 0));
 
-        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, Lunch, Dinner, StandardHours);
+        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, StandardHours);
 
-        Assert.Equal(4m, hours);
+        Assert.Equal(3m, hours);
     }
 
     [Fact]
@@ -71,7 +73,7 @@ public class LeaveHoursTests
         var start = new DateTime(2026, 9, 8, 9, 0, 0);
         var end   = new DateTime(2026, 9, 9, 18, 0, 0);   // 整段区间都在 09-10 之前
 
-        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, Lunch, Dinner, StandardHours);
+        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, StandardHours);
 
         Assert.Equal(0m, hours);
     }
@@ -102,11 +104,11 @@ public class LeaveHoursTests
     [Fact]
     public void 验收3_上午请假3点5小时_下午上班5点5小时_工时封顶4点5小时()
     {
-        // 12:00-17:30 = 5.5 小时（不足 6 小时不扣午休）；上午请了 3.5 小时假 → 上限 = 8-3.5 = 4.5，
-        // 实际打卡工时 5.5 大于上限，按上限 4.5 结算
+        // 12:00-17:30 = 5.5 小时，压中午间时段扣 1 小时 → 4.5 小时；上午请了 3.5 小时假 → 上限 = 8-3.5 = 4.5，
+        // 两个数字刚好相等，min(4.5, 4.5) = 4.5
         var clockIn  = new DateTime(2026, 9, 10, 12, 0, 0);
         var clockOut = new DateTime(2026, 9, 10, 17, 30, 0);
-        var computed = AttendanceService.ComputeWorkHours(clockIn, clockOut, Lunch, Dinner);
+        var computed = AttendanceService.ComputeWorkHours(clockIn, clockOut);
         Assert.Equal(4.5m, AttendanceService.ApplyLeaveHoursCap(computed, leaveHours: 3.5m, standardHours: StandardHours));
     }
 
@@ -117,7 +119,7 @@ public class LeaveHoursTests
         // min(3.5, 4) = 3.5——上限只封顶"多出来的"部分，不会把工时"顶"到上限那么高
         var clockIn  = new DateTime(2026, 9, 10, 8, 30, 0);
         var clockOut = new DateTime(2026, 9, 10, 12, 0, 0);
-        var computed = AttendanceService.ComputeWorkHours(clockIn, clockOut, Lunch, Dinner);
+        var computed = AttendanceService.ComputeWorkHours(clockIn, clockOut);
         Assert.Equal(3.5m, AttendanceService.ApplyLeaveHoursCap(computed, leaveHours: 4m, standardHours: StandardHours));
     }
 
@@ -181,7 +183,7 @@ public class LeaveHoursTests
                 RequestNo = "QJ0001", ApplicantUserId = 1, ApprovalType = ApprovalType.Leave,
                 ApprovalStatus = ApprovalStatus.Approved,
                 LeaveStartTime = day.ToDateTime(new TimeOnly(9, 0)),
-                LeaveEndTime   = day.ToDateTime(new TimeOnly(12, 30))   // 上午一张，3.5 小时
+                LeaveEndTime   = day.ToDateTime(new TimeOnly(12, 30))   // 上午一张，9:00-12:30 压中午间时段的前 30 分钟，扣完剩 3 小时
             };
             var afternoon = new ApprovalRequest
             {
@@ -205,8 +207,8 @@ public class LeaveHoursTests
 
         using var verify = new AttendanceDbContext(dbOptions);
         var record = await verify.AttendanceRecords.SingleAsync(r => r.UserId == 1 && r.WorkDate == day);
-        // 累加后是 8 小时，不是后一张覆盖前一张变成 4.5 小时——覆盖的话这里会是 4.5，折算成 0.5 天
-        Assert.Equal(8m, record.LeaveHours);
+        // 累加后是 3+4.5=7.5 小时，不是后一张覆盖前一张变成 4.5 小时——覆盖的话这里会是 4.5，折算成 0.5 天
+        Assert.Equal(7.5m, record.LeaveHours);
         Assert.Equal(1m, AttendanceService.ResolveLeaveDaysFraction(record.LeaveHours, StandardHours));
     }
 
@@ -220,7 +222,7 @@ public class LeaveHoursTests
         var start = new DateTime(2026, 9, 10, 9, 0, 0);
         var end   = new DateTime(2026, 9, 10, 9, 20, 0);
 
-        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, Lunch, Dinner, StandardHours);
+        var hours = AttendanceService.ComputeLeaveHoursForDay(day, start, end, StandardHours);
         Assert.Equal(0m, hours);   // 取整后确实是 0
 
         Assert.True(AttendanceService.HasLeaveOverlapForDay(day, start, end));   // 但这一天不该被跳过

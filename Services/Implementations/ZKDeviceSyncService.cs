@@ -91,10 +91,7 @@ public class ZKDeviceSyncService(
             .Distinct().ToList();
         if (uids.Count == 0) return;
 
-        // 2) 预加载：考勤组午休/晚餐扣时、已有打卡流水（去重用）、已有考勤日记录、当天排班
-        var groupBreaks = await db.AttendanceGroups
-            .Select(g => new { g.Id, g.LunchBreakMinutes, g.DinnerBreakMinutes })
-            .ToDictionaryAsync(g => g.Id, g => (g.LunchBreakMinutes, g.DinnerBreakMinutes), ct);
+        // 2) 预加载：已有打卡流水（去重用）、已有考勤日记录、当天排班
 
         // 节假日打卡本地打卡（PunchAsync）是直接拒绝的，考勤机这条链路以前完全没查这个，
         // 导致节假日设备打卡照常按正常工作日结算工时，等于没走加班审批就白得了一天工时。
@@ -319,9 +316,6 @@ public class ZKDeviceSyncService(
                 continue;
 
             shiftByUserDate.TryGetValue((uid, workDate), out var shift);
-            var (lunch, dinner) = groupIdByUser.TryGetValue(uid, out var gid) && gid.HasValue
-                                  && groupBreaks.TryGetValue(gid.Value, out var brk)
-                ? brk : (60, 30);
 
             // 漏打"午间必打卡"窗口要顺延有效上班时间，跟本地打卡（ResolveEffectiveClockInAsync）
             // 走的是同一套算法，不然同样"漏打午间卡"这件事，考勤机同步和本地打卡算出来的工时会对不上；
@@ -346,7 +340,7 @@ public class ZKDeviceSyncService(
             {
                 var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
                 var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift, secondHalfAbsentBoundary);
-                var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut, lunch, dinner);
+                var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut);
                 // 半天假当天设备同步到打卡：按"标准工时 − 已批准的请假小时数"封顶，跟本地打卡/
                 // 补卡重算是同一套口径（2026-09-17 支持半天请假）
                 record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave

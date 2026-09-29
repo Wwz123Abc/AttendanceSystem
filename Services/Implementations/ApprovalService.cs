@@ -139,8 +139,6 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         decimal? leaveDuration = null;
         if (dto.LeaveStartTime.HasValue && dto.LeaveEndTime.HasValue)
         {
-            var group = user.AttendanceGroupId.HasValue
-                ? await db.AttendanceGroups.FindAsync(user.AttendanceGroupId.Value) : null;
             var leaveSd = DateOnly.FromDateTime(dto.LeaveStartTime.Value);
             var leaveEd = DateOnly.FromDateTime(dto.LeaveEndTime.Value);
             var leaveShiftsInRange = (await db.ShiftAssignments
@@ -162,22 +160,18 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 leaveShiftsInRange.TryGetValue(d, out var leaveShift);
                 if (skipNonWorkdays && AttendanceService.IsNonWorkday(d, user.AttendanceGroupId, leaveHolidays, leaveShift)) continue;
                 var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value,
-                    group?.LunchBreakMinutes ?? 60, group?.DinnerBreakMinutes ?? 30, dailyCap, leaveShift);
+                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift);
             }
             leaveDuration = total;
         }
-        // 加班时长：跟正班工时同一套扣饭点规则（AttendanceService.ComputeWorkHours）——申请的时间段超过 6 小时扣午休
-        // （默认 60 分钟）、超过 9 小时再扣晚餐（默认 30 分钟），按考勤组配置的时长，最后按半小时向下取整。
-        // 以前直接拿"结束-开始"的总长度，休息日全天加班（08:30-22:00）会记成 13.5 小时，把午休和晚餐也算成了加班
+        // 加班时长：跟正班工时同一套公式（AttendanceService.ComputeWorkHours）——申请的时间段压到公司统一
+        // "不算钱"时段（午间/晚餐/宵夜/早餐）的那部分不算钱，最后按半小时向下取整。
+        // 以前直接拿"结束-开始"的总长度，休息日全天加班（08:30-22:00）会记成 13.5 小时，把饭点也算成了加班
         // （2026-09-28 用户确认）。审批通过后回写考勤用的是同一个函数，所以这里显示的时长就是最后记的时长
         decimal? overtimeDuration = null;
         if (dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue)
         {
-            var otGroup = user.AttendanceGroupId.HasValue
-                ? await db.AttendanceGroups.FindAsync(user.AttendanceGroupId.Value) : null;
-            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value,
-                otGroup?.LunchBreakMinutes ?? 60, otGroup?.DinnerBreakMinutes ?? 30);
+            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value);
             if (overtimeDuration < 0.5m)
                 throw new InvalidOperationException("加班时长不足 0.5 小时（按半小时为最小单位计算），请检查起止时间");
         }

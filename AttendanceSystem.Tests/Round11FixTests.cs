@@ -62,10 +62,10 @@ public class Round11FixTests : IDisposable
         var shift = DayShift();
         var start = Mon.ToDateTime(new TimeOnly(13, 30));
         var end   = Tue.ToDateTime(new TimeOnly(12, 0));
-        Assert.Equal(4m,   AttendanceService.ComputeLeaveHoursForDay(Mon, start, end, 60, 30, 8, shift));   // 13:30~17:30
-        Assert.Equal(3.5m, AttendanceService.ComputeLeaveHoursForDay(Tue, start, end, 60, 30, 8, shift));   // 08:30~12:00
+        Assert.Equal(4m,   AttendanceService.ComputeLeaveHoursForDay(Mon, start, end, 8, shift));   // 13:30~17:30
+        Assert.Equal(3.5m, AttendanceService.ComputeLeaveHoursForDay(Tue, start, end, 8, shift));   // 08:30~12:00
         // 没排班的日子没有班次可参照，仍按自然日算（老口径，封顶在标准工时）
-        Assert.Equal(8m, AttendanceService.ComputeLeaveHoursForDay(Mon, start, end, 60, 30, 8));
+        Assert.Equal(8m, AttendanceService.ComputeLeaveHoursForDay(Mon, start, end, 8));
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class Round11FixTests : IDisposable
         var shift = NightShift();
         var start = Mon.ToDateTime(new TimeOnly(20, 0));
         var end   = Tue.ToDateTime(new TimeOnly(8, 0));
-        Assert.Equal(10.5m, AttendanceService.ComputeLeaveHoursForDay(Mon, start, end, 60, 30, 11, shift));
+        Assert.Equal(10.5m, AttendanceService.ComputeLeaveHoursForDay(Mon, start, end, 11, shift));
         Assert.False(AttendanceService.HasLeaveOverlapForDay(Tue, start, end, shift));   // 周二排的是周二晚上的班，跟这次假不重叠
     }
 
@@ -545,14 +545,16 @@ public class Round11FixTests : IDisposable
         Assert.Equal(13.5m, rec.OvertimeHours);
     }
 
-    // ── ⑪ 加班时长按申请的时间段扣饭点：超过 6 小时扣午休、超过 9 小时再扣晚餐（2026-09-28 用户确认）────
+    // ── ⑪ 加班时长按申请的时间段扣饭点：压到公司统一的午间/晚餐/宵夜/早餐时段就扣对应重叠时长
+    // （2026-09-28 用户确认扣饭点，2026-09-29 改成按实际重叠扣减，不再看"是否超过 6/9 小时"）────
 
     [Theory]
     [InlineData(18, 0, 22, 0, 4)]       // 4 小时：不扣
     [InlineData(8, 30, 17, 30, 8)]      // 9 小时：超过 6 小时扣午休 60 分钟；正好 9 小时不算"超过 9 小时"，不扣晚餐
     [InlineData(8, 30, 22, 0, 12)]      // 13.5 小时（陈林发 9/26 那张）：扣 60 + 30 分钟 = 12 小时
     [InlineData(8, 0, 20, 0, 10.5)]     // 12 小时 → 10.5
-    [InlineData(9, 0, 15, 0, 6)]        // 正好 6 小时：不算"超过 6 小时"，不扣
+    [InlineData(9, 0, 15, 0, 5)]        // 6 小时，但压中了 12:00-13:00 这段午间时段 → 扣 1 小时，剩 5 小时
+                                         // （2026-09-29 起不再看"是否超过 6/9 小时"，只看跟固定饭点时段有没有重叠）
     public async Task 加班审批通过回写_申请时长超过6小时9小时按规则扣饭点(int sh, int sm, int eh, int em, double expected)
     {
         var (uid, _) = SeedWeekWorld();
