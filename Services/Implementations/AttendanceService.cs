@@ -126,7 +126,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (await IsHolidayAsync(workDate, user.AttendanceGroupId))
             return new PunchResponseDto { Success = false, Message = "今日为节假日，无需打卡" };
 
-        // 定位打卡校验：考勤组开了定位打卡、且配了打卡地点才会真的比对距离，没开/没配就直接放行。
+        // 定位打卡校验：没分配考勤组、或考勤组没开定位打卡/没配打卡地点，都算不通过（见 ValidateLocationAsync 注释）。
         // skipLocationCheck=true（远程打卡）时整段跳过——远程打卡自己会在调用这个方法之前先调
         // ValidateLocationAsync 做过一次同样的校验了（见该方法注释），这里不用再查一遍数据库重复判断。
         if (!skipLocationCheck)
@@ -314,20 +314,22 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     private const double MaxLocationAccuracyToleranceMeters = 100;
 
     /// <summary>
-    /// 校验一个经纬度是否落在指定考勤组配置的允许打卡地点范围内。考勤组没开"定位打卡"、或没配置任何
-    /// 地点，直接算通过（跟 PunchAsync 里原来的定位校验是同一套判断，抽出来给远程打卡单独调用）。
+    /// 校验一个经纬度是否落在指定考勤组配置的允许打卡地点范围内。没分配考勤组、或考勤组没开"定位打卡"、
+    /// 或没配置任何地点，一律算不通过——远程打卡必须先定位、确认在允许的地点里，才能进入人脸识别
+    /// （2026-09-29 用户确认：不能出现"考勤组没配定位，员工就能在任意地点远程打卡"这种口子）。
     /// 远程打卡会在真正调用（付费的）阿里云人脸识别接口之前，先调这个方法确认人在允许的地点里，
     /// 不在范围内就直接拒绝，不用白白浪费一次人脸识别调用。
     /// </summary>
     public async Task<(bool Valid, string? Message)> ValidateLocationAsync(int? attendanceGroupId, double? latitude, double? longitude, double? accuracyMeters = null)
     {
-        if (!attendanceGroupId.HasValue) return (true, null);   // 没分配考勤组，没有地点可比对，不限制
+        if (!attendanceGroupId.HasValue)
+            return (false, "您还未分配考勤组，暂不能使用远程打卡，请联系管理员");
 
         var group = await db.AttendanceGroups
             .Include(g => g.Locations)
             .FirstOrDefaultAsync(g => g.Id == attendanceGroupId.Value);
         if (group is not { EnableLocationPunch: true } || group.Locations.Count == 0)
-            return (true, null);   // 没开定位打卡/没配置地点，不限制
+            return (false, "您所在的考勤组尚未开启或配置定位打卡，暂不能使用远程打卡，请联系管理员先在考勤组设置里开启并配置打卡地点");
 
         if (!latitude.HasValue || !longitude.HasValue)
             return (false, "该考勤组已启用定位打卡，请允许浏览器获取位置权限后重试");

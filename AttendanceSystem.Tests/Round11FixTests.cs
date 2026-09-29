@@ -1233,4 +1233,79 @@ public class Round11FixTests : IDisposable
         Assert.Equal(Tue.ToDateTime(new TimeOnly(0, 29)), mon2.ClockInTime);
         Assert.Equal(AttendanceStatus.Late, mon2.AttendanceStatus);
     }
+
+    // ── 远程打卡必须先通过定位校验（2026-09-29，用户确认：考勤组没配定位就不能远程打卡，不能是"不限制"）──
+
+    private async Task<(int UserId, int GroupId)> SeedLocationWorldAsync(bool enableLocation, bool withLocation)
+    {
+        using var db = CreateContext();
+        var group = new AttendanceGroup { GroupName = "定位组", EnableLocationPunch = enableLocation };
+        db.AttendanceGroups.Add(group);
+        await db.SaveChangesAsync();
+        if (withLocation)
+        {
+            db.AttendanceGroupLocations.Add(new AttendanceGroupLocation
+            {
+                AttendanceGroupId = group.Id, LocationName = "总部", Latitude = 30.0, Longitude = 120.0, RadiusMeters = 200
+            });
+            await db.SaveChangesAsync();
+        }
+        var user = new User { EmployeeNo = "LOC1", RealName = "定位员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        return (user.Id, group.Id);
+    }
+
+    [Fact]
+    public async Task 定位校验_考勤组没开启定位打卡_远程打卡直接拒绝_不再是不限制()
+    {
+        var (_, gid) = await SeedLocationWorldAsync(enableLocation: false, withLocation: false);
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var (valid, message) = await svc.ValidateLocationAsync(gid, 30.0, 120.0);
+        Assert.False(valid);
+        Assert.Contains("未开启或配置定位打卡", message);
+    }
+
+    [Fact]
+    public async Task 定位校验_考勤组开了定位打卡但没配置打卡地点_同样拒绝()
+    {
+        var (_, gid) = await SeedLocationWorldAsync(enableLocation: true, withLocation: false);
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var (valid, message) = await svc.ValidateLocationAsync(gid, 30.0, 120.0);
+        Assert.False(valid);
+        Assert.Contains("未开启或配置定位打卡", message);
+    }
+
+    [Fact]
+    public async Task 定位校验_没有分配考勤组_远程打卡直接拒绝()
+    {
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var (valid, message) = await svc.ValidateLocationAsync(null, 30.0, 120.0);
+        Assert.False(valid);
+        Assert.Contains("未分配考勤组", message);
+    }
+
+    [Fact]
+    public async Task 定位校验_考勤组配好了定位_人在范围内正常通过()
+    {
+        var (_, gid) = await SeedLocationWorldAsync(enableLocation: true, withLocation: true);
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var (valid, message) = await svc.ValidateLocationAsync(gid, 30.0, 120.0);
+        Assert.True(valid, message);
+    }
+
+    [Fact]
+    public async Task 定位校验_考勤组配好了定位_人在范围外仍然拒绝()
+    {
+        var (_, gid) = await SeedLocationWorldAsync(enableLocation: true, withLocation: true);
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var (valid, message) = await svc.ValidateLocationAsync(gid, 31.0, 120.0);   // 差 1 度纬度，约 111 公里外
+        Assert.False(valid);
+        Assert.Contains("超出有效范围", message);
+    }
 }
