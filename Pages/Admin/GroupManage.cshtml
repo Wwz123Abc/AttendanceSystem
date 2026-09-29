@@ -497,10 +497,12 @@ function fillMyLocation(btn) {
 // 不是一回事，中国大陆范围内两者能差出几十到几百米。本系统的打卡范围判定全程用的是 WGS-84
 // （navigator.geolocation 原始坐标），所以从地图上选完点之后，必须先把坐标纠偏转换成 WGS-84
 // 再写回表单，不然算出来的"是否在范围内"会跟员工实际打卡的地方对不上。
-// gcj02ToWgs84 是业界公开的坐标纠偏算法（GCJ-02 转 WGS-84 的标准迭代逼近公式），只是本地数学换算。
-function gcj02ToWgs84(lng, lat) {
+// gcj02ToWgs84 / wgs84ToGcj02 是业界公开的坐标纠偏算法（GCJ-02 与 WGS-84 之间的标准换算公式），只是本地数学换算；
+// 两个方向共用同一套"偏移量"计算（_gcjWgsDelta：偏移量只跟大致所在位置有关，在几百米范围内可以双向近似复用，
+// 这是国内地图坐标转换的通行做法）。
+function _outOfChina(lng, lat) { return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271; }
+function _gcjWgsDelta(lng, lat) {
     const PI = Math.PI, A = 6378245.0, EE = 0.00669342162296594323;
-    function outOfChina(lng, lat) { return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271; }
     function transformLat(x, y) {
         let ret = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
         ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
@@ -515,7 +517,6 @@ function gcj02ToWgs84(lng, lat) {
         ret += (150 * Math.sin(x / 12 * PI) + 300 * Math.sin(x / 30 * PI)) * 2 / 3;
         return ret;
     }
-    if (outOfChina(lng, lat)) return [lng, lat];
     let dLat = transformLat(lng - 105, lat - 35);
     let dLng = transformLng(lng - 105, lat - 35);
     const radLat = lat / 180 * PI;
@@ -524,7 +525,22 @@ function gcj02ToWgs84(lng, lat) {
     const sqrtMagic = Math.sqrt(magic);
     dLat = (dLat * 180) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
     dLng = (dLng * 180) / (A / sqrtMagic * Math.cos(radLat) * PI);
-    return [lng * 2 - (lng + dLng), lat * 2 - (lat + dLat)];
+    return [dLng, dLat];
+}
+function gcj02ToWgs84(lng, lat) {
+    if (_outOfChina(lng, lat)) return [lng, lat];
+    const [dLng, dLat] = _gcjWgsDelta(lng, lat);
+    return [lng - dLng, lat - dLat];
+}
+// 反过来，把数据库里存的 WGS-84 坐标转换成高德地图要用的 GCJ-02——重新打开选点弹窗、要在地图上
+// 显示"已经存过的位置"时要用。以前这里没转换，直接拿 WGS-84 坐标当 GCJ-02 用来定位地图中心/图钉，
+// 在国内会偏移出几十到几百米（2026-09-29 反馈：编辑已保存的定位打卡地点，重新打开选点弹窗，图钉位置和
+// 保存时选的地址对不上）。只影响这个弹窗重新打开时"图钉显示在哪"，不影响保存逻辑——保存时仍然是按
+// 这次在地图上重新选/确认的点，通过 gcj02ToWgs84 换算出 WGS-84 再写回表单。
+function wgs84ToGcj02(lng, lat) {
+    if (_outOfChina(lng, lat)) return [lng, lat];
+    const [dLng, dLat] = _gcjWgsDelta(lng, lat);
+    return [lng + dLng, lat + dLat];
 }
 
 let amapMap, amapMarker, amapGeocoder, amapPlaceSearch, amapTargetRow, amapPickerState, amapSearchTimer;
@@ -659,9 +675,9 @@ function openAMapPicker(btn) {
         const lng = amapTargetRow.querySelector('[data-field="Longitude"]').value;
         if (lat && lng) {
             // 这一行已经存过坐标：数据库里存的是 WGS-84，地图上要用高德的 GCJ-02 显示，
-            // 严格反向纠偏比较复杂，这里就近似当作同一个点定位过去（供人眼观察大致方位、不影响最终保存的坐标），
-            // 保存时仍然是按这次在地图上重新选的点重新计算 WGS-84，不会把近似值带回数据库。
-            const lnglat = [parseFloat(lng), parseFloat(lat)];
+            // 先转换一次再定位地图中心/图钉，不然图钉位置会跟保存时选的地址明显偏移。
+            // 保存时仍然是按这次在地图上重新选/确认的点重新计算 WGS-84，不会把近似值带回数据库。
+            const lnglat = wgs84ToGcj02(parseFloat(lng), parseFloat(lat));
             amapMap.setCenter(lnglat);
             amapMarker.setPosition(lnglat);
             reverseGeocodeAMap(lnglat);
