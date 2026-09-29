@@ -164,6 +164,15 @@ public class ZKDeviceSyncService(
             {
                 workDate = yesterday;
             }
+            // 昨晚排的是跨天夜班、但一次卡都没打（不是"打了上班卡还没下班"那种续接场景，上面几条分支管的是那种）：
+            // 现在还没超过昨晚班次的下班时间，是很晚才想起来打的上班卡，应该算成昨天那班的（记很晚的迟到），
+            // 不能落到"今天"再被下面"打得太早"那条规则拿明天晚上的班次去比对、误判掉（2026-09-29 反馈）
+            else if (shiftByUserDate.TryGetValue((uid, yesterday), out var missedShift) && missedShift is { IsCrossDay: true }
+                     && AttendanceService.IsVeryLateClockInForYesterdayShift(yesterday, missedShift,
+                            recordMap.TryGetValue((uid, yesterday), out var missedRec) ? missedRec.ClockInTime : null, r.Time))
+            {
+                workDate = yesterday;
+            }
 
             // 跨天班次的第一次打卡离应上班时间太早（比如 20:30 上班的晚班，中午/早上打的）：不当上班卡，也不为它建记录——
             // 不然真正晚上来上班的那次会被当成午间卡，整天上班卡丢失。考勤机没法给员工弹提示，只记日志；

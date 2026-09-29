@@ -1070,4 +1070,95 @@ public class Round11FixTests : IDisposable
         // 夜班下班在第二天：允许
         await svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(20, 0)), Tue.ToDateTime(new TimeOnly(8, 0)), null, "管理员");
     }
+
+    // ── ⑯ 2026-09-29 用户反馈：夜班一次卡都没打，凌晨才想起来打上班卡，被"打得太早"误拦 ──────
+
+    [Theory]
+    [InlineData(0, 29, false)]    // 昨晚 20:00 上班，现在凌晨 00:29：还在昨晚班次结束（08:00）之前，应该放行
+    [InlineData(7, 59, false)]    // 还差 1 分钟到昨晚班次的下班时间：仍放行
+    [InlineData(8, 1, true)]      // 已经过了昨晚班次的下班时间：不再算"昨晚很晚的上班卡"，落回原来"打得太早"的判断
+    public async Task 夜班一次卡都没打_凌晨才打卡_只要没超过昨晚班次下班时间就不算太早(int h, int m, bool stillRejected)
+    {
+        var (uid, _) = SeedNightWorld();
+        using (var db = CreateContext())
+        {
+            // 把 SeedNightWorld 帮我们建好的"周一 20:00 已打上班卡"抹掉，改成"周一一次卡都没打"（更贴近真实反馈的场景）
+            var mon = await db.AttendanceRecords.SingleAsync(r => r.WorkDate == Mon);
+            db.AttendanceRecords.Remove(mon);
+            await db.SaveChangesAsync();
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var msg = await svc.GetClockInRejectionAsync(uid, Tue.ToDateTime(new TimeOnly(h, m)));
+        if (stillRejected)
+        {
+            Assert.NotNull(msg);
+            Assert.Contains("最早", msg);
+        }
+        else
+        {
+            Assert.Null(msg);
+        }
+    }
+
+    [Fact]
+    public async Task 夜班一次卡都没打_凌晨打卡成功后_记到昨天那班_算很晚的迟到_不会凭空多出今天的记录()
+    {
+        // GetClockInRejectionAsync 只能验证"拦不拦"，实际落库走的是 PunchAsync（内部用 DateTime.Now，
+        // 没法像别的测试那样注入固定的 Mon/Tue），所以这条改用真实的"今天/昨天"，并把班次的下班时间
+        // 设得很晚（23:59），保证不管测试什么时候跑，"现在"都落在"昨晚班次结束之前"这个窗口内。
+        var today     = DateOnly.FromDateTime(DateTime.Today);
+        var yesterday = today.AddDays(-1);
+        int uid;
+        using (var db = CreateContext())
+        {
+            var group = new AttendanceGroup { GroupName = "夜班一次没打组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            var shift = new ShiftSchedule
+            {
+                ShiftName = "夜班", AttendanceGroupId = group.Id, WorkStartTime = new TimeOnly(20, 0), WorkEndTime = new TimeOnly(23, 59),
+                IsCrossDay = true, LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 3, RestDaysOfWeek = ""
+            };
+            db.ShiftSchedules.Add(shift);
+            var user = new User { EmployeeNo = "N9", RealName = "夜班没打卡员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
+            db.Users.Add(user);
+            db.SaveChanges();
+            foreach (var d in new[] { yesterday, today })
+                db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = d, ShiftScheduleId = shift.Id });
+            db.SaveChanges();
+            uid = user.Id;
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var result = await svc.PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockIn }, skipLocationCheck: true);
+            Assert.True(result.Success, result.Message);
+        }
+        using var check = CreateContext();
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == today));   // 没有凭空多出"今天"的记录
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
+        Assert.NotNull(rec.ClockInTime);
+        Assert.Equal(AttendanceStatus.Late, rec.AttendanceStatus);
+        Assert.True(rec.LateMinutes > 0);
+    }
+
+    [Fact]
+    public async Task 设备同步_夜班一次卡都没打_凌晨的脸识别记成昨晚很晚的上班卡()
+    {
+        var (uid, _) = SeedNightWorld();
+        using (var db = CreateContext())
+        {
+            var mon = await db.AttendanceRecords.SingleAsync(r => r.WorkDate == Mon);
+            db.AttendanceRecords.Remove(mon);   // 周一一次卡都没打
+            await db.SaveChangesAsync();
+        }
+        await SyncAsync(Tue.ToDateTime(new TimeOnly(0, 29)));
+
+        using var check = CreateContext();
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue));
+        var mon2 = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(0, 29)), mon2.ClockInTime);
+        Assert.Equal(AttendanceStatus.Late, mon2.AttendanceStatus);
+    }
 }
