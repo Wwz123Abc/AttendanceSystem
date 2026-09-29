@@ -269,4 +269,83 @@ public class MealDeductionBackfillTests : IDisposable
         using var check = CreateContext();
         Assert.Equal(5m, (await check.AttendanceRecords.SingleAsync()).OvertimeHours);
     }
+
+    // ── 第 13 轮审查发现的两个问题 ────────────────────────────────────────────
+
+    [Fact]
+    public async Task 只打了上班卡的下午半天假_回填后工时按回填后的请假小时数重新封顶()
+    {
+        // 2026-09-29 第 13 轮审查发现：第 ③ 步（正班工时）以前只处理有上下班卡的记录，"上午上班、
+        // 下午请假、没打下班卡"这种半天假会被漏掉——第 ② 步已经把 LeaveHours 改成新值，
+        // 工时却还停在按旧 LeaveHours 封顶的旧值，少算了工时。
+        var day = FromDate.AddDays(2);   // 2026-09-28，周一
+        int uid;
+        using (var db = CreateContext())
+        {
+            uid = SeedUser(db, "LV4");
+            db.ApprovalRequests.Add(new ApprovalRequest
+            {
+                RequestNo = "QJ-4", ApplicantUserId = uid, ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.PersonalLeave,
+                ApprovalStatus = ApprovalStatus.Approved,
+                LeaveStartTime = day.ToDateTime(new TimeOnly(12, 0)), LeaveEndTime = day.ToDateTime(new TimeOnly(17, 30)),
+                Reason = "t"
+            });
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = uid, WorkDate = day, AttendanceStatus = AttendanceStatus.OnLeave,
+                LeaveHours = 5.5m,          // 旧值（错误，模拟旧口径存量）
+                ClockInTime = day.ToDateTime(new TimeOnly(8, 25)), ClockOutTime = null,   // 只打了上班卡
+                ActualWorkHours = 2.5m      // 旧值：min(3.5, 8-5.5)=2.5
+            });
+            db.SaveChanges();
+        }
+
+        using (var db = CreateContext())
+            await Svc(db).RecalcMealDeductionBackfillAsync(FromDate, dryRun: false);
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync();
+        Assert.Equal(4.5m, rec.LeaveHours);       // 12:00-17:30，压中 12:00-13:00 那 1 小时
+        Assert.Equal(3.5m, rec.ActualWorkHours);  // min(ComputeWorkHours(8:25,12:00)=3.5, 8-4.5=3.5)=3.5，不是旧值 2.5
+    }
+
+    [Fact]
+    public async Task 回填后月度汇总会重新生成_我的记录能看到新值()
+    {
+        // 2026-09-29 第 13 轮审查发现：第 ③ 步重算正班工时时没有更新 UpdatedAt，"我的记录/我的日历"
+        // 靠比较记录的修改时间判断要不要刷新月度汇总（EnsureMonthlySummaryFreshAsync），不更新
+        // 时间戳的话页面永远读到回填前的旧汇总。现在回填完会顺手把涉及的月份整月重算一次。
+        var day = FromDate.AddDays(2);   // 2026-09-28，周一
+        int uid;
+        using (var db = CreateContext())
+        {
+            uid = SeedUser(db, "MS1");
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = uid, WorkDate = day, AttendanceStatus = AttendanceStatus.Normal,
+                ClockInTime = day.ToDateTime(new TimeOnly(8, 0)), ClockOutTime = day.ToDateTime(new TimeOnly(14, 0)),
+                ActualWorkHours = 6m   // 旧值（错误，模拟旧口径存量）；新口径应为 5（压中 12:00-13:00 那 1 小时）
+            });
+            db.MonthlyAttendanceSummaries.Add(new MonthlyAttendanceSummary
+            {
+                UserId = uid, Year = day.Year, Month = day.Month, TotalWorkHours = 6m,
+                UpdatedAt = DateTime.Now.AddDays(-10)   // 明显陈旧的汇总，模拟回填前已经生成过一次
+            });
+            db.SaveChanges();
+        }
+
+        using (var db = CreateContext())
+        {
+            var result = await Svc(db).RecalcMealDeductionBackfillAsync(FromDate, dryRun: false);
+            Assert.Equal(1, result.WorkHoursRecordsChanged);
+        }
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync();
+        Assert.Equal(5m, rec.ActualWorkHours);
+        Assert.True(rec.UpdatedAt > DateTime.Now.AddMinutes(-1));   // 时间戳被刷新了
+
+        var summary = await check.MonthlyAttendanceSummaries.SingleAsync(s => s.UserId == uid && s.Year == day.Year && s.Month == day.Month);
+        Assert.Equal(5m, summary.TotalWorkHours);   // 汇总跟着重新生成，不再是回填前的旧值 6
+    }
 }

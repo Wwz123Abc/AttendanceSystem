@@ -61,6 +61,10 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
         }
         catch (InvalidOperationException ex)
         {
+            // 事务已经回滚（数据库没问题），但内存里这个 DbContext 的申请单对象还停在改到一半的状态
+            // （比如状态已经改成"已通过"）——不清掉的话，下面 ReloadListsAsync 刷新出来的待审批列表会
+            // 显示这张单"已通过"，跟提示"审批失败"自相矛盾（2026-09-29 第 13 轮审查发现）
+            db.ChangeTracker.Clear();
             Message   = ex.Message;
             IsSuccess = false;
         }
@@ -87,6 +91,7 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
         }
         catch (InvalidOperationException ex)
         {
+            db.ChangeTracker.Clear();   // 理由同上（OnPostApproveAsync）
             Message   = ex.Message;
             IsSuccess = false;
         }

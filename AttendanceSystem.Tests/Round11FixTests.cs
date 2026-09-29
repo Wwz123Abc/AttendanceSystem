@@ -1396,4 +1396,52 @@ public class Round11FixTests : IDisposable
         using var check = CreateContext();
         Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == tomorrow));   // 没有留下改了一半的记录
     }
+
+    [Fact]
+    public async Task 审批被顺延校验拦下后_同一上下文里刷新列表看到的仍是待审批_不是已通过()
+    {
+        // 2026-09-29 第 13 轮审查发现：HandleApprovalAsync 在事务里先把 req.ApprovalStatus 改成
+        // "已通过"（内存里的跟踪实体），UpdateAttendanceAfterApprovalAsync 抛异常后事务回滚，
+        // 数据库确实还是"待审批"，但同一个 DbContext 里这个已跟踪对象的内存状态没有跟着回滚——
+        // PendingApproval 页面用同一个 DbContext 刷新列表时，会读到这个内存里"改了一半"的对象，
+        // 显示成"已通过"，需要 db.ChangeTracker.Clear() 才能让后续查询重新从数据库读。
+        var tomorrow = DateOnly.FromDateTime(DateTime.Today).AddDays(1);
+        var (uid, supervisorId) = SeedNightWorldForFutureCheck(tomorrow);
+
+        int requestId;
+        using (var db = CreateContext())
+        {
+            var request = new ApprovalRequest
+            {
+                RequestNo = "BK-FUT-2", ApplicantUserId = uid, ApprovalType = ApprovalType.PunchReplenishment,
+                ApprovalStatus = ApprovalStatus.Pending, PunchDate = tomorrow, PunchType = PunchType.ClockOut,
+                PunchTime = new TimeOnly(6, 0), Reason = "t", SubmittedAt = DateTime.Now, UpdatedAt = DateTime.Now
+            };
+            db.ApprovalRequests.Add(request);
+            await db.SaveChangesAsync();
+            db.ApprovalSteps.Add(new ApprovalStep
+            {
+                ApprovalRequestId = request.Id, ApproverUserId = supervisorId, StepOrder = 1,
+                ApprovalStatus = ApprovalStatus.Pending
+            });
+            await db.SaveChangesAsync();
+            requestId = request.Id;
+        }
+
+        using var check = CreateContext();
+        var att = new AttendanceService(check, AppOptions, NullLogger<AttendanceService>.Instance);
+        var svc = new ApprovalService(check, att, AppOptions);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.HandleApprovalAsync(supervisorId,
+            new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true }));
+
+        // 不清空的话，同一上下文再查这张单，读到的是内存里"改到一半"的实例（已通过）——
+        // 这行断言本身不是在验证 bug 修没修，只是确认"如果不清空会看到什么"，帮助理解下面为什么要 Clear
+        var staleRead = await check.ApprovalRequests.FirstAsync(a => a.Id == requestId);
+        Assert.Equal(ApprovalStatus.Approved, staleRead.ApprovalStatus);   // 内存里确实是脏的
+
+        check.ChangeTracker.Clear();
+        var freshRead = await check.ApprovalRequests.FirstAsync(a => a.Id == requestId);
+        Assert.Equal(ApprovalStatus.Pending, freshRead.ApprovalStatus);   // 清空后重新从数据库读，是真实的"待审批"
+    }
 }

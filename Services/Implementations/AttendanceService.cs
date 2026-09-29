@@ -1676,6 +1676,12 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                      && a.LeaveStartTime != null && (a.LeaveEndTime ?? a.LeaveStartTime) >= fromDateTime)
             .ToListAsync();
         var dailyLeaveTotals = new Dictionary<(int UserId, DateOnly Day), decimal>();
+        // 只有上班卡、没下班卡的半天假（下午请假常见场景）：审批回写当初是按"上班卡 → 这天请假
+        // 开始的时间点"估算工时的（见 UpdateAttendanceAfterApprovalAsync 的请假分支），这里记下
+        // 每人每天最早的那个请假分段起点，供下面第 ③ 步用同一套估算方式重新封顶
+        // （2026-09-29 第 13 轮审查发现：以前只处理有上下班卡的记录，这类只有上班卡的半天假被漏了，
+        // 第 ② 步已经把 LeaveHours 改成新值，工时却还停在按旧 LeaveHours 封顶的旧值，少算了工时）。
+        var firstLeaveSegStartByDay = new Dictionary<(int UserId, DateOnly Day), DateTime>();
         foreach (var approval in leaveApprovals)
         {
             var lstart = approval.LeaveStartTime!.Value;
@@ -1705,6 +1711,13 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 var hoursToday = ComputeLeaveHoursForDay(d, lstart, lend, dailyCap, leaveShift);
                 var key = (approval.ApplicantUserId, d);
                 dailyLeaveTotals[key] = dailyLeaveTotals.GetValueOrDefault(key) + hoursToday;
+
+                // 同一天可能有多张假单叠加，取最早的那个分段起点（对"这天上午还工作了多久"是最保守、
+                // 跟原逻辑最贴近的估算——原逻辑本来就是单张假单各自处理，这里只是没法回头拆分历史场景，
+                // 取最早的起点）
+                var segStart = lstart > d.ToDateTime(TimeOnly.MinValue) ? lstart : d.ToDateTime(TimeOnly.MinValue);
+                if (!firstLeaveSegStartByDay.TryGetValue(key, out var existingStart) || segStart < existingStart)
+                    firstLeaveSegStartByDay[key] = segStart;
             }
         }
         var leaveDaysChanged = 0;
@@ -1729,10 +1742,39 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         {
             var before = record.ActualWorkHours;
             await RecalcWorkHoursAfterManualPunchAsync(record, record.UserId);
-            if (record.ActualWorkHours != before) workHoursChanged++;
+            if (record.ActualWorkHours != before)
+            {
+                record.UpdatedAt = DateTime.Now;   // 让"我的记录/我的日历"知道这天改过，打开时会触发月度汇总刷新
+                workHoursChanged++;
+            }
         }
 
-        if (!dryRun) await db.SaveChangesAsync();
+        // ③b 只有上班卡、没下班卡的半天假：上面 punchRecords 这一批要求同时有上下班卡，会漏掉这种记录
+        // （2026-09-29 第 13 轮审查发现）。跟 UpdateAttendanceAfterApprovalAsync 请假分支同一套估算方式，
+        // 用回填后的 LeaveHours（第 ② 步已经改成新值）重新封顶。
+        foreach (var ((uid, day), leaveSegStart) in firstLeaveSegStartByDay)
+        {
+            var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == uid && r.WorkDate == day);
+            if (record is not { ClockInTime: { } ci, ClockOutTime: null } || record.AttendanceStatus != AttendanceStatus.OnLeave) continue;
+            if (ci >= leaveSegStart) continue;
+            var shift = (await GetShiftAssignmentAsync(uid, day))?.ShiftSchedule;
+            var newHours = ApplyLeaveHoursCap(ComputeWorkHours(ci, leaveSegStart), record.LeaveHours,
+                ResolveDailyStandardHours(shift, defaultDailyHours));
+            if (record.ActualWorkHours == newHours) continue;
+            record.ActualWorkHours = newHours;
+            record.UpdatedAt = DateTime.Now;
+            workHoursChanged++;
+        }
+
+        if (!dryRun)
+        {
+            await db.SaveChangesAsync();
+            // 回填涉及的每个月整月重算一次汇总——一次性操作，全员重算可以接受，不然"我的记录/我的日历"、
+            // 月度报表这些读缓存汇总的地方要等到下月初后台任务才会自动纠正（2026-09-29 第 13 轮审查发现）。
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            for (var m = new DateOnly(fromDate.Year, fromDate.Month, 1); m <= today; m = m.AddMonths(1))
+                await GenerateMonthlySummaryAsync(m.Year, m.Month);
+        }
         return new MealDeductionBackfillResult(workHoursChanged, overtimeRequestsAdjusted, overtimeDaysChanged, leaveDaysChanged);
     }
 
