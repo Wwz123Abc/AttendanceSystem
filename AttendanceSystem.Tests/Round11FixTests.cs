@@ -316,6 +316,75 @@ public class Round11FixTests : IDisposable
         Assert.NotNull(rec.ClockInTime);
     }
 
+    [Fact]
+    public async Task 晚班缺上班卡_补卡申请被驳回后_仍能正常打下班卡_不会凭空多出第二天的记录()
+    {
+        // 用户要求（2026-09-30）：夜班员工忘记打上班卡，即使补卡申请没有通过，也要能正常打下班卡，
+        // 而且不能跟"第二天"混在一起——补卡申请被驳回（没有回写考勤，考勤记录该缺照样缺）之后，
+        // 靠现场打卡也能把昨晚这班完整收尾（上下班卡都有），过程中不会凭空多出一条"今天"的记录。
+        // "已经打过上班卡的记录不会再被当成一次新的很晚上班卡"这条边界，由
+        // 一次卡都没打的很晚上班卡_宽限期要跟续接窗口一致_下班时间后6小时内仍算昨天() 这条纯函数测试单独覆盖。
+        var today     = DateOnly.FromDateTime(DateTime.Today);
+        var yesterday = today.AddDays(-1);
+        int uid;
+        using (var db = CreateContext())
+        {
+            var group = new AttendanceGroup { GroupName = "晚班缺卡驳回组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            // 跟上一条测试同样的手法：应下班时间设成"现在往前 1 小时"，保证不管测试什么时候跑，
+            // "现在"都落在下班时间之后的 6 小时宽限窗口内
+            var shift = new ShiftSchedule
+            {
+                ShiftName = "晚班", AttendanceGroupId = group.Id, WorkStartTime = new TimeOnly(20, 30), WorkEndTime = TimeOnly.FromDateTime(DateTime.Now.AddHours(-1)),
+                IsCrossDay = true, LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 8, RestDaysOfWeek = ""
+            };
+            db.ShiftSchedules.Add(shift);
+            var user = new User { EmployeeNo = "N12", RealName = "晚班缺卡驳回员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
+            db.Users.Add(user);
+            db.SaveChanges();
+            foreach (var d in new[] { yesterday, today })
+                db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = d, ShiftScheduleId = shift.Id });
+            // 昨晚忘打上班卡，员工提交了补卡申请，但审批人驳回了——驳回不回写考勤，
+            // 考勤记录本身应该继续保持"完全没有"这条记录的状态
+            db.ApprovalRequests.Add(new ApprovalRequest
+            {
+                RequestNo = "BK-REJ-1", ApplicantUserId = user.Id, ApprovalType = ApprovalType.PunchReplenishment,
+                ApprovalStatus = ApprovalStatus.Rejected, PunchDate = yesterday, PunchType = PunchType.ClockIn,
+                PunchTime = new TimeOnly(20, 30), Reason = "忘打卡", SubmittedAt = DateTime.Now, UpdatedAt = DateTime.Now
+            });
+            await db.SaveChangesAsync();
+            uid = user.Id;
+        }
+        using (var db = CreateContext())
+            Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == yesterday));   // 驳回没有留下任何考勤记录
+
+        // 现场补打：先是"很晚的上班卡"（追认昨晚），紧接着真正的下班卡——两次都是独立的请求/DbContext
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var clockIn = await svc.PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockIn }, skipLocationCheck: true);
+            Assert.True(clockIn.Success, clockIn.Message);
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var clockOut = await svc.PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockOut }, skipLocationCheck: true);
+            Assert.True(clockOut.Success, clockOut.Message);
+        }
+
+        using (var check = CreateContext())
+        {
+            Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == today));   // 不会凭空多出"今天"的记录
+            var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
+            Assert.NotNull(rec.ClockInTime);
+            Assert.NotNull(rec.ClockOutTime);
+            // 用 >= 而不是 >：两次打卡在测试里几乎同时发生，可能落在同一分钟（打卡时间精确到分钟），
+            // 这里只验证没有再出现"下班时间倒挂在上班时间之前"那种原始 bug，不要求严格晚于
+            Assert.True(rec.ClockOutTime >= rec.ClockInTime);   // 昨晚这班完整收尾（上下班卡都有，且顺序没有倒挂）
+        }
+    }
+
     // ── ③ 只补一边卡的旷工 ─────────────────────────────────────────────
 
     [Theory]
