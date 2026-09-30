@@ -64,6 +64,30 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         if (user.HireDate is null || user.HireDate.Value > today)
             return new PunchResponseDto { Success = false, Message = "您尚未办理入职（入职日期未设置或未到），暂不能打卡，请联系管理员" };
 
+        // 打卡时间精确到分钟（把秒抹掉）。提前到这里算，是因为下面的去重判断需要用它。
+        var punchTime = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0);
+
+        // 同一人同类型同一分钟的重复提交（网络重试、按钮连点两下）：必须在这里就整个短路返回，
+        // 不能等下面"这次打卡该续到昨天还是算今天新的一天"判断完、工时也结算完了才去重——
+        // 第一次请求会把跨天夜班续到昨天、关掉昨天那条记录（下班时间不再是 null）；如果第二次
+        // 重复请求不在这里拦掉，它会因为"昨天已经关闭"而判断不成立，退化成算作今天的打卡，
+        // 把昨天的下班时间错误地写进今天的新记录（2026-09-30 从李杰的记录里发现的真实事故）。
+        if (await db.AttendancePunches.AnyAsync(p =>
+                p.UserId == userId && p.PunchType == request.PunchType && p.PunchTime == punchTime))
+        {
+            return new PunchResponseDto
+            {
+                Success   = true,
+                Message   = request.PunchType switch
+                {
+                    PunchType.ClockIn  => "上班打卡成功",
+                    PunchType.ClockOut => "下班打卡成功",
+                    _                  => "午间打卡成功"
+                },
+                PunchTime = punchTime
+            };
+        }
+
         // ── 确定这次打卡应该归到哪一天的考勤记录（workDate）──
         // 跨天（夜班）班次是"18:00 上班、次日凌晨下班"，打下班卡时日历已经翻到第二天了：
         // 不能直接拿"打卡这一刻的日历日期"去找/建记录，否则会把下班时间分裂成单独一条新记录，
@@ -136,9 +160,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (!locationValid)
                 return new PunchResponseDto { Success = false, Message = locationMessage! };
         }
-
-        // 打卡时间精确到分钟（把秒抹掉）
-        var punchTime = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0);
 
         // 取 workDate 那天的排班，进而拿到班次（用来判断迟到/早退/加班）
         var assignment = await GetShiftAssignmentAsync(userId, workDate);
@@ -384,15 +405,21 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         shift is { IsCrossDay: true }
         && punchTime < workDate.ToDateTime(shift.WorkStartTime).AddHours(-CrossDayClockInEarlyHours);
 
-    /// <summary>凌晨这次上班卡，是不是"昨天那个还没打上班卡的跨天夜班"很晚才想起来打的：昨天排的是跨天班次、
+    /// <summary>这次上班卡，是不是"昨天那个还没打上班卡的跨天夜班"很晚才想起来打的：昨天排的是跨天班次、
     /// 一次卡都没打（不是"打了上班卡还没打下班卡"那种续接场景，那种走 <see cref="IsWithinNightCarryOver"/>），
-    /// 且现在还没超过昨晚班次的下班时间。是的话应该算成昨天那班很晚的上班卡（记一次很晚的迟到），不能被"打得太早"
-    /// 的规则拦下——那条规则比对的是"今天晚上"的班次，对完全没打卡、凌晨才想起来打的人来说答非所问
-    /// （2026-09-29 反馈：员工被提示"最早 14:30 起可以打上班卡"，其实他是想给已经开始几小时的昨晚那班打卡）。</summary>
+    /// 且现在还在昨晚班次允许续接的时间窗内（跟 <see cref="IsWithinNightCarryOver"/> 用同一个
+    /// <see cref="NightShiftCarryOverHours"/> 宽限期，而不是卡死在班次应下班时间那一刻）。是的话应该算成昨天那班
+    /// 很晚的上班卡（记一次很晚的迟到），不能被"打得太早"的规则拦下——那条规则比对的是"今天晚上"的班次，对完全
+    /// 没打卡、很晚才想起来打的人来说答非所问（2026-09-29 反馈：员工被提示"最早 14:30 起可以打上班卡"，其实他是
+    /// 想给已经开始几小时的昨晚那班打卡）。★ 宽限期以前卡在"班次应下班时间"那一刻就截止，比"已经打了上班卡、
+    /// 只是还没打下班卡"这种记录能续接的时间窗（下班时间之后还有 6 小时宽限）更短：一次卡都没打的员工，如果
+    /// 直到快下班、甚至下班后一小会儿才想起来打第一次卡（这种情况下班卡本身也没有），会掉进这段窗口不一致的
+    /// 空档，被拿"今晚"的班次去判断"打得太早"，明明是补昨晚的卡却提示要等到下午才能打（2026-09-30 反馈：
+    /// 晚班员工缺了上班卡，后面的午间打卡和下班打卡都打不了）。</summary>
     public static bool IsVeryLateClockInForYesterdayShift(DateOnly yesterday, ShiftSchedule? yesterdayShift, DateTime? yesterdayClockIn, DateTime punchTime) =>
         yesterdayShift is { IsCrossDay: true }
         && yesterdayClockIn is null
-        && punchTime <= yesterday.ToDateTime(yesterdayShift.WorkEndTime).AddDays(1);
+        && punchTime <= yesterday.ToDateTime(yesterdayShift.WorkEndTime).AddDays(1).AddHours(NightShiftCarryOverHours);
 
     /// <inheritdoc />
     public async Task<string?> GetClockInRejectionAsync(int userId, DateTime now)
