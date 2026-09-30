@@ -153,11 +153,14 @@ public class ZKDeviceSyncService(
             {
                 workDate = yesterday;
             }
-            // 夜班刚打完下班卡、几分钟内又刷了一次（重复刷脸）：仍归昨天，后面会按"取更晚"更新下班时间，
-            // 不然第二次会落到今天成为一条凭空的上班卡（休息日还会多出 1 天出勤 + 1 次缺卡）
+            // 刚打完下班卡、几分钟内又刷了一次（重复刷脸）：仍归昨天，后面会按"取更晚"更新下班时间，
+            // 不然第二次会落到今天成为一条凭空的上班卡（休息日还会多出 1 天出勤 + 1 次缺卡）。
+            // 不能只认"昨天是跨天班次"：白班/没排班的人加班过零点才下班，下班卡本身已经打在零点之后，
+            // 同样要续到昨天，不然会把今天真正的迟到分钟数盖掉、工时多算（2026-09-30 复核发现）
             else if (recordMap.TryGetValue((uid, yesterday), out var yRec)
                      && yRec.ClockOutTime is { } yOut && r.Time >= yOut && r.Time - yOut <= TimeSpan.FromMinutes(30)
-                     && shiftByUserDate.TryGetValue((uid, yesterday), out var yShift) && yShift is { IsCrossDay: true })
+                     && (DateOnly.FromDateTime(yOut) > yesterday
+                         || (shiftByUserDate.TryGetValue((uid, yesterday), out var yShift) && yShift is { IsCrossDay: true })))
             {
                 workDate = yesterday;
             }

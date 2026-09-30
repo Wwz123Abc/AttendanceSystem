@@ -123,14 +123,19 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             }
             else
             {
-                // 昨天那条跨天夜班记录已经关闭（下班卡已经打过了）：同一次下班/午间打卡的重复提交如果跨了分钟
+                // 昨天那条记录已经关闭（下班卡已经打过了）：同一次下班/午间打卡的重复提交如果跨了分钟
                 // （开头的去重只挡同一分钟内的），会因为这里查不到"还开着"的候选记录而退化成今天的打卡，
                 // 把昨天的下班时间错误地写进今天的新记录——跟考勤机同步那边"30 分钟内重复刷仍归昨天"用同一个
                 // 口径兜底（2026-09-30 复核反馈：李杰那次事故如果两次请求刚好跨分钟，这里之前接不住）
                 var closed = await db.AttendanceRecords.FirstOrDefaultAsync(r =>
                     r.UserId == userId && r.WorkDate == yesterday && r.ClockOutTime != null);
+                // 不能只认"昨天是跨天班次"：白班/没排班的人加班过零点才下班（IsPostMidnightClockOutOfDayShift
+                // 管的那种），下班卡本身就已经打在零点之后，几分钟内的重复刷卡同样要续到昨天，不然会把今天
+                // 真正的迟到分钟数盖掉、工时多算（2026-09-30 复核发现：白班加班到 00:40，考勤机连刷两次，
+                // 第二次被当成今天的上班卡，今天 09:10 真正到岗反而被记成午间卡）
                 if (closed?.ClockOutTime is { } yOut && now >= yOut && now - yOut <= TimeSpan.FromMinutes(RepeatAfterClockOutMinutes)
-                    && (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule is { IsCrossDay: true })
+                    && (DateOnly.FromDateTime(yOut) > yesterday
+                        || (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule is { IsCrossDay: true }))
                 {
                     workDate            = yesterday;
                     openYesterdayRecord = closed;
@@ -435,8 +440,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 今天班次自己"可以开始打上班卡"的时刻（今天上班时间往前 <see cref="CrossDayClockInEarlyHours"/> 小时），
     /// 就优先算今天的、不再追认成昨天的——不然昨天请了全天假/一次卡都没打时，今天正常的上班卡只要恰好落在
     /// 延长后的 6 小时宽限窗口里，就会被错误地记到昨天的请假记录上（2026-09-30 复核反馈：一次弄乱两天的记录，
-    /// 迟到分钟数还会算出几百甚至上千的离谱数字，进报表）。</summary>
-    public static bool IsVeryLateClockInForYesterdayShift(DateOnly yesterday, ShiftSchedule? yesterdayShift, DateTime? yesterdayClockIn, DateTime punchTime, ShiftSchedule? todayShift = null)
+    /// 迟到分钟数还会算出几百甚至上千的离谱数字，进报表）。
+    /// ★ 这个参数没有默认值：调用方必须显式传"今天排的是什么班次"（没排班传 null），不能让编译器悄悄放过
+    /// 一个漏传的调用点，退回到没考虑"今天"这一侧的旧判断（2026-09-30 复核建议）。</summary>
+    public static bool IsVeryLateClockInForYesterdayShift(DateOnly yesterday, ShiftSchedule? yesterdayShift, DateTime? yesterdayClockIn, DateTime punchTime, ShiftSchedule? todayShift)
     {
         if (yesterdayShift is not { IsCrossDay: true } || yesterdayClockIn is not null) return false;
         if (todayShift is not null
@@ -455,12 +462,15 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
         var yesterday = today.AddDays(-1);
 
-        // ① 夜班刚打完下班卡又点了一次：昨天那条记录已经有下班卡、且就在刚刚
+        // ① 刚打完下班卡又点了一次：昨天那条记录已经有下班卡、且就在刚刚——不能只认"昨天是跨天班次"，
+        // 白班/没排班的人加班过零点才下班（下班卡本身已经打在零点之后）同样要拦，理由跟下面
+        // PunchCoreAsync 的同名兜底一致
         var yOut = await db.AttendanceRecords
             .Where(r => r.UserId == userId && r.WorkDate == yesterday && r.ClockOutTime != null)
             .Select(r => r.ClockOutTime).FirstOrDefaultAsync();
         if (yOut is { } outTime && now >= outTime && now - outTime <= TimeSpan.FromMinutes(RepeatAfterClockOutMinutes)
-            && (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule is { IsCrossDay: true })
+            && (DateOnly.FromDateTime(outTime) > yesterday
+                || (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule is { IsCrossDay: true }))
             return $"您刚刚（{outTime:HH:mm}）已经打过下班卡，无需重复打卡";
 
         // todayShift 提前到这里查：①.5 判断"该不该追认成昨天很晚的上班卡"时，也要知道今天自己是不是也排了班、

@@ -270,10 +270,10 @@ public class Round11FixTests : IDisposable
         // 还有 6 小时宽限，见 IsWithinNightCarryOver）更短——一次卡都没打、拖到快下班/下班后一小会儿才想起来
         // 打第一次卡的人，会掉进这段空档，被拿"今晚"的班次误判成"打得太早"。
         var shift = NightShift();   // 周一夜班，周二 08:00 下班
-        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(8, 0))));    // 正好下班时间：以前、现在都算
-        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(14, 0))));   // 下班后6小时内：以前不算，现在算
-        Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(14, 1))));  // 超过6小时宽限：仍然不算
-        Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, Mon.ToDateTime(new TimeOnly(20, 0)), Tue.ToDateTime(new TimeOnly(9, 0))));   // 已经打过上班卡的不归这条管
+        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(8, 0)), null));    // 正好下班时间：以前、现在都算
+        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(14, 0)), null));   // 下班后6小时内：以前不算，现在算
+        Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(14, 1)), null));  // 超过6小时宽限：仍然不算
+        Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, Mon.ToDateTime(new TimeOnly(20, 0)), Tue.ToDateTime(new TimeOnly(9, 0)), null));   // 已经打过上班卡的不归这条管
     }
 
     [Fact]
@@ -284,7 +284,7 @@ public class Round11FixTests : IDisposable
         // 今天正常的上班卡会被错误地记到昨天的（请假）记录上，一次弄乱两天。
         var yesterdayShift = NightShift();   // 周一夜班，周二 08:00 下班
         var todayShift      = DayShift();    // 周二白班，08:30 上班，最早 02:30 起可以打卡
-        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, yesterdayShift, null, Tue.ToDateTime(new TimeOnly(8, 20))));                         // 不传今天的班次：还是按旧口径算昨天
+        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, yesterdayShift, null, Tue.ToDateTime(new TimeOnly(8, 20)), null));                    // 今天没排班（传 null）：还是按旧口径算昨天
         Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, yesterdayShift, null, Tue.ToDateTime(new TimeOnly(8, 20)), todayShift));            // 传了今天的班次：已经到了今天可以打卡的时刻，归今天
         Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, yesterdayShift, null, Tue.ToDateTime(new TimeOnly(2, 29)), todayShift));             // 还没到今天可以打卡的时刻（02:30之前）：仍归昨天
     }
@@ -383,6 +383,70 @@ public class Round11FixTests : IDisposable
         Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == today));   // 不会凭空多出"今天"的记录
         var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
         Assert.True(rec.ClockOutTime >= firstClockOut);   // 下班时间按"取更晚"更新，仍在昨天这条记录上
+    }
+
+    [Fact]
+    public async Task 白班过零点下班_重复提交跨了分钟_仍归昨天_不会误判成今天的上班卡()
+    {
+        // 2026-09-30 复核发现：§7.30 的兜底只认"昨天是跨天班次"。白班/没排班的人加班过零点下班
+        // （下班卡本身已经打在零点之后），几分钟内重复提交（网络重试/连点）如果跨了分钟，之前会被误判成
+        // 今天的上班卡，把今天真正的迟到分钟数、工时都算错——这里验证跨了分钟的重复提交仍然续到昨天。
+        var today     = DateOnly.FromDateTime(DateTime.Today);
+        var yesterday = today.AddDays(-1);
+        int uid;
+        DateTime firstClockOut;
+        using (var db = CreateContext())
+        {
+            var group = new AttendanceGroup { GroupName = "白班过零点重复下班组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            var shift = new ShiftSchedule
+            {
+                ShiftName = "白班", AttendanceGroupId = group.Id, WorkStartTime = new TimeOnly(8, 30), WorkEndTime = new TimeOnly(17, 30),
+                IsCrossDay = false, LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 8, RestDaysOfWeek = ""
+            };
+            db.ShiftSchedules.Add(shift);
+            var user = new User { EmployeeNo = "N16", RealName = "白班过零点重复下班员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
+            db.Users.Add(user);
+            db.SaveChanges();
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = yesterday, ShiftScheduleId = shift.Id });
+            // 模拟"第一次下班打卡请求"（加班过零点）在上一分钟已经把昨天关闭了——下班时间本身已经过了零点
+            firstClockOut = new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.Now.Day, DateTime.Now.Hour, DateTime.Now.Minute, 0).AddMinutes(-1);
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = user.Id, WorkDate = yesterday, ClockInTime = yesterday.ToDateTime(new TimeOnly(8, 25)),
+                ClockOutTime = firstClockOut, AttendanceStatus = AttendanceStatus.Normal
+            });
+            await db.SaveChangesAsync();
+            uid = user.Id;
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var second = await svc.PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockOut }, skipLocationCheck: true);
+            Assert.True(second.Success, second.Message);
+        }
+        using var check = CreateContext();
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == today));   // 不会凭空多出"今天"的记录（以前白班不是跨天班次，这里接不住）
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
+        Assert.True(rec.ClockOutTime >= firstClockOut);
+    }
+
+    [Fact]
+    public async Task 白班加班过零点_考勤机连刷两次_不会盖掉第二天真正的迟到()
+    {
+        // 2026-09-30 复核发现的同一个问题，走考勤机（ZKDeviceSyncService）同步这条路径：
+        // 加班到 00:40 下班，几分钟内连刷第二次（考勤机上很常见），第二次以前会被误判成今天的上班卡，
+        // 导致第二天 09:10 真正到岗被当成"午间打卡"，迟到 40 分钟没记上、工时也多算了。
+        var uid = SeedDayDeviceWorld();
+        await SyncDayAsync(Tue.ToDateTime(new TimeOnly(0, 40)), Tue.ToDateTime(new TimeOnly(0, 45)), Tue.ToDateTime(new TimeOnly(9, 10)));
+
+        using var check = CreateContext();
+        var mon = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(0, 45)), mon.ClockOutTime);   // 两次重复刷卡取更晚的一次，仍在周一
+        var tue = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(Tue.ToDateTime(new TimeOnly(9, 10)), tue.ClockInTime);    // 09:10 才是周二真正的上班卡
+        Assert.Equal(40, tue.LateMinutes);                                     // 迟到40分钟没有被盖掉
     }
 
     [Fact]
