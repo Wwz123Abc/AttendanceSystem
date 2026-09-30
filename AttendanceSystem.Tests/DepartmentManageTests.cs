@@ -72,6 +72,35 @@ public class DepartmentManageTests : IDisposable
         Assert.Equal(deptChild.Id, (await check.Users.AsNoTracking().SingleAsync(u => u.Id == employee.Id)).DepartmentId);   // 员工的部门没被清空
     }
 
+    // 自我复核发现（不在第三方审查清单里）：ZKDeviceManage.cshtml.cs 里"受限管理员只能看自己范围内的设备"
+    // 也是用 DepartmentId != null 过滤的，删除部门后设备被外键自动置空成"未归类"，跟员工是同一类问题。
+    [Fact]
+    public async Task 分公司管理员_删除还有考勤机的部门_被拒_部门和设备都不变()
+    {
+        using var db = CreateContext();
+        var deptRoot = new Department { DeptName = "分公司A", IsActive = true };
+        var deptChild = new Department { DeptName = "分公司A-一部", IsActive = true };
+        db.Departments.AddRange(deptRoot, deptChild);
+        await db.SaveChangesAsync();
+        deptChild.ParentId = deptRoot.Id;
+        var branchAdmin = new User { EmployeeNo = "BR1", RealName = "分公司A管理员", PasswordHash = "x", IsActive = true, Role = UserRole.Admin, ScopedDepartmentId = deptRoot.Id };
+        db.Users.Add(branchAdmin);
+        var device = new ZKDevice { SN = "DEV001", DepartmentId = deptChild.Id };
+        db.ZKDevices.Add(device);
+        await db.SaveChangesAsync();
+
+        var cu = new CurrentUser { UserId = branchAdmin.Id, Role = UserRole.Admin, ScopedDepartmentId = deptRoot.Id };
+        var page = PageFor(db, cu);
+        page.DeleteIds = deptChild.Id.ToString();
+
+        await page.OnPostDeleteAsync();
+
+        Assert.Contains("还有考勤机", page.ErrorMessage);
+        using var check = CreateContext();
+        Assert.True(await check.Departments.AnyAsync(d => d.Id == deptChild.Id));            // 部门没被删
+        Assert.Equal(deptChild.Id, (await check.ZKDevices.AsNoTracking().SingleAsync(d => d.Id == device.Id)).DepartmentId);   // 设备的归属部门没被清空
+    }
+
     [Fact]
     public async Task 分公司管理员_删除没有员工的部门_正常成功()
     {

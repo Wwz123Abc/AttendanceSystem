@@ -270,6 +270,12 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
             if (visibleIds is not null
                 && await db.Users.AnyAsync(u => u.DepartmentId != null && ids.Contains(u.DepartmentId.Value)))
                 throw new InvalidOperationException("要删除的部门下还有员工，请先把员工调到别的部门再删除（否则他们会掉出你的管理范围）");
+            // 受限管理员：考勤机跟员工是同一个道理——ZKDeviceManage.cshtml.cs 里"受限管理员只能看自己范围内的设备"
+            // 是用 d.DepartmentId != null 过滤的，部门删除后设备自动置空成"未归类"，同样会从他的管理范围里消失
+            // （自我复核发现，跟第 14 轮审查发现的员工那条是同一类问题，第三方审查没提到设备这一条）
+            if (visibleIds is not null
+                && await db.ZKDevices.AnyAsync(dv => dv.DepartmentId != null && ids.Contains(dv.DepartmentId.Value)))
+                throw new InvalidOperationException("要删除的部门下还有考勤机，请先把考勤机调到别的部门再删除（否则它们会掉出你的管理范围）");
 
             var depts = await db.Departments.Where(d => ids.Contains(d.Id)).ToListAsync();
 
