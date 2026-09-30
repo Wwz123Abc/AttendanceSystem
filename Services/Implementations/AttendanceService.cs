@@ -121,10 +121,26 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     openYesterdayRecord = candidate;
                 }
             }
+            else
+            {
+                // 昨天那条跨天夜班记录已经关闭（下班卡已经打过了）：同一次下班/午间打卡的重复提交如果跨了分钟
+                // （开头的去重只挡同一分钟内的），会因为这里查不到"还开着"的候选记录而退化成今天的打卡，
+                // 把昨天的下班时间错误地写进今天的新记录——跟考勤机同步那边"30 分钟内重复刷仍归昨天"用同一个
+                // 口径兜底（2026-09-30 复核反馈：李杰那次事故如果两次请求刚好跨分钟，这里之前接不住）
+                var closed = await db.AttendanceRecords.FirstOrDefaultAsync(r =>
+                    r.UserId == userId && r.WorkDate == yesterday && r.ClockOutTime != null);
+                if (closed?.ClockOutTime is { } yOut && now >= yOut && now - yOut <= TimeSpan.FromMinutes(RepeatAfterClockOutMinutes)
+                    && (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule is { IsCrossDay: true })
+                {
+                    workDate            = yesterday;
+                    openYesterdayRecord = closed;
+                }
+            }
         }
         // 上班卡：昨天排的是跨天夜班、但一次卡都没打（不是"打了上班卡还没下班"那种，那种是上面 ClockOut 分支管的），
-        // 现在还没超过昨晚班次的下班时间——这是很晚才想起来给昨晚那班打上班卡，应该算成昨天那班很晚的上班卡（记很晚的迟到），
-        // 不能把它当成"今天全新的一天"（那样会拿明天晚上才开始的班次去比对，误判成"打得太早"，2026-09-29 反馈）
+        // 现在还在昨晚那班的续接宽限期内、且还没到今天自己班次可以打卡的时刻——这是很晚才想起来给昨晚那班打上班卡，
+        // 应该算成昨天那班很晚的上班卡（记很晚的迟到），不能把它当成"今天全新的一天"
+        // （那样会拿明天晚上才开始的班次去比对，误判成"打得太早"，2026-09-29 反馈）
         else if (request.PunchType == PunchType.ClockIn)
         {
             var yesterday = today.AddDays(-1);
@@ -132,7 +148,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (yesterdayAssignment?.ShiftSchedule is { IsCrossDay: true } ys)
             {
                 var yesterdayRecord = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == yesterday);
-                if (IsVeryLateClockInForYesterdayShift(yesterday, ys, yesterdayRecord?.ClockInTime, now))
+                var todayShiftForRecovery = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
+                if (IsVeryLateClockInForYesterdayShift(yesterday, ys, yesterdayRecord?.ClockInTime, now, todayShiftForRecovery))
                 {
                     workDate            = yesterday;
                     openYesterdayRecord = yesterdayRecord;
@@ -411,15 +428,22 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// <see cref="NightShiftCarryOverHours"/> 宽限期，而不是卡死在班次应下班时间那一刻）。是的话应该算成昨天那班
     /// 很晚的上班卡（记一次很晚的迟到），不能被"打得太早"的规则拦下——那条规则比对的是"今天晚上"的班次，对完全
     /// 没打卡、很晚才想起来打的人来说答非所问（2026-09-29 反馈：员工被提示"最早 14:30 起可以打上班卡"，其实他是
-    /// 想给已经开始几小时的昨晚那班打卡）。★ 宽限期以前卡在"班次应下班时间"那一刻就截止，比"已经打了上班卡、
-    /// 只是还没打下班卡"这种记录能续接的时间窗（下班时间之后还有 6 小时宽限）更短：一次卡都没打的员工，如果
-    /// 直到快下班、甚至下班后一小会儿才想起来打第一次卡（这种情况下班卡本身也没有），会掉进这段窗口不一致的
-    /// 空档，被拿"今晚"的班次去判断"打得太早"，明明是补昨晚的卡却提示要等到下午才能打（2026-09-30 反馈：
-    /// 晚班员工缺了上班卡，后面的午间打卡和下班打卡都打不了）。</summary>
-    public static bool IsVeryLateClockInForYesterdayShift(DateOnly yesterday, ShiftSchedule? yesterdayShift, DateTime? yesterdayClockIn, DateTime punchTime) =>
-        yesterdayShift is { IsCrossDay: true }
-        && yesterdayClockIn is null
-        && punchTime <= yesterday.ToDateTime(yesterdayShift.WorkEndTime).AddDays(1).AddHours(NightShiftCarryOverHours);
+    /// 想给已经开始几小时的昨晚那班打卡）。宽限期跟"已经打了上班卡、只是还没打下班卡"这种记录能续接的时间窗
+    /// （下班时间之后还有 6 小时宽限）统一，不再卡死在班次应下班时间那一刻（2026-09-30 反馈：晚班员工缺了上班卡，
+    /// 后面的午间打卡和下班打卡都打不了）。
+    /// ★ <paramref name="todayShift"/>：今天如果自己也排了班（继续上夜班、或轮换到别的班次），且这次打卡已经到了
+    /// 今天班次自己"可以开始打上班卡"的时刻（今天上班时间往前 <see cref="CrossDayClockInEarlyHours"/> 小时），
+    /// 就优先算今天的、不再追认成昨天的——不然昨天请了全天假/一次卡都没打时，今天正常的上班卡只要恰好落在
+    /// 延长后的 6 小时宽限窗口里，就会被错误地记到昨天的请假记录上（2026-09-30 复核反馈：一次弄乱两天的记录，
+    /// 迟到分钟数还会算出几百甚至上千的离谱数字，进报表）。</summary>
+    public static bool IsVeryLateClockInForYesterdayShift(DateOnly yesterday, ShiftSchedule? yesterdayShift, DateTime? yesterdayClockIn, DateTime punchTime, ShiftSchedule? todayShift = null)
+    {
+        if (yesterdayShift is not { IsCrossDay: true } || yesterdayClockIn is not null) return false;
+        if (todayShift is not null
+            && punchTime >= yesterday.AddDays(1).ToDateTime(todayShift.WorkStartTime).AddHours(-CrossDayClockInEarlyHours))
+            return false;
+        return punchTime <= yesterday.ToDateTime(yesterdayShift.WorkEndTime).AddDays(1).AddHours(NightShiftCarryOverHours);
+    }
 
     /// <inheritdoc />
     public async Task<string?> GetClockInRejectionAsync(int userId, DateTime now)
@@ -439,19 +463,24 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             && (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule is { IsCrossDay: true })
             return $"您刚刚（{outTime:HH:mm}）已经打过下班卡，无需重复打卡";
 
-        // ①.5 昨晚那班一次卡都没打、现在还没到昨晚班次的下班时间：当成很晚的上班卡放行，不当"打得太早"
+        // todayShift 提前到这里查：①.5 判断"该不该追认成昨天很晚的上班卡"时，也要知道今天自己是不是也排了班、
+        // 这次打卡是不是已经到了今天班次自己可以打卡的时刻，不然昨天请了全天假/一次卡都没打时，今天正常的
+        // 上班卡只要落在延长后的宽限窗口里就会被错误地记到昨天（2026-09-30 复核反馈）
+        var todayShift = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
+
+        // ①.5 昨晚那班一次卡都没打、现在还在续接宽限期内、且还没到今天自己班次可以打卡的时刻：
+        // 当成很晚的上班卡放行，不当"打得太早"
         var yesterdayAssignment = await GetShiftAssignmentAsync(userId, yesterday);
         if (yesterdayAssignment?.ShiftSchedule is { IsCrossDay: true } ys)
         {
             var yesterdayClockIn = await db.AttendanceRecords
                 .Where(r => r.UserId == userId && r.WorkDate == yesterday)
                 .Select(r => r.ClockInTime).FirstOrDefaultAsync();
-            if (IsVeryLateClockInForYesterdayShift(yesterday, ys, yesterdayClockIn, now))
+            if (IsVeryLateClockInForYesterdayShift(yesterday, ys, yesterdayClockIn, now, todayShift))
                 return null;
         }
 
         // ② 跨天班次的上班卡不能打得离应上班时间太早
-        var todayShift = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
         if (IsTooEarlyForCrossDayClockIn(today, now, todayShift))
         {
             var earliest = today.ToDateTime(todayShift!.WorkStartTime).AddHours(-CrossDayClockInEarlyHours);

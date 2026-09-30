@@ -277,6 +277,115 @@ public class Round11FixTests : IDisposable
     }
 
     [Fact]
+    public void 一次卡都没打的很晚上班卡_今天自己也排了班且已到打卡时刻_优先归今天不抢今天的记录()
+    {
+        // 2026-09-30 复核反馈：延长宽限期后，如果"今天"自己也排了班（哪怕是完全不同的班次，比如轮班），
+        // 这次打卡已经到了今天班次自己可以打卡的时刻，就不该再被追认成昨天的——不然昨天请假/一次卡都没打时，
+        // 今天正常的上班卡会被错误地记到昨天的（请假）记录上，一次弄乱两天。
+        var yesterdayShift = NightShift();   // 周一夜班，周二 08:00 下班
+        var todayShift      = DayShift();    // 周二白班，08:30 上班，最早 02:30 起可以打卡
+        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, yesterdayShift, null, Tue.ToDateTime(new TimeOnly(8, 20))));                         // 不传今天的班次：还是按旧口径算昨天
+        Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, yesterdayShift, null, Tue.ToDateTime(new TimeOnly(8, 20)), todayShift));            // 传了今天的班次：已经到了今天可以打卡的时刻，归今天
+        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, yesterdayShift, null, Tue.ToDateTime(new TimeOnly(2, 29)), todayShift));             // 还没到今天可以打卡的时刻（02:30之前）：仍归昨天
+    }
+
+    [Fact]
+    public async Task 昨晚夜班请假一次卡都没打_今天新排班次打卡_归今天不误写到昨天的请假记录()
+    {
+        var today     = DateOnly.FromDateTime(DateTime.Today);
+        var yesterday = today.AddDays(-1);
+        int uid;
+        using (var db = CreateContext())
+        {
+            var group = new AttendanceGroup { GroupName = "跨天误判组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            // 昨晚夜班（应下班时间设成"现在往前1小时"，落在延长后的6小时宽限窗口里）；
+            // 今天是完全不同的白班，应上班时间就设成"现在这一刻"，保证这次打卡已经到了今天可以打卡的时刻
+            var yesterdayShift = new ShiftSchedule
+            {
+                ShiftName = "夜班", AttendanceGroupId = group.Id, WorkStartTime = new TimeOnly(20, 0), WorkEndTime = TimeOnly.FromDateTime(DateTime.Now.AddHours(-1)),
+                IsCrossDay = true, LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 8, RestDaysOfWeek = ""
+            };
+            var todayShift = new ShiftSchedule
+            {
+                ShiftName = "白班", AttendanceGroupId = group.Id, WorkStartTime = TimeOnly.FromDateTime(DateTime.Now), WorkEndTime = new TimeOnly(18, 0),
+                IsCrossDay = false, LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 8, RestDaysOfWeek = ""
+            };
+            db.ShiftSchedules.AddRange(yesterdayShift, todayShift);
+            var user = new User { EmployeeNo = "N14", RealName = "跨天误判员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
+            db.Users.Add(user);
+            db.SaveChanges();
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = yesterday, ShiftScheduleId = yesterdayShift.Id });
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = today, ShiftScheduleId = todayShift.Id });
+            // 昨晚请了全天假：记录存在，但没有上班卡（跟审批通过时提前建空记录的行为一致）
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = user.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.OnLeave, LeaveHours = 8 });
+            await db.SaveChangesAsync();
+            uid = user.Id;
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var result = await svc.PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockIn }, skipLocationCheck: true);
+            Assert.True(result.Success, result.Message);
+        }
+        using var check = CreateContext();
+        var todayRec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == today);
+        Assert.NotNull(todayRec.ClockInTime);
+        var yesterdayRec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
+        Assert.Null(yesterdayRec.ClockInTime);                              // 昨天的请假记录没有被误写上班卡
+        Assert.Equal(AttendanceStatus.OnLeave, yesterdayRec.AttendanceStatus);   // 请假状态也没被顺手改掉
+    }
+
+    [Fact]
+    public async Task 夜班下班卡重复提交跨了分钟_第二次仍归昨天_不凭空多出今天的记录()
+    {
+        // 2026-09-30 复核反馈：开头的去重只挡"同一分钟"的重复提交。如果两次请求（网络重试/连点）
+        // 刚好跨了一分钟，第二次会因为"昨天那条记录已经关闭"而查不到候选记录，退化成算作今天的打卡，
+        // 把昨天的下班时间错误地写进今天的新记录——这里直接模拟"第一次请求已经在上一分钟把昨天关闭了"，
+        // 验证第二次（这一分钟）请求仍然正确续到昨天，而不是凭空多出一条今天的记录。
+        var today     = DateOnly.FromDateTime(DateTime.Today);
+        var yesterday = today.AddDays(-1);
+        int uid;
+        DateTime firstClockOut;
+        using (var db = CreateContext())
+        {
+            var group = new AttendanceGroup { GroupName = "跨分钟重复下班组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            var shift = new ShiftSchedule
+            {
+                ShiftName = "夜班", AttendanceGroupId = group.Id, WorkStartTime = new TimeOnly(20, 0), WorkEndTime = new TimeOnly(5, 30),
+                IsCrossDay = true, LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 8, RestDaysOfWeek = ""
+            };
+            db.ShiftSchedules.Add(shift);
+            var user = new User { EmployeeNo = "N15", RealName = "跨分钟重复下班员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
+            db.Users.Add(user);
+            db.SaveChanges();
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = yesterday, ShiftScheduleId = shift.Id });
+            // 模拟"第一次下班打卡请求"在上一分钟已经把昨天这条记录关闭了
+            firstClockOut = new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.Now.Day, DateTime.Now.Hour, DateTime.Now.Minute, 0).AddMinutes(-1);
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = user.Id, WorkDate = yesterday, ClockInTime = yesterday.ToDateTime(new TimeOnly(20, 0)),
+                ClockOutTime = firstClockOut, AttendanceStatus = AttendanceStatus.Normal
+            });
+            await db.SaveChangesAsync();
+            uid = user.Id;
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var second = await svc.PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockOut }, skipLocationCheck: true);
+            Assert.True(second.Success, second.Message);
+        }
+        using var check = CreateContext();
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == today));   // 不会凭空多出"今天"的记录
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
+        Assert.True(rec.ClockOutTime >= firstClockOut);   // 下班时间按"取更晚"更新，仍在昨天这条记录上
+    }
+
+    [Fact]
     public async Task 晚班一次卡都没打_拖到下班时间后几小时才打第一次卡_仍记到昨天那班_不再被误判成打得太早()
     {
         var today     = DateOnly.FromDateTime(DateTime.Today);

@@ -173,6 +173,8 @@ public class ApplySubmitModel(
                 return "请假时间格式不正确";
             if (start < DateTime.Now.AddHours(-24))
                 return "请假开始时间最早只能选到现在往前推24小时以内";
+            if (start > DateTime.Now.AddMonths(ApprovalService.MaxAdvanceRequestMonths))
+                return $"请假开始时间最多只能提前 {ApprovalService.MaxAdvanceRequestMonths} 个月申请";
             if (end <= start)
                 return "请假结束时间必须晚于开始时间";
             if ((end - start).TotalDays > ApprovalService.MaxLeaveOrTripSpanDays)
@@ -234,8 +236,10 @@ public class ApplySubmitModel(
                 return "请选择出差的开始和结束时间";
             if (!DateTime.TryParse(BusinessTripStart, out var start) || !DateTime.TryParse(BusinessTripEnd, out var end))
                 return "出差时间格式不正确";
-            if (start < DateTime.Now)
-                return "出差开始时间不能早于现在";
+            if (start < DateTime.Today)
+                return "出差开始时间不能早于今天0点";
+            if (start > DateTime.Now.AddMonths(ApprovalService.MaxAdvanceRequestMonths))
+                return $"出差开始时间最多只能提前 {ApprovalService.MaxAdvanceRequestMonths} 个月申请";
             if (end <= start)
                 return "出差结束时间必须晚于开始时间";
             if ((end - start).TotalDays > ApprovalService.MaxLeaveOrTripSpanDays)
