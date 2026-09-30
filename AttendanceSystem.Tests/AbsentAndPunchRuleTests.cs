@@ -295,4 +295,109 @@ public class AbsentAndPunchRuleTests : IDisposable
         Assert.Equal(0, sums.Single(m => m.User.EmployeeNo == "A4").ExpectedWorkdays);
         Assert.Equal(report.Rows.Single(r => r.EmployeeNo == "N5").ExpectedWorkdays, sums.Single(m => m.User.EmployeeNo == "N5").ExpectedWorkdays);
     }
+
+    // ── 待审批提醒（每 4 小时一次，2026-09-30 新增）────────────────────────
+
+    private async Task RunRemindPendingApprovalsAsync()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<AttendanceDbContext>(o => o.UseSqlite(_connection));
+        using var provider = services.BuildServiceProvider();
+        var svc = new AttendanceBackgroundService(provider.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<AttendanceBackgroundService>.Instance);
+        var method = typeof(AttendanceBackgroundService).GetMethod("RemindPendingApprovalsAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)method.Invoke(svc, [])!;
+    }
+
+    [Fact]
+    public async Task 待审批提醒_还没处理的申请_给当前该处理的人发提醒()
+    {
+        int approverId, requestId;
+        using (var db = CreateContext())
+        {
+            var applicant = U("A6", "申请人甲");
+            var approver  = U("S1", "审批人甲");
+            db.Users.AddRange(applicant, approver);
+            db.SaveChanges();
+            approverId = approver.Id;
+
+            var request = new ApprovalRequest
+            {
+                RequestNo = "QJ-RM-1", ApplicantUserId = applicant.Id, ApprovalType = ApprovalType.Leave,
+                ApprovalStatus = ApprovalStatus.Pending, LeaveStartTime = DateTime.Today, LeaveEndTime = DateTime.Today.AddHours(4)
+            };
+            db.ApprovalRequests.Add(request);
+            db.SaveChanges();
+            requestId = request.Id;
+            db.ApprovalSteps.Add(new ApprovalStep { ApprovalRequestId = requestId, ApproverUserId = approverId, StepOrder = 1, ApprovalStatus = ApprovalStatus.Pending });
+            db.SaveChanges();
+        }
+
+        await RunRemindPendingApprovalsAsync();
+
+        using var check = CreateContext();
+        var notif = await check.Notifications.SingleAsync(n => n.UserId == approverId && n.NotificationType == "ApprovalPending");
+        Assert.Equal(requestId, notif.RelatedId);
+        Assert.Contains("还未处理", notif.Content);
+    }
+
+    [Fact]
+    public async Task 待审批提醒_两级审批_只提醒当前轮到的一级_不提醒还没轮到的二级()
+    {
+        int approver1Id, approver2Id;
+        using (var db = CreateContext())
+        {
+            var applicant = U("A7", "申请人乙");
+            var approver1 = U("S2", "一级审批人");
+            var approver2 = U("S3", "二级审批人");
+            db.Users.AddRange(applicant, approver1, approver2);
+            db.SaveChanges();
+            approver1Id = approver1.Id; approver2Id = approver2.Id;
+
+            var request = new ApprovalRequest
+            {
+                RequestNo = "QJ-RM-2", ApplicantUserId = applicant.Id, ApprovalType = ApprovalType.Leave,
+                ApprovalStatus = ApprovalStatus.Pending, LeaveStartTime = DateTime.Today, LeaveEndTime = DateTime.Today.AddHours(4)
+            };
+            db.ApprovalRequests.Add(request);
+            db.SaveChanges();
+            db.ApprovalSteps.AddRange(
+                new ApprovalStep { ApprovalRequestId = request.Id, ApproverUserId = approver1Id, StepOrder = 1, ApprovalStatus = ApprovalStatus.Pending },
+                new ApprovalStep { ApprovalRequestId = request.Id, ApproverUserId = approver2Id, StepOrder = 2, ApprovalStatus = ApprovalStatus.Pending });
+            db.SaveChanges();
+        }
+
+        await RunRemindPendingApprovalsAsync();
+
+        using var check = CreateContext();
+        Assert.Equal(1, await check.Notifications.CountAsync(n => n.NotificationType == "ApprovalPending"));
+        Assert.True(await check.Notifications.AnyAsync(n => n.UserId == approver1Id));
+        Assert.False(await check.Notifications.AnyAsync(n => n.UserId == approver2Id));
+    }
+
+    [Fact]
+    public async Task 待审批提醒_已经审批通过的申请_不再提醒()
+    {
+        using (var db = CreateContext())
+        {
+            var applicant = U("A8", "申请人丙");
+            var approver  = U("S4", "审批人丙");
+            db.Users.AddRange(applicant, approver);
+            db.SaveChanges();
+            var request = new ApprovalRequest
+            {
+                RequestNo = "QJ-RM-3", ApplicantUserId = applicant.Id, ApprovalType = ApprovalType.Leave,
+                ApprovalStatus = ApprovalStatus.Approved, LeaveStartTime = DateTime.Today, LeaveEndTime = DateTime.Today.AddHours(4)
+            };
+            db.ApprovalRequests.Add(request);
+            db.SaveChanges();
+            db.ApprovalSteps.Add(new ApprovalStep { ApprovalRequestId = request.Id, ApproverUserId = approver.Id, StepOrder = 1, ApprovalStatus = ApprovalStatus.Approved, HandledAt = DateTime.Now });
+            db.SaveChanges();
+        }
+
+        await RunRemindPendingApprovalsAsync();
+
+        using var check = CreateContext();
+        Assert.Equal(0, await check.Notifications.CountAsync());
+    }
 }

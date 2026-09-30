@@ -18,8 +18,10 @@ namespace AttendanceSystem.Services.BackgroundServices;
 /// ● 每天 23:55-23:59：把当天没打卡的在职员工标记为旷工/未打卡；
 /// ● 每月 1-3 日：生成上一个月的考勤汇总（1 号 00:10 之后是首选时间点，留几分钟缓冲给设备重传/网络延迟；
 ///   如果 1 号那次因为异常/重启被错过，2、3 号任意时间都会自动补跑一次，不用等人工点"重新生成"）；
-/// ● 每天 03:00：清理考勤机相关的过期数据（已确认的命令记录、过期的考勤照片）。
-/// 用「上次执行日期」做记号，保证同一时间窗内只执行一次；这个记号只在对应任务真正跑成功之后才会更新，
+/// ● 每天 03:00：清理考勤机相关的过期数据（已确认的命令记录、过期的考勤照片）；
+/// ● 每隔 4 小时：给还没处理的待审批申请，往当前该处理的那个审批人再发一条提醒通知
+///   （管理员/文员登录页面提交后就容易忘，光靠提交那一刻发的一条通知很容易被日常消息淹没）。
+/// 用「上次执行时间」做记号，保证同一时间窗内只执行一次；这个记号只在对应任务真正跑成功之后才会更新，
 /// 半途异常不会被误记成"已完成"，下一分钟还会重试。
 /// </summary>
 public class AttendanceBackgroundService(
@@ -27,10 +29,11 @@ public class AttendanceBackgroundService(
     ILogger<AttendanceBackgroundService> logger)
     : BackgroundService
 {
-    // 记录三类任务“上次执行的时间”，避免在同一分钟窗口里重复跑
-    private DateTime _lastAbsentDate    = DateTime.MinValue;
-    private DateTime _lastSummaryDate   = DateTime.MinValue;
-    private DateTime _lastCleanupDate   = DateTime.MinValue;
+    // 记录几类任务"上次执行的时间"，避免在同一时间窗内重复跑
+    private DateTime _lastAbsentDate            = DateTime.MinValue;
+    private DateTime _lastSummaryDate           = DateTime.MinValue;
+    private DateTime _lastCleanupDate           = DateTime.MinValue;
+    private DateTime _lastApprovalReminderAt    = DateTime.MinValue;
 
     // 程序启动后这个方法一直在后台循环运行，直到程序关闭
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -88,6 +91,14 @@ public class AttendanceBackgroundService(
                     await CleanupZKDeviceDataAsync();
                     AgentRateLimiter.CleanupExpired();
                     _lastCleanupDate = now;
+                }
+
+                // 距上次提醒过去满 4 小时（程序刚启动、_lastApprovalReminderAt 还是最小值时，
+                // 差值必然超过 4 小时，所以启动后很快就会先跑一次，不用等真的攒够 4 小时）
+                if (now - _lastApprovalReminderAt >= TimeSpan.FromHours(4))
+                {
+                    await RemindPendingApprovalsAsync();
+                    _lastApprovalReminderAt = now;
                 }
             }
             catch (Exception ex)
@@ -309,6 +320,47 @@ public class AttendanceBackgroundService(
     ///    更早的没有查询价值。
     /// 保留天数和 Serilog 日志一致（30 天），不给运维增加新的心智负担。
     /// </summary>
+    /// <summary>
+    /// 给还没处理的待审批申请，往"当前轮到谁处理"那个审批人再发一条提醒通知。一张申请单可能配了多级
+    /// 审批，同一时刻只有一个节点是"轮到你了"（StepOrder 最小、还是待审批状态的那个），跟
+    /// ApprovalService.GetMyPendingApprovalsAsync 用的是同一套"当前节点"逻辑，避免提醒了还没轮到的
+    /// 后一级审批人。不区分"是不是超过了某个超时阈值"——这个任务本身每 4 小时才跑一次，跑起来就等于
+    /// "这张单又挂了至少 4 小时没人处理"，不需要再单独记一份"上次提醒时间"。
+    /// </summary>
+    private async Task RemindPendingApprovalsAsync()
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+
+        var openRequests = await db.ApprovalRequests
+            .Where(r => r.ApprovalStatus == ApprovalStatus.Pending || r.ApprovalStatus == ApprovalStatus.InProgress)
+            .Include(r => r.Applicant)
+            .Include(r => r.ApprovalSteps)
+            .ToListAsync();
+
+        var now = DateTime.Now;
+        foreach (var req in openRequests)
+        {
+            var currentStep = req.ApprovalSteps
+                .Where(s => s.ApprovalStatus == ApprovalStatus.Pending)
+                .OrderBy(s => s.StepOrder)
+                .FirstOrDefault();
+            if (currentStep is null) continue;   // 理论上不会发生：整单还是 Pending/InProgress 就一定有一个待处理节点，这里只是防御性判断
+
+            db.Notifications.Add(new Notification
+            {
+                UserId           = currentStep.ApproverUserId,
+                Title            = "审批提醒",
+                Content          = $"{req.Applicant.RealName} 的{req.ApprovalType.ToDisplayName()}申请（{req.RequestNo}）还未处理，请及时审批",
+                NotificationType = "ApprovalPending",
+                RelatedId        = req.Id,
+                CreatedAt        = now
+            });
+        }
+
+        if (openRequests.Count > 0) await db.SaveChangesAsync();
+    }
+
     private async Task CleanupZKDeviceDataAsync()
     {
         const int retentionDays = 30;

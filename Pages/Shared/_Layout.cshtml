@@ -155,6 +155,16 @@
         .notif-content { font-size: .8rem; color: var(--text-3); margin-top: .2rem; }
         .notif-time { font-size: .75rem; color: var(--text-4); }
 
+        /* ── 新通知到达时右上角弹出的小卡片（跟通知铃铛一起，给"有新东西"更明显的提示，不用一直盯着铃铛）── */
+        .notif-toast-wrap { position: fixed; top: 70px; right: 20px; z-index: 1080; display: flex; flex-direction: column; gap: 8px; max-width: 320px; }
+        .notif-toast {
+            background: var(--bg-card); border: 1px solid var(--border-2); border-left: 3px solid var(--brand);
+            border-radius: var(--radius-md); box-shadow: var(--shadow-pop); padding: .7rem .9rem; cursor: pointer;
+            animation: notifToastIn .2s ease-out;
+        }
+        .notif-toast:hover { background: var(--bg-page); }
+        @@keyframes notifToastIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+
         /* ── 主内容区 / 页面标题 ──────────────────────────────────────── */
         .main-content { flex: 1; padding: 1.5rem 1.75rem 2rem; min-width: 0; }
         .page-header { margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-2); }
@@ -512,6 +522,7 @@
                     </div>
                 </div>
             </div>
+            <div class="notif-toast-wrap" id="notifToastWrap"></div>
             <main class="main-content">
                 @RenderBody()
             </main>
@@ -537,6 +548,11 @@
     // ── 右上角"小铃铛"通知功能 ───────────────────────────────────────────────
     // notifOpen 记录通知下拉框现在是"打开"还是"关闭"，点一下铃铛就反过来切换一次
     let notifOpen = false;
+    // 记这次打开页面以来"已经提示过"的通知 id，避免同一条每隔 60 秒轮询一次就重复弹窗、重复响铃。
+    // notifFirstLoad 只管第一次拉取：刚打开页面时如果本来就攒着一堆未读通知，只更新铃铛上的数字，
+    // 不用把它们全部弹一遍、响一遍铃——只有"打开页面之后新收到的"才弹窗+响铃，体验上更像"刚才有新消息"。
+    const seenNotifIds = new Set();
+    let notifFirstLoad = true;
 
     // 点铃铛：切换下拉框的开关状态；打开的时候顺便去后台拉一次最新通知
     function toggleNotifDropdown() {
@@ -582,7 +598,49 @@
                     </div>
                     <div class="notif-content">${escapeHtml(n.content)}</div>
                 </div>`).join('');
+
+            // 挑出"这次轮询里新出现的"通知 id（第一次拉取时不算新——那是打开页面前就攒下的旧未读）。
+            // 每条新通知弹一张小卡片；弹窗数量不设上限（真出现好几条一起弹，按顺序往下排队也不会乱），
+            // 但铃声只响一次，避免同一刻来了好几条通知就连响好几下
+            const freshOnes = notifFirstLoad ? [] : data.items.filter(n => !seenNotifIds.has(n.id));
+            data.items.forEach(n => seenNotifIds.add(n.id));
+            notifFirstLoad = false;
+            if (freshOnes.length > 0) {
+                playNotifSound();
+                freshOnes.forEach(showNotifToast);
+            }
         } catch (e) { console.error(e); }
+    }
+
+    // 拿 Web Audio API 现场合成一声短促的"叮"，不用额外准备音频文件、也不用等文件加载。
+    // 浏览器的自动播放限制只挡"没有用户交互就自己放视频/长音频"，这种毫秒级的短提示音不受影响。
+    function playNotifSound() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.value = 880;                                   // 高音 A，清脆不刺耳
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);   // 快速淡出，听起来像"叮"而不是长鸣
+            osc.start();
+            osc.stop(ctx.currentTime + 0.35);
+        } catch (e) { /* 极少数环境不支持 Web Audio，静默跳过，不影响其它功能 */ }
+    }
+
+    // 右上角弹出一张新通知小卡片：点击后跟下拉框里点一条通知的效果一样（标记已读+跳转），
+    // 6 秒后没人点就自动淡出消失，避免一直堆在屏幕上挡内容
+    function showNotifToast(n) {
+        const wrap = document.getElementById('notifToastWrap');
+        const el = document.createElement('div');
+        el.className = 'notif-toast';
+        el.innerHTML = `
+            <div class="notif-title">${escapeHtml(n.title)}</div>
+            <div class="notif-content">${escapeHtml(n.content)}</div>`;
+        el.onclick = () => { readNotif(n.id, n.notificationType, n.relatedId); el.remove(); };
+        wrap.appendChild(el);
+        setTimeout(() => el.remove(), 6000);
     }
 
     // 把用户能控制的自由文本（公告标题/正文、自助登记姓名等）转义成安全文本再拼进 HTML，
