@@ -113,7 +113,7 @@ public class ZKDeviceController(
             if (string.Equals(table, "ATTLOG", StringComparison.OrdinalIgnoreCase))
             {
                 var text = Gbk.GetString(bodyBytes);
-                var rows = ParseAttLog(text);
+                var rows = ParseAttLog(text, SN!);
                 await syncService.ProcessAttLogAsync(SN!, rows, ct);
                 logger.LogInformation("考勤机 {SN} 推送打卡记录 {Count} 条", SN, rows.Count);
             }
@@ -350,7 +350,7 @@ public class ZKDeviceController(
     /// PUSH/ADMS 协议的通用格式）。如果拿到完整版协议文档后发现字段顺序不一样，改这里就行，
     /// 不影响其它部分。
     /// </summary>
-    private List<ZKAttLogRow> ParseAttLog(string text)
+    private List<ZKAttLogRow> ParseAttLog(string text, string sn)
     {
         var rows    = new List<ZKAttLogRow>();
         var skipped = 0;
@@ -365,6 +365,15 @@ public class ZKDeviceController(
             // 系统语言无关，不应该受它影响
             if (!DateTime.TryParse(fields[1].Trim(), System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None, out var time)) { skipped++; continue; }
+            // 考勤机断电后时钟常被重置（比如回到 2000 年，或者跑快了一天），这种明显不合理的时间以前照单全收，
+            // 会把整批打卡写到错误的日期上，导致"今天"没有记录、晚上被批量标旷工（2026-09-30 复核发现）。
+            // 跳过并单独记一条 Error 日志方便发现设备时钟异常，不影响这批里其它时间正常的行。
+            if (time > DateTime.Now.AddDays(1) || time < DateTime.Now.AddDays(-45))
+            {
+                logger.LogError("考勤机 {SN} 上工号 {Pin} 推送的打卡时间明显不合理（{Time}），疑似设备时钟异常，已跳过", sn, pin, time);
+                skipped++;
+                continue;
+            }
             var status = fields.Length > 2 && int.TryParse(fields[2].Trim(), out var s) ? s : 0;
             var verify = fields.Length > 3 && int.TryParse(fields[3].Trim(), out var v) ? v : 0;
             rows.Add(new ZKAttLogRow(pin, time, status, verify));
@@ -372,7 +381,7 @@ public class ZKDeviceController(
         // 畸形行以前是直接静默丢弃，排查"设备说传了但打卡没进系统"时无从下手；这里只加可见性
         // （记一条日志），不改变原有的"跳过继续处理其它行"这个容错行为
         if (skipped > 0)
-            logger.LogWarning("ATTLOG 解析：{Skipped} 行格式不符被跳过（共 {Total} 行）", skipped, rows.Count + skipped);
+            logger.LogWarning("ATTLOG 解析：{Skipped} 行格式不符或时间不合理被跳过（共 {Total} 行）", skipped, rows.Count + skipped);
         return rows;
     }
 

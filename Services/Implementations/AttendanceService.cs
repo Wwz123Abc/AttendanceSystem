@@ -1648,6 +1648,19 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var shiftAssign = await GetShiftAssignmentAsync(userId, record.WorkDate);
         var shift       = shiftAssign?.ShiftSchedule;
 
+        // 法定节假日/公司休息日：跟考勤机同步（ZKDeviceSyncService）、本地打卡（PunchCoreAsync）同一口径——
+        // 状态记"休假"、不结算正班工时，节假日上班只认加班审批。这条路径（补卡审批回写、管理员手动补卡、
+        // 智能助手补卡）之前完全没判断节假日，只判断了"每周休息日"——国庆等法定节假日期间漏打一次卡去补，
+        // 会凭空多出一整天的正班工时，跟已经批准的加班单重复计薪（2026-09-30 复核发现，国庆假期前一天报告）。
+        // 请假/出差状态优先级更高，不能被这里顺手改成"休假"。
+        if (await IsHolidayAsync(record.WorkDate, applicant?.AttendanceGroupId))
+        {
+            if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip))
+                record.AttendanceStatus = AttendanceStatus.Holiday;
+            record.ActualWorkHours = 0;
+            return;
+        }
+
         // 出差/节假日这两个状态当天的工时/迟到/早退都已经由审批流程/定时任务定好了，不能被这次补卡
         // 顺手重算覆盖掉。请假不再整天排除在外：半天假当天如果还有真实打卡，按标准工时封顶结算，
         // 迟到/早退分钟数也照算——只有"状态本身"不能被打卡结果改回正常/迟到/早退，这天终归还是

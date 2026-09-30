@@ -618,11 +618,20 @@ public class AgentToolExecutor(
 
         var user = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId.Value)
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.Role, u.ScopedDepartmentId })
             .FirstOrDefaultAsync(ct);
         if (user is null) return "错误：目标员工不存在";
         if (visibleIds is not null && (user.DepartmentId is null || !visibleIds.Contains(user.DepartmentId.Value)))
             return "错误：该员工不在你的管理范围内";
+
+        // 补卡跟"停用/启用"等其它高风险操作一样，只查了部门范围、漏了角色层级检查——文员能借此给
+        // 总部超管补卡（2026-09-30 复核发现，属于第 12 轮 S1 同一类漏洞漏掉的工具）
+        var padjOp = await db.Users.AsNoTracking()
+            .Where(u => u.Id == operatorUserId)
+            .Select(u => new { u.Role, u.ScopedDepartmentId })
+            .FirstOrDefaultAsync(ct);
+        if (padjOp is null || !Middlewares.CurrentUser.CanManageAccountCore(padjOp.Role, padjOp.ScopedDepartmentId, user.Role, user.ScopedDepartmentId))
+            return "错误：无权给该账号补卡（角色层级限制）";
 
         var param = JsonSerializer.Serialize(new { userId = user.Id, workDate = workDate.ToString("yyyy-MM-dd"), clockIn = clockInS, clockOut = clockOutS, remark });
         var summary = $"给 {user.RealName}（{user.EmployeeNo}）补录 {workDate:yyyy-MM-dd}："

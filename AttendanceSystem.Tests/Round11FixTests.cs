@@ -1439,6 +1439,28 @@ public class Round11FixTests : IDisposable
         await svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(20, 0)), Tue.ToDateTime(new TimeOnly(8, 0)), null, "管理员");
     }
 
+    [Fact]
+    public async Task 法定节假日手动补卡_不结算正班工时_状态记休假_跟考勤机口径一致()
+    {
+        // 2026-09-30 复核发现（国庆假期前一天报告）：补卡审批回写、管理员手动补卡、智能助手补卡走的
+        // RecalcWorkHoursAfterManualPunchAsync 之前只判断了"每周休息日"，没判断法定节假日/公司休息日——
+        // 国庆等假期漏打一次卡去补，会凭空多出一整天正班工时，跟已批准的加班单重复计薪。
+        var (uid, gid) = SeedWeekWorld();
+        using (var db = CreateContext())
+        {
+            db.Holidays.Add(new Holiday { HolidayName = "国庆节", HolidayDate = Mon, HolidayType = HolidayType.LegalHoliday, AttendanceGroupId = gid });
+            await db.SaveChangesAsync();
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        await svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(8, 30)), Mon.ToDateTime(new TimeOnly(17, 30)), null, "管理员");
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal(AttendanceStatus.Holiday, rec.AttendanceStatus);
+        Assert.Equal(0m, rec.ActualWorkHours);
+    }
+
     // ── ⑯ 2026-09-29 用户反馈：夜班一次卡都没打，凌晨才想起来打上班卡，被"打得太早"误拦 ──────
     // 2026-09-30 再次反馈：这条判断的宽限期以前卡在"昨晚班次应下班时间"那一刻，比"已经打了上班卡、
     // 只是没打下班卡"能续接的时间窗（下班时间后还有 6 小时宽限，见 IsWithinNightCarryOver）更短，两者

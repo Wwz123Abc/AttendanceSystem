@@ -817,11 +817,15 @@ public class AgentActionService(
 
         var user = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId.Value)
-            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId })
+            .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.DepartmentId, u.Role, u.ScopedDepartmentId })
             .FirstOrDefaultAsync();
         if (user is null) return (false, "目标员工不存在");
         if (!await deptScope.CanAccessDeptAsync(cu, user.DepartmentId))
             return (false, "该员工不在你的管理范围内，无权补卡");
+        // 提案阶段已经查过一次，这里是确认执行阶段的权威兜底——跟其它高风险操作（停用/删除/改范围）同一道检查
+        // （2026-09-30 复核发现：这里之前只查了部门范围，漏了角色层级，文员能给总部超管补卡）
+        if (!Middlewares.CurrentUser.CanManageAccountCore(cu.Role, cu.ScopedDepartmentId, user.Role, user.ScopedDepartmentId))
+            return (false, "无权给该账号补卡（角色层级限制）");
 
         var clockInS  = GetString(args, "clockIn");
         var clockOutS = GetString(args, "clockOut");
@@ -831,6 +835,17 @@ public class AgentActionService(
         var clockOut = ParseTime(clockOutS, workDate);
         if (clockIn is null && clockOut is null)
             return (false, "上班/下班打卡时间至少要填一个");
+
+        // 下班卡按补卡审批同一套顺延规则算：ParseTime 只会把时间拼到 workDate 当天，夜班下班卡填的是
+        // "第二天早上几点"会被错误地拼在当天，变成下班早于上班的"时间倒挂"（2026-09-30 复核发现：
+        // 助手回复"已补录"，实际记录工时算成 0、备注写着"打卡时间异常，需人工核实"）
+        if (clockOut is not null && TimeOnly.TryParse(clockOutS!.Trim(), out var outTime))
+        {
+            var existingIn = clockIn ?? await db.AttendanceRecords
+                .Where(r => r.UserId == user.Id && r.WorkDate == workDate).Select(r => r.ClockInTime).FirstOrDefaultAsync();
+            var punchShift = (await attendanceService.GetShiftAssignmentAsync(user.Id, workDate))?.ShiftSchedule;
+            clockOut = AttendanceService.ResolvePunchReplenishmentClockOut(workDate, outTime, existingIn, punchShift);
+        }
 
         await attendanceService.AdminAdjustPunchAsync(
             user.Id, workDate, clockIn, clockOut, remark, cu.RealName ?? $"管理员{operatorUserId}");

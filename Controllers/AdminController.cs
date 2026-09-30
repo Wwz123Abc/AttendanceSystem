@@ -292,6 +292,13 @@ public class AdminController(
             if (!await deptScopeService.CanAccessDeptAsync(Cu, req.ParentId)) return Forbid();
         }
 
+        // 部门管理页面已经拦了"上级不能选自己或自己的下级"，这个接口漏了同一道检查——一旦成环，
+        // 这一支部门会从部门树和分公司管理范围里"消失"（2026-09-30 复核发现）
+        if (req.ParentId == id)
+            return BadRequest(new { Success = false, Message = "上级部门不能是自己" });
+        if (req.ParentId.HasValue && (await deptScopeService.GetSubtreeIdsAsync(id)).Contains(req.ParentId.Value))
+            return BadRequest(new { Success = false, Message = "上级部门不能选择自己的下级部门（会形成循环）" });
+
         dept.DeptName    = req.DeptName;
         dept.DeptCode    = req.DeptCode;
         dept.ParentId    = req.ParentId;

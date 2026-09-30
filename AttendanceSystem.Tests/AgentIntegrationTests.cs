@@ -113,6 +113,88 @@ public class AgentIntegrationTests : IDisposable
         Assert.Equal(0, await db.AgentPendingActions.CountAsync());
     }
 
+    /// <summary>2026-09-30 复核发现：punch_adjust_propose 之前只查了部门范围，跟第 12 轮修的 S1 是同一类
+    /// 漏洞漏掉的一个工具——总部文员（不受部门范围限制）能借助手给总部超管补卡。生成阶段和确认执行阶段
+    /// 都要单独验证（后者是绕开生成阶段检查的防御纵深，模式跟"重置密码"那条 S1 回归测试一致）。</summary>
+    [Fact]
+    public async Task 总部文员_不能通过助手给总部超管补卡_生成阶段就被拒()
+    {
+        var w = SeedWorld();
+        using var db = CreateContext();
+        var msg = await Tools(db).ExecuteAsync(w.HqClerk, w.ConvClerk, "punch_adjust_propose",
+            Args(new { userId = w.HqAdmin, workDate = "2026-09-16", clockOut = "18:00" }), default);
+        Assert.Contains("角色层级", msg);
+        Assert.Equal(0, await db.AgentPendingActions.CountAsync());
+    }
+
+    [Fact]
+    public async Task 总部文员_不能通过助手给总部超管补卡_确认执行这一层也单独挡住()
+    {
+        var w = SeedWorld();
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var action = new AgentPendingAction
+            {
+                ConversationId = w.ConvClerk, ToolName = "punch_adjust_propose",
+                ParamJson = Args(new { userId = w.HqAdmin, workDate = "2026-09-16", clockOut = "18:00" }),
+                SummaryText = "t", Status = AgentActionStatus.Pending, CreatedBy = w.HqClerk,
+                CreatedAt = DateTime.Now, ExpiresAt = DateTime.Now.AddMinutes(15)
+            };
+            db.AgentPendingActions.Add(action);
+            await db.SaveChangesAsync();
+            actionId = action.Id;
+        }
+
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqClerk, actionId, approve: true);
+        Assert.False(ok);
+        Assert.Contains("角色层级", message);
+
+        using var check = CreateContext();
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == w.HqAdmin));   // 没有留下补录的记录
+    }
+
+    [Fact]
+    public async Task 助手给夜班补下班卡_填第二天早上的时间点_落到第二天_不再时间倒挂()
+    {
+        // 2026-09-30 复核发现：ParseTime 只会把时间拼到 workDate 当天，夜班下班卡填"第二天早上几点"
+        // 会被拼在当天，变成下班早于上班的"时间倒挂"，工时算成 0——修复后要跟补卡审批同一套顺延规则。
+        var w = SeedWorld();
+        using (var db = CreateContext())
+        {
+            var nightShift = new ShiftSchedule
+            {
+                ShiftName = "夜班", AttendanceGroupId = (await db.Users.FindAsync(w.UserA))!.AttendanceGroupId!.Value,
+                WorkStartTime = new TimeOnly(20, 0), WorkEndTime = new TimeOnly(8, 0), IsCrossDay = true,
+                LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, StandardWorkHours = 8, RestDaysOfWeek = ""
+            };
+            db.ShiftSchedules.Add(nightShift);
+            await db.SaveChangesAsync();
+            var assign = await db.ShiftAssignments.SingleAsync(a => a.UserId == w.UserA && a.WorkDate == Wed);
+            assign.ShiftScheduleId = nightShift.Id;
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = w.UserA, WorkDate = Wed, ClockInTime = Wed.ToDateTime(new TimeOnly(20, 0)), AttendanceStatus = AttendanceStatus.Normal });
+            await db.SaveChangesAsync();
+        }
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var msg = await Tools(db).ExecuteAsync(w.HqAdmin, w.ConvHq, "punch_adjust_propose",
+                Args(new { userId = w.UserA, workDate = Wed.ToString("yyyy-MM-dd"), clockOut = "08:00" }), default);
+            Assert.Contains("不会自动执行", msg);
+            actionId = (await db.AgentPendingActions.SingleAsync()).Id;
+        }
+        using (var db = CreateContext())
+        {
+            var (ok, m) = await Actions(db).ReviewAsync(w.HqAdmin, actionId, approve: true);
+            Assert.True(ok, m);
+        }
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == w.UserA && r.WorkDate == Wed);
+        Assert.Equal(Wed.AddDays(1).ToDateTime(new TimeOnly(8, 0)), rec.ClockOutTime);   // 落到第二天，不是当天08:00
+        Assert.True(rec.ActualWorkHours > 0);
+    }
+
     [Fact]
     public async Task 分公司管理员_查员工只看到自己范围内的人()
     {
