@@ -330,8 +330,12 @@ public class AttendanceBackgroundService(
     /// ① 只提醒 UpdatedAt（提交或每一级审批时都会更新）在 4 小时以前的单，刚提交/刚流转到这一级的不打扰；
     /// ② 跳过已停用的审批人、以及申请人调岗后已经管不到的审批人（跟 ApproverCoversApplicantAsync/
     ///    GetPendingForApproverAsync 同一个口径），这类"审批人事实上处理不了"的单不再徒劳提醒；
-    /// ③ 同一张单、同一个审批人，如果上一次的提醒还没读，就不再新增一条——不然审批人手上压着几张单，
-    ///    每 4 小时会一次性弹好几张卡片、响好几声，未读也会无限累积。
+    /// ③ 同一张单、同一个审批人，发新提醒前先把之前没读的旧通知（含提交/流转时发的那条"您有新的待审批
+    ///    申请"——跟提醒用的是同一个 NotificationType，都关联同一张单）标成已读，再插入新的一条。
+    ///    每张单的未读通知始终只留最新 1 条，不会无限累积；同时因为每轮都是一条"新出现的" id，
+    ///    前端轮询才能识别成新通知、正常触发弹窗和提示音——一开始按"已有未读就跳过不发"实现过，
+    ///    结果审批人只要没点开最早提交时那条通知，后面所有提醒会被这条旧的未读一直挡住，永远收不到
+    ///    （2026-09-30 复核发现，这恰好是这个功能本来要解决的场景，已改成这个"标已读再发新的"的写法）。
     /// </summary>
     private async Task RemindPendingApprovalsAsync()
     {
@@ -375,15 +379,6 @@ public class AttendanceBackgroundService(
             return ids.Contains(applicantDeptId.Value);
         }
 
-        // 提醒前先把这一批候选审批人已经有的"还没读的提醒"批量查一遍，命中的（审批人, 申请单）组合
-        // 就跳过不再新增，避免同一张单的未读提醒无限累积
-        var existingUnread = (await db.Notifications
-                .Where(n => n.NotificationType == "ApprovalPending" && !n.IsRead && approverIds.Contains(n.UserId) && n.RelatedId != null)
-                .Select(n => new { n.UserId, RelatedId = n.RelatedId!.Value })
-                .ToListAsync())
-            .Select(x => (x.UserId, x.RelatedId))
-            .ToHashSet();
-
         var toAdd = new List<Notification>();
         foreach (var req in openRequests)
         {
@@ -398,8 +393,6 @@ public class AttendanceBackgroundService(
             if (approver.ScopedDepartmentId.HasValue
                 && !await CoversApplicantAsync(approver.ScopedDepartmentId.Value, req.Applicant.DepartmentId))
                 continue;   // 申请人调岗后，原审批人已经管不到了（这类卡住的单交给总部处理，不在这里提醒）
-            if (existingUnread.Contains((currentStep.ApproverUserId, req.Id)))
-                continue;   // 上一次的提醒还没读，不重复新增
 
             toAdd.Add(new Notification
             {
@@ -411,12 +404,27 @@ public class AttendanceBackgroundService(
                 CreatedAt        = now
             });
         }
+        if (toAdd.Count == 0) return;
 
-        if (toAdd.Count > 0)
+        // 插入这一批新提醒之前，先把这些（审批人, 申请单）组合下之前没读的旧通知标成已读——包含提交/流转
+        // 时发的那条，不然它会一直是"未读"，跟这里新插入的一起把未读数字越垒越高，而且前端也分不清
+        // 哪条才是"这一轮真正新出现的"
+        var targetUserIds = toAdd.Select(n => n.UserId).ToHashSet();
+        var targetRequestIds = toAdd.Select(n => n.RelatedId!.Value).ToHashSet();
+        var oldUnread = await db.Notifications
+            .Where(n => n.NotificationType == "ApprovalPending" && !n.IsRead
+                     && targetUserIds.Contains(n.UserId) && n.RelatedId != null && targetRequestIds.Contains(n.RelatedId.Value))
+            .ToListAsync();
+        var toAddKeys = toAdd.Select(n => (n.UserId, RelatedId: n.RelatedId!.Value)).ToHashSet();
+        foreach (var n in oldUnread)
         {
-            db.Notifications.AddRange(toAdd);
-            await db.SaveChangesAsync();
+            if (!toAddKeys.Contains((n.UserId, n.RelatedId!.Value))) continue;   // 精确匹配这一批要提醒的（审批人, 申请单）组合
+            n.IsRead = true;
+            n.ReadAt = now;
         }
+
+        db.Notifications.AddRange(toAdd);
+        await db.SaveChangesAsync();
     }
 
     private async Task CleanupZKDeviceDataAsync()

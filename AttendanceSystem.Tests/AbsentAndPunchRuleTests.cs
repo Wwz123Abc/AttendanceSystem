@@ -1,5 +1,6 @@
 using System.Reflection;
 using AttendanceSystem.Data;
+using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
@@ -497,8 +498,13 @@ public class AbsentAndPunchRuleTests : IDisposable
         Assert.Equal(0, await check.Notifications.CountAsync());
     }
 
+    // 2026-09-30 第三方复核第二轮发现：上一版"已有未读就跳过不发"的去重规则，会被提交/流转时发的那条
+    // "您有新的待审批申请"（同样是 ApprovalPending 类型）挡住——审批人只要没点开最早那条通知，后面所有
+    // 提醒都会被判定成"已经有未读"而永远不发，恰好是这个功能本来要解决的场景。改成"发新提醒前先把旧的
+    // 未读标成已读"，下面重写这条测试验证新行为，并补一条走真实提交流程的测试（原来的测试是直接往库里
+    // 插申请单，绕开了真实提交会发的那条初始通知，没能测出这个问题）。
     [Fact]
-    public async Task 待审批提醒_同一张单已有未读提醒_不重复新增()
+    public async Task 待审批提醒_上一轮提醒还没读_旧的标成已读_插入新的一条()
     {
         int approverId, requestId;
         using (var db = CreateContext())
@@ -531,6 +537,63 @@ public class AbsentAndPunchRuleTests : IDisposable
         await RunRemindPendingApprovalsAsync();
 
         using var check = CreateContext();
-        Assert.Equal(1, await check.Notifications.CountAsync(n => n.UserId == approverId && n.RelatedId == requestId));   // 还是只有上一轮那一条，没有新增
+        var all = await check.Notifications.Where(n => n.UserId == approverId && n.RelatedId == requestId).ToListAsync();
+        Assert.Equal(2, all.Count);                                    // 旧的还在，新增了一条
+        Assert.Single(all, n => !n.IsRead);                            // 未读的只剩新的这一条
+        Assert.Single(all, n => n.IsRead && n.Content == "上一轮的提醒");   // 旧的已经被标成已读，内容没变
+    }
+
+    [Fact]
+    public async Task 待审批提醒_走真实提交流程_没点开提交时的通知_挂5小时后仍能收到提醒()
+    {
+        int approverId, applicantId;
+        using (var db = CreateContext())
+        {
+            var applicant = U("A13", "申请人辛");
+            var approver  = U("S9", "审批人辛");
+            db.Users.AddRange(applicant, approver);
+            db.SaveChanges();
+            applicantId = applicant.Id; approverId = approver.Id;
+
+            var group = new AttendanceGroup { GroupName = "白班组辛" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            applicant.AttendanceGroupId = group.Id;
+            db.AttendanceGroupApprovers.Add(new AttendanceGroupApprover { AttendanceGroupId = group.Id, UserId = approverId });
+            db.SaveChanges();
+        }
+
+        // 走真实的提交流程（ApprovalService.SubmitApprovalAsync），这样才会真的发出"您有新的待审批申请"
+        // 那条初始通知，跟直接往库里插申请单不是一回事
+        using (var db = CreateContext())
+        {
+            var svc = new ApprovalService(db, new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance), AppOptions);
+            var start = DateTime.Now.AddHours(1);
+            await svc.SubmitApprovalAsync(applicantId, new SubmitApprovalDto
+            {
+                ApprovalType = ApprovalType.Leave, LeaveType = AttendanceSystem.Models.Enums.LeaveType.PersonalLeave,
+                LeaveStartTime = start, LeaveEndTime = start.AddHours(4), Reason = "t", ApproverUserId = approverId
+            });
+        }
+
+        int requestId;
+        using (var db = CreateContext())
+        {
+            var req = await db.ApprovalRequests.SingleAsync(r => r.ApplicantUserId == applicantId);
+            requestId = req.Id;
+            Assert.Equal(1, await db.Notifications.CountAsync(n => n.UserId == approverId && n.RelatedId == requestId));   // 提交时那一条初始通知
+            Assert.True(await db.Notifications.AnyAsync(n => n.UserId == approverId && n.RelatedId == requestId && !n.IsRead));   // 审批人一直没点开
+
+            req.UpdatedAt = DateTime.Now.AddHours(-5);   // 模拟这张单挂了 5 小时都没人处理
+            await db.SaveChangesAsync();
+        }
+
+        await RunRemindPendingApprovalsAsync();
+
+        using var check = CreateContext();
+        var all = await check.Notifications.Where(n => n.UserId == approverId && n.RelatedId == requestId).ToListAsync();
+        Assert.Equal(2, all.Count);                                                 // 提交时那条 + 新的提醒
+        Assert.Equal(1, all.Count(n => !n.IsRead));                                 // 未读始终只有 1 条，不是"永远没有"
+        Assert.Contains(all, n => !n.IsRead && n.Content.Contains("还未处理"));       // 新的这条是提醒专用的文案
     }
 }
