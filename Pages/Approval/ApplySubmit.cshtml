@@ -103,7 +103,7 @@
                             <label class="form-label">出差结束</label>
                             <input asp-for="BusinessTripEnd" type="datetime-local" class="form-control" id="fTripEnd" required />
                         </div>
-                        <div class="form-text mb-3">审批通过后，出差期间自动记为全勤，无需打卡。开始时间最多能提前3个月申请。</div>
+                        <div class="form-text mb-3">审批通过后，出差期间自动记为全勤，无需打卡。开始时间最早只能选到今天0点，最多能提前3个月申请。</div>
                     </div>
 
                     @if (Model.ApproverOptions.Count > 0)
@@ -295,8 +295,8 @@ fOvertimeStart.addEventListener('change', function () {
     if (fOvertimeEnd.value && fOvertimeEnd.value <= this.value) fOvertimeEnd.value = '';
 });
 
-// 出差：开始时间不能选过去，最晚只能提前3个月；结束时间不能早于开始时间
-fTripStart.min = nowStr;
+// 出差：开始时间最早只能选到今天0点（方便补提今天已经开始的出差），最晚只能提前3个月；结束时间不能早于开始时间
+fTripStart.min = todayStartStr;
 fTripStart.max = maxAdvanceStr;
 fTripStart.addEventListener('change', function () {
     fTripEnd.min = this.value;
@@ -318,7 +318,7 @@ document.querySelector('form[enctype]').addEventListener('submit', function (e) 
         else if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value <= fOvertimeStart.value) msg = '加班结束时间必须晚于开始时间';
         else if (fOvertimeEnd.value && fOvertimeEnd.value > tomorrowEndStr) msg = '加班结束时间最晚只能选到明天24点前，一次申请只对应一天的加班（跨夜的加班如果确实超过这个范围，请分开提交）';
     } else if (type === 'BusinessTrip') {
-        if (fTripStart.value && fTripStart.value < nowStr) msg = '出差开始时间不能早于现在';
+        if (fTripStart.value && fTripStart.value < todayStartStr) msg = '出差开始时间不能早于今天0点';
         else if (fTripStart.value && fTripStart.value > maxAdvanceStr) msg = '出差开始时间最多只能提前3个月申请';
         else if (fTripStart.value && fTripEnd.value && fTripEnd.value <= fTripStart.value) msg = '出差结束时间必须晚于开始时间';
     }

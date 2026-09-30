@@ -1506,4 +1506,36 @@ public class Round11FixTests : IDisposable
         });
         Assert.NotNull(request);
     }
+
+    // ── 出差：下限放宽到"今天0点"，方便补提今天已经开始的出差，但不追溯到昨天（2026-09-30 用户确认）──
+
+    [Fact]
+    public async Task 出差_开始时间是昨天_提交时被拒绝()
+    {
+        var (uid, _) = SeedNightWorldForFutureCheck(DateOnly.FromDateTime(DateTime.Today));
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = DateTime.Today.AddDays(-1).AddHours(9);   // 昨天9点，不管现在几点，昨天都已经过了今天0点这条线
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.BusinessTrip,
+            BusinessTripStartTime = start, BusinessTripEndTime = start.AddDays(1), Reason = "t"
+        }));
+        Assert.Contains("不能早于今天0点", ex.Message);
+    }
+
+    [Fact]
+    public async Task 出差_开始时间是今天0点_提交正常通过()
+    {
+        var (uid, _) = SeedNightWorldForFutureCheck(DateOnly.FromDateTime(DateTime.Today));
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = DateTime.Today;   // 今天0点整，边界值，应该允许（补提今天已经开始的出差）
+        var request = await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.BusinessTrip,
+            BusinessTripStartTime = start, BusinessTripEndTime = start.AddDays(1), Reason = "t"
+        });
+        Assert.NotNull(request);
+    }
 }

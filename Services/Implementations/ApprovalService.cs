@@ -144,8 +144,12 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             case ApprovalType.BusinessTrip:
                 if (dto.BusinessTripStartTime is null || dto.BusinessTripEndTime is null)
                     throw new InvalidOperationException("请填写出差的起止时间");
-                if (dto.BusinessTripStartTime < DateTime.Now)
-                    throw new InvalidOperationException("出差开始时间不能早于现在");
+                // 下限放宽到"今天0点"（而不是精确到此刻）：方便忘记提前申请的人，回来补提今天已经
+                // 开始的出差；不再往前追溯到昨天，避免撞上已经打完一整天卡的记录——出差审批通过后
+                // 会把当天工时无条件覆盖成标准工时（"自动记为全勤，无需打卡"），真往前放开到昨天，
+                // 覆盖掉已有真实打卡工时的概率会明显变大（2026-09-30 用户确认只放宽到当天，不做这层兜底）。
+                if (dto.BusinessTripStartTime < DateOnly.FromDateTime(DateTime.Today).ToDateTime(TimeOnly.MinValue))
+                    throw new InvalidOperationException("出差开始时间不能早于今天0点");
                 if (dto.BusinessTripStartTime > DateTime.Now.AddMonths(MaxAdvanceRequestMonths))
                     throw new InvalidOperationException($"出差开始时间最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
                 if (dto.BusinessTripEndTime < dto.BusinessTripStartTime)
