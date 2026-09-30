@@ -1444,4 +1444,66 @@ public class Round11FixTests : IDisposable
         var freshRead = await check.ApprovalRequests.FirstAsync(a => a.Id == requestId);
         Assert.Equal(ApprovalStatus.Pending, freshRead.ApprovalStatus);   // 清空后重新从数据库读，是真实的"待审批"
     }
+
+    // ── 请假/出差：开始时间最多只能提前3个月申请（2026-09-30 用户确认，避免选到离谱的未来日期）──
+
+    [Fact]
+    public async Task 请假_开始时间超过3个月后_提交时被拒绝()
+    {
+        var (uid, _) = SeedWeekWorld();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = DateTime.Now.AddMonths(3).AddDays(1);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.PersonalLeave,
+            LeaveStartTime = start, LeaveEndTime = start.AddHours(4), Reason = "t"
+        }));
+        Assert.Contains("最多只能提前", ex.Message);
+    }
+
+    [Fact]
+    public async Task 请假_开始时间在3个月以内_提交正常通过()
+    {
+        var (uid, _) = SeedNightWorldForFutureCheck(DateOnly.FromDateTime(DateTime.Today));   // 需要有审批人才能提交成功
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = DateTime.Now.AddMonths(2);
+        var request = await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.PersonalLeave,
+            LeaveStartTime = start, LeaveEndTime = start.AddHours(4), Reason = "t"
+        });
+        Assert.NotNull(request);
+    }
+
+    [Fact]
+    public async Task 出差_开始时间超过3个月后_提交时被拒绝()
+    {
+        var (uid, _) = SeedWeekWorld();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = DateTime.Now.AddMonths(3).AddDays(1);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.BusinessTrip,
+            BusinessTripStartTime = start, BusinessTripEndTime = start.AddDays(2), Reason = "t"
+        }));
+        Assert.Contains("最多只能提前", ex.Message);
+    }
+
+    [Fact]
+    public async Task 出差_开始时间在3个月以内_提交正常通过()
+    {
+        var (uid, _) = SeedNightWorldForFutureCheck(DateOnly.FromDateTime(DateTime.Today));   // 需要有审批人才能提交成功
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = DateTime.Now.AddMonths(2);
+        var request = await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.BusinessTrip,
+            BusinessTripStartTime = start, BusinessTripEndTime = start.AddDays(2), Reason = "t"
+        });
+        Assert.NotNull(request);
+    }
 }

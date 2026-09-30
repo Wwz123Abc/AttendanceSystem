@@ -23,6 +23,11 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     public const int MaxLeaveOrTripSpanDays = 366;
     /// <summary>单张加班申请的最长时长（小时）：以前结束时间没有上限，可以填到几天后，时长全记到开始那天。</summary>
     public const int MaxOvertimeHours = 24;
+    /// <summary>请假/出差最多能提前多少个月申请：以前开始时间只有下限（不能选过去），没有上限——
+    /// 跟"申请跨度不超过 366 天"是两回事，跨度再短，开始日期本身也能选到任意遥远的未来（比如手滑选成
+    /// 2099 年，只要结束日期在开始日期 366 天以内就能正常提交、正常审批通过），前后端都不会拦
+    /// （2026-09-30 用户确认加这个上限）。</summary>
+    public const int MaxAdvanceRequestMonths = 3;
 
     /// <summary>
     /// 提交申请：算请假/加班时长 → 生成申请单(带单号) → 建审批节点(员工自选审批人/直属上级/兜底管理员) → 通知审批人。
@@ -90,6 +95,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException("请填写请假的起止时间");
                 if (dto.LeaveStartTime < DateTime.Now.AddHours(-24))
                     throw new InvalidOperationException("请假开始时间最早只能选到现在往前推24小时以内");
+                if (dto.LeaveStartTime > DateTime.Now.AddMonths(MaxAdvanceRequestMonths))
+                    throw new InvalidOperationException($"请假开始时间最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
                 if (dto.LeaveEndTime <= dto.LeaveStartTime)
                     throw new InvalidOperationException("请假结束时间必须晚于开始时间");
                 if ((dto.LeaveEndTime.Value - dto.LeaveStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
@@ -139,6 +146,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException("请填写出差的起止时间");
                 if (dto.BusinessTripStartTime < DateTime.Now)
                     throw new InvalidOperationException("出差开始时间不能早于现在");
+                if (dto.BusinessTripStartTime > DateTime.Now.AddMonths(MaxAdvanceRequestMonths))
+                    throw new InvalidOperationException($"出差开始时间最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
                 if (dto.BusinessTripEndTime < dto.BusinessTripStartTime)
                     throw new InvalidOperationException("出差结束时间不能早于开始时间");
                 if ((dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
