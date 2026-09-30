@@ -23,7 +23,7 @@ public class ExcelExportColumnAlignmentTests
     [
         "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
         "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
-        "加班总时长(h)", "工作日加班(h)", "休息日加班(h)", "节假日加班(h)",
+        "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
         "应出勤天数"
     ];
 
@@ -49,7 +49,6 @@ public class ExcelExportColumnAlignmentTests
         TotalOvertimeHours    = 10m,
         WeekdayOvertimeHours  = 4m,
         RestDayOvertimeHours  = 3m,
-        HolidayOvertimeHours  = 6m,
         ExpectedWorkdays      = 22
     };
 
@@ -92,8 +91,7 @@ public class ExcelExportColumnAlignmentTests
         Assert.Equal(10,    dataRow.GetCell(tailStart + 14).NumericCellValue);  // 加班总时长
         Assert.Equal(4,     dataRow.GetCell(tailStart + 15).NumericCellValue);  // 工作日加班
         Assert.Equal(3,     dataRow.GetCell(tailStart + 16).NumericCellValue);  // 休息日加班
-        Assert.Equal(6,     dataRow.GetCell(tailStart + 17).NumericCellValue);  // 节假日加班
-        Assert.Equal(22,    dataRow.GetCell(tailStart + 18).NumericCellValue);  // 应出勤天数（新增，放在最后一列）
+        Assert.Equal(22,    dataRow.GetCell(tailStart + 17).NumericCellValue);  // 应出勤天数（新增，放在最后一列）
 
         // 数据行最后一个有值的单元格必须正好是最后一列，不多出、也不少一列——
         // 这一条能直接抓出"表头 N 列，但写值那边多写/少写了一列"这种整体错位的 bug
@@ -144,7 +142,7 @@ public class ExcelExportColumnAlignmentTests
         Assert.Equal(317,  total.GetCell(tailStart + 3).NumericCellValue);           // 正班工时：158.5 × 2
         Assert.Equal(10,   total.GetCell(tailStart + 4).NumericCellValue);           // 迟到时长(分)
         Assert.Equal(2,    total.GetCell(tailStart + 10).NumericCellValue);          // 旷工天数
-        Assert.Equal(44,   total.GetCell(tailStart + 18).NumericCellValue);          // 应出勤天数：22 + 22
+        Assert.Equal(44,   total.GetCell(tailStart + 17).NumericCellValue);          // 应出勤天数：22 + 22
 
         // 用 SUBTOTAL(109,…)：HR 筛选后合计只统计可见行
         Assert.Contains("SUBTOTAL(109,", total.GetCell(tailStart).CellFormula);
@@ -231,14 +229,14 @@ public class ExcelExportColumnAlignmentTests
         // 第 3 行是分组行，按 6 组合并
         var band = sheet.GetRow(2);
         string[] names = ["基本信息", "考勤结果（每日工时，单位：小时）", "出勤与工时", "迟到 · 早退 · 缺卡 · 旷工", "出差 · 夜班 · 加班", "对照"];
-        int[] firsts = [0, 6, 37, 41, 48, 55];
+        int[] firsts = [0, 6, 37, 41, 48, 54];
         for (var i = 0; i < names.Length; i++) Assert.Equal(names[i], band.GetCell(firsts[i]).StringCellValue);
         var merged = Enumerable.Range(0, sheet.NumMergedRegions).Select(i => sheet.GetMergedRegion(i)).ToList();
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 0 && m.LastColumn == 5);
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 6 && m.LastColumn == 36);
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 37 && m.LastColumn == 40);
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 41 && m.LastColumn == 47);
-        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 48 && m.LastColumn == 54);
+        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 48 && m.LastColumn == 53);
         // 不再有纵向合并（合并会让筛选行上的那格变成空白）
         Assert.DoesNotContain(merged, m => m.FirstRow == 2 && m.LastRow == 3);
         Assert.Equal(6 + 31 + ExpectedTailHeaders.Length, band.LastCellNum);   // 分组行总列数没变

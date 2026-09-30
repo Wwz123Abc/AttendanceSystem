@@ -214,6 +214,8 @@ public class AgentActionService(
 
         // 认领成功，执行真实业务（内部重新校验范围与目标状态）
         var (ok, message) = await ExecuteApprovedAsync(action, userId);
+        // 执行失败：丢弃执行到一半、已经改在内存里的实体，不能让下面写日志的 SaveChanges 顺手存进库
+        if (!ok) db.ChangeTracker.Clear();
 
         // 执行后快照（供撤回）：新建类动作（新员工/新申请单）动手前没有"旧状态"可抓，
         // 只能等真正建出来之后，按参数里的自然键（手机号/申请人）反查刚生成的那一条。

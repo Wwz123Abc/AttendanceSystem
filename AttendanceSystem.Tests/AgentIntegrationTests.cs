@@ -535,6 +535,95 @@ public class AgentIntegrationTests : IDisposable
         Assert.Equal(0, await db.AgentPendingActions.CountAsync());
     }
 
+    // 2026-09-30 第 14 轮审查发现：ReviewAsync 执行失败后没有 db.ChangeTracker.Clear()，AppendLogAsync
+    // 里的 SaveChangesAsync() 会把同一个 DbContext 里"执行到一半、已经改在内存里"的实体一起存进去——
+    // ExecuteUpdateEmployeeAsync 先把 RealName/Phone 直接改在 FindAsync 查出来的跟踪实体上，
+    // 再调 UpdateUserAsync 里的 EnsureCanManageAsync 做角色层级校验，校验失败抛异常时改动已经在内存里了。
+    [Fact]
+    public async Task 总部文员_不能通过助手修改总部超管的资料_确认执行这一层也单独挡住_数据库里姓名手机号都不变()
+    {
+        var w = SeedWorld();
+        string nameBefore;
+        string? phoneBefore;
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var hq = await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
+            nameBefore = hq.RealName;
+            phoneBefore = hq.Phone;
+            var action = new AgentPendingAction
+            {
+                ConversationId = w.ConvClerk, ToolName = "employee_update_propose",
+                ParamJson = Args(new { userId = w.HqAdmin, realName = "改名了", phone = "13800000000" }),
+                SummaryText = "t", Status = AgentActionStatus.Pending, CreatedBy = w.HqClerk,
+                CreatedAt = DateTime.Now, ExpiresAt = DateTime.Now.AddMinutes(15)
+            };
+            db.AgentPendingActions.Add(action);
+            await db.SaveChangesAsync();
+            actionId = action.Id;
+        }
+
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqClerk, actionId, approve: true);
+        Assert.False(ok);
+        Assert.Contains("角色层级", message);
+
+        using var check = CreateContext();
+        var after = await check.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
+        Assert.Equal(nameBefore, after.RealName);    // 执行失败，改到一半的姓名不能落库
+        Assert.Equal(phoneBefore, after.Phone);      // 手机号同理
+    }
+
+    // 同一个 bug（AppendLogAsync 顺手存下执行到一半的改动）另一条复现路径：ExecuteHandleApprovalAsync
+    // 走的是 ApprovalService.HandleApprovalAsync → AttendanceService.UpdateAttendanceAfterApprovalAsync，
+    // 补卡单当天没有考勤记录时会先 db.AttendanceRecords.Add(record) 建一条空记录，再检查"补卡时间还没到"，
+    // 检查不通过时抛异常——虽然 HandleApprovalAsync 自己的数据库事务会正确回滚，但这条 Add() 是直接加在
+    // AgentActionService 和 ApprovalService 共用的同一个 DbContext 的内存 ChangeTracker 里，不属于那个事务，
+    // 不清空的话 AppendLogAsync 的 SaveChanges 会把它顺手存进库，变成一条谁都没申请过的空白考勤记录。
+    [Fact]
+    public async Task 助手审批补卡单_回写时补卡时间还没到而失败_不留下空白考勤记录()
+    {
+        var w = SeedWorld();
+        var tomorrow = DateOnly.FromDateTime(DateTime.Now.AddDays(1));
+        int requestId;
+        using (var db = CreateContext())
+        {
+            var req = new ApprovalRequest
+            {
+                ApplicantUserId = w.UserA, ApprovalType = ApprovalType.PunchReplenishment,
+                PunchDate = tomorrow, PunchTime = new TimeOnly(9, 0), PunchType = PunchType.ClockIn,
+                ApprovalStatus = ApprovalStatus.Pending, RequestNo = "BK-TEST-001", Reason = "t"
+            };
+            db.ApprovalRequests.Add(req);
+            await db.SaveChangesAsync();
+            db.ApprovalSteps.Add(new ApprovalStep
+            {
+                ApprovalRequestId = req.Id, ApproverUserId = w.HqAdmin, StepOrder = 1, ApprovalStatus = ApprovalStatus.Pending
+            });
+            await db.SaveChangesAsync();
+            requestId = req.Id;
+        }
+
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var msg = await Tools(db).ExecuteAsync(w.HqAdmin, w.ConvHq, "approval_handle_propose",
+                Args(new { requestId, approve = true }), default);
+            Assert.Contains("不会自动执行", msg);
+            actionId = (await db.AgentPendingActions.SingleAsync()).Id;
+        }
+        using (var db = CreateContext())
+        {
+            var (ok, message) = await Actions(db).ReviewAsync(w.HqAdmin, actionId, approve: true);
+            Assert.False(ok);
+            Assert.Contains("还没到", message);
+        }
+
+        using var check = CreateContext();
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == w.UserA && r.WorkDate == tomorrow));   // 没有多出空白记录
+        Assert.Equal(ApprovalStatus.Pending, (await check.ApprovalRequests.AsNoTracking().SingleAsync(r => r.Id == requestId)).ApprovalStatus);   // 单子仍是待审批
+    }
+
     [Fact]
     public async Task 总部文员_批量停用混了总部超管_会静默跳过只处理管得到的()
     {

@@ -201,7 +201,6 @@ public class TemplateReportRowDto
     public decimal TotalOvertimeHours   { get; set; }   // 加班总时长（小时）
     public decimal WeekdayOvertimeHours { get; set; }   // 工作日加班（小时）
     public decimal RestDayOvertimeHours { get; set; }   // 休息日加班（小时）
-    public decimal HolidayOvertimeHours { get; set; }   // 节假日加班（小时）
 }
 
 /// <summary>“模板月度汇总表”整体结果：统计周期 + 每一天的日期表头 + 每个员工一行。</summary>

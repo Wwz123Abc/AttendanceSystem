@@ -265,6 +265,11 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
             if (visibleIds is not null
                 && await db.Departments.AnyAsync(d => d.ParentId != null && ids.Contains(d.ParentId.Value) && !ids.Contains(d.Id)))
                 throw new InvalidOperationException("要删除的部门下面还有下级部门，请先删除或移走下级部门（否则下级部门会掉出你的管理范围）");
+            // 受限管理员：删除部门后，里面的员工会被数据库外键自动置空成"未分配"，受限账号看不到"未分配"的人，
+            // 这些员工就从他的管理范围里彻底消失了，只能找总部恢复（第 14 轮审查发现）
+            if (visibleIds is not null
+                && await db.Users.AnyAsync(u => u.DepartmentId != null && ids.Contains(u.DepartmentId.Value)))
+                throw new InvalidOperationException("要删除的部门下还有员工，请先把员工调到别的部门再删除（否则他们会掉出你的管理范围）");
 
             var depts = await db.Departments.Where(d => ids.Contains(d.Id)).ToListAsync();
 

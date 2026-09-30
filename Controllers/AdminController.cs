@@ -486,69 +486,6 @@ public class AdminController(
         return Ok(new { Success = true });
     }
 
-    // ── 假期管理 ──────────────────────────────────────────────────────────────
-
-    /// <summary>查假期（可按年份/考勤组过滤）。</summary>
-    [HttpGet("holidays")]
-    public async Task<IActionResult> GetHolidays([FromQuery] int? year, [FromQuery] int? groupId)
-    {
-        var q = db.Holidays.AsQueryable();
-        if (year.HasValue)    q = q.Where(h => h.HolidayDate.Year == year.Value);
-        if (groupId.HasValue) q = q.Where(h => h.AttendanceGroupId == null || h.AttendanceGroupId == groupId.Value);
-        // 同 GetShifts：不能直接把 Holiday 实体序列化返回，下面 Cu.IsScoped 分支会在同一个
-        // DbContext 里 Include(g => g.Departments) 加载 AttendanceGroup，EF 自动把 Holiday.AttendanceGroup
-        // 和 AttendanceGroup.Departments↔Department.AttendanceGroup 都接上导航，序列化会循环引用炸掉。
-        var holidays = await q.OrderBy(h => h.HolidayDate)
-            .Select(h => new
-            {
-                h.Id, h.HolidayName, h.HolidayDate, h.HolidayType, h.AttendanceGroupId, h.Description, h.CreatedAt
-            })
-            .ToListAsync();
-        if (Cu.IsScoped)
-        {
-            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(Cu);
-            var allowedGroupIds = (await db.AttendanceGroups.Include(g => g.Departments).ToListAsync())
-                .Where(g => g.Departments.Count == 0 || g.Departments.Any(d => visibleIds!.Contains(d.Id)))
-                .Select(g => g.Id).ToHashSet();
-            holidays = holidays.Where(h => h.AttendanceGroupId is null || allowedGroupIds.Contains(h.AttendanceGroupId.Value)).ToList();
-        }
-        return Ok(new { Success = true, Data = holidays });
-    }
-
-    /// <summary>新增假期。</summary>
-    [HttpPost("holidays")]
-    public async Task<IActionResult> CreateHoliday([FromBody] Holiday holiday)
-    {
-        if (Cu.IsScoped)
-        {
-            if (!holiday.AttendanceGroupId.HasValue) return Forbid();   // 受限管理员不能建全公司通用假期
-            if (!await IsGroupWritableAsync(holiday.AttendanceGroupId.Value)) return Forbid();
-        }
-        // 同一天、同一个考勤组范围（或都是全公司通用）不能重复配置，不然假期列表里会出现看起来
-        // 一模一样、又没法区分该删哪条的重复项
-        if (await db.Holidays.AnyAsync(h => h.HolidayDate == holiday.HolidayDate && h.AttendanceGroupId == holiday.AttendanceGroupId))
-            return BadRequest(new { Success = false, Message = "这一天已经配置过假期，不能重复添加" });
-        holiday.CreatedAt = DateTime.Now;
-        db.Holidays.Add(holiday);
-        await db.SaveChangesAsync();
-        return Ok(new { Success = true, HolidayId = holiday.Id });
-    }
-
-    /// <summary>删除假期。</summary>
-    [HttpDelete("holidays/{id:int}")]
-    public async Task<IActionResult> DeleteHoliday(int id)
-    {
-        var holiday = await db.Holidays.FindAsync(id);
-        if (holiday is null) return NotFound();
-        var allowed = holiday.AttendanceGroupId.HasValue
-            ? await IsGroupWritableAsync(holiday.AttendanceGroupId.Value)
-            : !Cu.IsScoped;
-        if (!allowed) return Forbid();
-
-        db.Holidays.Remove(holiday);
-        await db.SaveChangesAsync();
-        return Ok(new { Success = true });
-    }
 }
 
 // ── 请求模型：装“新增/修改员工”表单字段的简洁数据载体 ──────────────────────────

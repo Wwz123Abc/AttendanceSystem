@@ -189,17 +189,17 @@ public static class ExcelExportHelper
         [
             "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
-            "加班总时长(h)", "工作日加班(h)", "休息日加班(h)", "节假日加班(h)",
+            "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
             "应出勤天数"
         ];
         var tailCols   = tailHeaders.Length;      // 直接取表头个数，不再手写数字
         var totalCols  = fixedCols + dayCount + tailCols;
         var tailStart  = fixedCols + dayCount;
         var lastDayCol = tailStart - 1;
-        // 分组的最后一列：右边线用深一点的颜色当分组分隔线（合同公司、每日最后一天、正班工时、旷工天数、节假日加班）
-        var edgeCols = new HashSet<int> { fixedCols - 1, lastDayCol, tailStart + 3, tailStart + 10, tailStart + 17 };
+        // 分组的最后一列：右边线用深一点的颜色当分组分隔线（合同公司、每日最后一天、正班工时、旷工天数、休息日加班）
+        var edgeCols = new HashSet<int> { fixedCols - 1, lastDayCol, tailStart + 3, tailStart + 10, tailStart + 16 };
         // 带单位的工时列（(h)）用 1 位小数、0 显示"-"；分钟列（(分)）用千分位
-        var hourCols   = new HashSet<int> { tailStart + 3, tailStart + 11, tailStart + 13, tailStart + 14, tailStart + 15, tailStart + 16, tailStart + 17 };
+        var hourCols   = new HashSet<int> { tailStart + 3, tailStart + 11, tailStart + 13, tailStart + 14, tailStart + 15, tailStart + 16 };
         var minuteCols = new HashSet<int> { tailStart + 4, tailStart + 7 };
 
         // ── 第 1 行：标题靠左，拆成"主标题 + 统计周期/人数"两段（不合并，这样冻结窗格后一打开就能看到）──
@@ -255,8 +255,8 @@ public static class ExcelExportHelper
             ("考勤结果（每日工时，单位：小时）", fixedCols,       lastDayCol,     "EEF3FA", HorizontalAlignment.Left),
             ("出勤与工时",                     tailStart,      tailStart + 3,  "DDEBF7", HorizontalAlignment.Center),
             ("迟到 · 早退 · 缺卡 · 旷工",       tailStart + 4,  tailStart + 10, "FBE5D6", HorizontalAlignment.Center),
-            ("出差 · 夜班 · 加班",              tailStart + 11, tailStart + 17, "E2EFDA", HorizontalAlignment.Center),
-            ("对照",                           tailStart + 18, tailStart + 18, "DDEBF7", HorizontalAlignment.Center),
+            ("出差 · 夜班 · 加班",              tailStart + 11, tailStart + 16, "E2EFDA", HorizontalAlignment.Center),
+            ("对照",                           tailStart + 17, tailStart + 17, "DDEBF7", HorizontalAlignment.Center),
         ];
         foreach (var g in groups)
         {
@@ -370,7 +370,6 @@ public static class ExcelExportHelper
             Put(xRow, c, (double)row.TotalOvertimeHours, Num(c), true); c++;
             Put(xRow, c, (double)row.WeekdayOvertimeHours, Num(c), true); c++;
             Put(xRow, c, (double)row.RestDayOvertimeHours, Num(c), true); c++;
-            Put(xRow, c, (double)row.HolidayOvertimeHours, Num(c), true); c++;
             Put(xRow, c, row.ExpectedWorkdays, Num(c), false);   // 应出勤天数（放最后一列）
         }
 

@@ -754,7 +754,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             if (assignByDate.Count == 0) row.StandardDailyHours = null;
 
             decimal totalWork = 0, businessTripHours = 0, nightShiftHours = 0;
-            decimal totalOtHours = 0, weekdayOtHours = 0, restOtHours = 0, holidayOtHours = 0;
+            decimal totalOtHours = 0, weekdayOtHours = 0, restOtHours = 0;
             decimal actualDays = 0, leaveDays = 0;
             int restDays = 0, absentDays = 0, missingIn = 0, missingOut = 0;
             int lateMin = 0, earlyMin = 0, lateCnt = 0, earlyCnt = 0;
@@ -825,8 +825,8 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     if (rec.OvertimeHours > 0)
                     {
                         // 参考模板里"加班总时长"这几列的单位是小时，跟"工作时长"同一个口径，不用再换算。
-                        // 每天的加班先按半小时取整再累加（而不是最后对合计取整）：这样"工作日+休息日+节假日"
-                        // 三个分项加起来一定正好等于"加班总时长"，不会因为各自取整出现对不上的尾差。
+                        // 每天的加班先按半小时取整再累加（而不是最后对合计取整）：这样"工作日+休息日"
+                        // 两个分项加起来一定正好等于"加班总时长"，不会因为各自取整出现对不上的尾差。
                         var ot = FloorToHalf(rec.OvertimeHours);
                         totalOtHours += ot;
                         if (isShiftRest) restOtHours += ot;
@@ -870,7 +870,6 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             row.TotalOvertimeHours      = totalOtHours;
             row.WeekdayOvertimeHours    = weekdayOtHours;
             row.RestDayOvertimeHours    = restOtHours;
-            row.HolidayOvertimeHours    = holidayOtHours;
 
             rows.Add(row);
         }
