@@ -553,6 +553,7 @@
     // 不用把它们全部弹一遍、响一遍铃——只有"打开页面之后新收到的"才弹窗+响铃，体验上更像"刚才有新消息"。
     const seenNotifIds = new Set();
     let notifFirstLoad = true;
+    let notifPrevCount = 0;   // 上一次拉取时的未读总数，用来发现"新增的未读比这次弹出的卡片还多"（见下方 missedCount）
 
     // 点铃铛：切换下拉框的开关状态；打开的时候顺便去后台拉一次最新通知
     function toggleNotifDropdown() {
@@ -604,10 +605,19 @@
             // 但铃声只响一次，避免同一刻来了好几条通知就连响好几下
             const freshOnes = notifFirstLoad ? [] : data.items.filter(n => !seenNotifIds.has(n.id));
             data.items.forEach(n => seenNotifIds.add(n.id));
-            notifFirstLoad = false;
-            if (freshOnes.length > 0) {
+
+            // /api/notifications 只返回最新 15 条未读（GetUnread 的 Take(15)），未读总数 count 不受这个限制。
+            // 如果两次轮询之间一次性新增的未读比这 15 条还多（比如"待审批提醒"一次给同一个人发了十几条），
+            // 排在第 15 条以外的那几条不会出现在 data.items 里，也就没法像别的新通知一样单独弹卡片——
+            // 用总数的增量减去这次实际弹出的卡片数，算出"这次没弹出来的"有几条，另外弹一条汇总提示兜底，
+            // 不然这几条会安安静静地待在铃铛数字里，用户完全不会注意到还有新通知进来（2026-09-30 复核发现）。
+            const missedCount = notifFirstLoad ? 0 : Math.max(0, (data.count - notifPrevCount) - freshOnes.length);
+            notifPrevCount  = data.count;
+            notifFirstLoad  = false;
+            if (freshOnes.length > 0 || missedCount > 0) {
                 playNotifSound();
                 freshOnes.forEach(showNotifToast);
+                if (missedCount > 0) showNotifOverflowToast(missedCount);
             }
         } catch (e) { console.error(e); }
     }
@@ -639,6 +649,24 @@
             <div class="notif-title">${escapeHtml(n.title)}</div>
             <div class="notif-content">${escapeHtml(n.content)}</div>`;
         el.onclick = () => { readNotif(n.id, n.notificationType, n.relatedId); el.remove(); };
+        wrap.appendChild(el);
+        setTimeout(() => el.remove(), 6000);
+    }
+
+    // 未读通知一次性来了太多、被 Take(15) 挤出列表的那几条没法弹出正常的通知卡片（没有具体的
+    // id/标题/内容可用），改弹一条通用汇总提示；点击效果是打开铃铛下拉框——下拉框同样只显示最新
+    // 15 条，但把这些标记已读后，后面攒着的会在下一次轮询里递补上来，一批一批就能看完
+    function showNotifOverflowToast(missedCount) {
+        const wrap = document.getElementById('notifToastWrap');
+        const el = document.createElement('div');
+        el.className = 'notif-toast';
+        el.innerHTML = `
+            <div class="notif-title">还有新通知</div>
+            <div class="notif-content">还有 ${missedCount} 条新通知未显示，点击查看</div>`;
+        // 这张卡片不在 #notifBell 范围内：点击事件如果冒泡到 document，会被下面"点击铃铛/下拉框以外
+        // 就关闭下拉框"的全局监听器当成"点了外面"，把刚打开的下拉框又立刻关掉——必须 stopPropagation
+        // 挡住冒泡（点通知列表里普通一条、点"全部已读"按钮，都是同样的道理，见 markAllRead）
+        el.onclick = e => { e.stopPropagation(); el.remove(); if (!notifOpen) toggleNotifDropdown(); };
         wrap.appendChild(el);
         setTimeout(() => el.remove(), 6000);
     }

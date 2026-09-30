@@ -19,7 +19,7 @@ namespace AttendanceSystem.Services.BackgroundServices;
 /// ● 每月 1-3 日：生成上一个月的考勤汇总（1 号 00:10 之后是首选时间点，留几分钟缓冲给设备重传/网络延迟；
 ///   如果 1 号那次因为异常/重启被错过，2、3 号任意时间都会自动补跑一次，不用等人工点"重新生成"）；
 /// ● 每天 03:00：清理考勤机相关的过期数据（已确认的命令记录、过期的考勤照片）；
-/// ● 每隔 4 小时：给还没处理的待审批申请，往当前该处理的那个审批人再发一条提醒通知
+/// ● 每隔 4 小时：给挂了 4 小时以上还没处理的待审批申请，往当前该处理的那个审批人再发一条提醒通知
 ///   （管理员/文员登录页面提交后就容易忘，光靠提交那一刻发的一条通知很容易被日常消息淹没）。
 /// 用「上次执行时间」做记号，保证同一时间窗内只执行一次；这个记号只在对应任务真正跑成功之后才会更新，
 /// 半途异常不会被误记成"已完成"，下一分钟还会重试。
@@ -321,24 +321,70 @@ public class AttendanceBackgroundService(
     /// 保留天数和 Serilog 日志一致（30 天），不给运维增加新的心智负担。
     /// </summary>
     /// <summary>
-    /// 给还没处理的待审批申请，往"当前轮到谁处理"那个审批人再发一条提醒通知。一张申请单可能配了多级
-    /// 审批，同一时刻只有一个节点是"轮到你了"（StepOrder 最小、还是待审批状态的那个），跟
+    /// 给挂了 4 小时以上还没处理的待审批申请，往"当前轮到谁处理"那个审批人再发一条提醒通知。一张申请单
+    /// 可能配了多级审批，同一时刻只有一个节点是"轮到你了"（StepOrder 最小、还是待审批状态的那个），跟
     /// ApprovalService.GetMyPendingApprovalsAsync 用的是同一套"当前节点"逻辑，避免提醒了还没轮到的
-    /// 后一级审批人。不区分"是不是超过了某个超时阈值"——这个任务本身每 4 小时才跑一次，跑起来就等于
-    /// "这张单又挂了至少 4 小时没人处理"，不需要再单独记一份"上次提醒时间"。
+    /// 后一级审批人。
+    /// 2026-09-30 复核发现并修复的 3 个问题（原来的实现"这个任务每 4 小时跑一次就等于挂了 4 小时"这个
+    /// 假设不成立——程序刚启动/重启后会立刻先跑一次，跟"挂了多久"完全无关）：
+    /// ① 只提醒 UpdatedAt（提交或每一级审批时都会更新）在 4 小时以前的单，刚提交/刚流转到这一级的不打扰；
+    /// ② 跳过已停用的审批人、以及申请人调岗后已经管不到的审批人（跟 ApproverCoversApplicantAsync/
+    ///    GetPendingForApproverAsync 同一个口径），这类"审批人事实上处理不了"的单不再徒劳提醒；
+    /// ③ 同一张单、同一个审批人，如果上一次的提醒还没读，就不再新增一条——不然审批人手上压着几张单，
+    ///    每 4 小时会一次性弹好几张卡片、响好几声，未读也会无限累积。
     /// </summary>
     private async Task RemindPendingApprovalsAsync()
     {
         using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+        var db         = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+        var deptScope  = scope.ServiceProvider.GetRequiredService<IDeptScopeService>();
 
+        var now    = DateTime.Now;
+        var cutoff = now.AddHours(-4);
         var openRequests = await db.ApprovalRequests
-            .Where(r => r.ApprovalStatus == ApprovalStatus.Pending || r.ApprovalStatus == ApprovalStatus.InProgress)
+            .Where(r => (r.ApprovalStatus == ApprovalStatus.Pending || r.ApprovalStatus == ApprovalStatus.InProgress)
+                     && r.UpdatedAt <= cutoff)
             .Include(r => r.Applicant)
             .Include(r => r.ApprovalSteps)
             .ToListAsync();
+        if (openRequests.Count == 0) return;
 
-        var now = DateTime.Now;
+        // 当前轮到谁处理，一张单最多一个人；先批量把这些审批人的"在职状态/管理范围"查出来，
+        // 不在循环里逐条查数据库
+        var currentSteps = openRequests
+            .Select(r => r.ApprovalSteps.Where(s => s.ApprovalStatus == ApprovalStatus.Pending).OrderBy(s => s.StepOrder).FirstOrDefault())
+            .Where(s => s is not null)
+            .Cast<ApprovalStep>()
+            .ToList();
+        var approverIds = currentSteps.Select(s => s.ApproverUserId).ToHashSet();
+        var approvers = await db.Users.Where(u => approverIds.Contains(u.Id))
+            .Select(u => new { u.Id, u.IsActive, u.ScopedDepartmentId })
+            .ToDictionaryAsync(u => u.Id);
+
+        // 部门子树按"审批人的管理范围根部门"缓存，同一个范围根不用重复算（GetSubtreeIdsAsync 每次都会
+        // 把全部门表扫一遍，审批人可能有好几个人共用同一个范围根，缓存能省掉重复的数据库往返）
+        var subtreeCache = new Dictionary<int, HashSet<int>>();
+        async Task<bool> CoversApplicantAsync(int scopedDeptId, int? applicantDeptId)
+        {
+            if (applicantDeptId is null) return false;   // 申请人没有部门归属，只总部可见
+            if (!subtreeCache.TryGetValue(scopedDeptId, out var ids))
+            {
+                ids = await deptScope.GetSubtreeIdsAsync(scopedDeptId);
+                subtreeCache[scopedDeptId] = ids;
+            }
+            return ids.Contains(applicantDeptId.Value);
+        }
+
+        // 提醒前先把这一批候选审批人已经有的"还没读的提醒"批量查一遍，命中的（审批人, 申请单）组合
+        // 就跳过不再新增，避免同一张单的未读提醒无限累积
+        var existingUnread = (await db.Notifications
+                .Where(n => n.NotificationType == "ApprovalPending" && !n.IsRead && approverIds.Contains(n.UserId) && n.RelatedId != null)
+                .Select(n => new { n.UserId, RelatedId = n.RelatedId!.Value })
+                .ToListAsync())
+            .Select(x => (x.UserId, x.RelatedId))
+            .ToHashSet();
+
+        var toAdd = new List<Notification>();
         foreach (var req in openRequests)
         {
             var currentStep = req.ApprovalSteps
@@ -347,7 +393,15 @@ public class AttendanceBackgroundService(
                 .FirstOrDefault();
             if (currentStep is null) continue;   // 理论上不会发生：整单还是 Pending/InProgress 就一定有一个待处理节点，这里只是防御性判断
 
-            db.Notifications.Add(new Notification
+            if (!approvers.TryGetValue(currentStep.ApproverUserId, out var approver) || !approver.IsActive)
+                continue;   // 审批人账号不存在或已停用，提醒了也没人处理
+            if (approver.ScopedDepartmentId.HasValue
+                && !await CoversApplicantAsync(approver.ScopedDepartmentId.Value, req.Applicant.DepartmentId))
+                continue;   // 申请人调岗后，原审批人已经管不到了（这类卡住的单交给总部处理，不在这里提醒）
+            if (existingUnread.Contains((currentStep.ApproverUserId, req.Id)))
+                continue;   // 上一次的提醒还没读，不重复新增
+
+            toAdd.Add(new Notification
             {
                 UserId           = currentStep.ApproverUserId,
                 Title            = "审批提醒",
@@ -358,7 +412,11 @@ public class AttendanceBackgroundService(
             });
         }
 
-        if (openRequests.Count > 0) await db.SaveChangesAsync();
+        if (toAdd.Count > 0)
+        {
+            db.Notifications.AddRange(toAdd);
+            await db.SaveChangesAsync();
+        }
     }
 
     private async Task CleanupZKDeviceDataAsync()
