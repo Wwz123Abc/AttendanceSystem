@@ -33,8 +33,6 @@ public class FakeAttendanceService : IAttendanceService
     public Task EnsureMonthlySummaryFreshAsync(int userId, int year, int month) => throw new NotImplementedException();
     public Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null) => throw new NotImplementedException();
     public Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null) => throw new NotImplementedException();
-    public Task<bool> IsHolidayAsync(DateOnly date, int? groupId = null) => throw new NotImplementedException();
-    public Task<List<HolidayInfoDto>> GetMonthHolidaysAsync(int year, int month, int? groupId) => throw new NotImplementedException();
     public Task<ShiftAssignment?> GetShiftAssignmentAsync(int userId, DateOnly date) => throw new NotImplementedException();
     public Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName) => throw new NotImplementedException();
     public Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds) => throw new NotImplementedException();

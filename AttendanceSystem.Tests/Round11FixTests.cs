@@ -88,20 +88,6 @@ public class Round11FixTests : IDisposable
         Assert.False(AttendanceService.HasLeaveOverlapForDay(Tue, start, end, shift));   // 周二排的是周二晚上的班，跟这次假不重叠
     }
 
-    [Fact]
-    public void 非工作日判断_休息日_法定节假日算_调班补班日不算()
-    {
-        var shift = DayShift();
-        var legal = new Holiday { HolidayName = "国庆", HolidayDate = Tue, HolidayType = HolidayType.LegalHoliday };
-        var comp  = new Holiday { HolidayName = "补班", HolidayDate = Sat, HolidayType = HolidayType.CompensatoryWorkDay };
-
-        Assert.True(AttendanceService.IsNonWorkday(Sat, null, [], shift));          // 每周休息日
-        Assert.False(AttendanceService.IsNonWorkday(Mon, null, [], shift));
-        Assert.True(AttendanceService.IsNonWorkday(Tue, null, [legal], shift));     // 法定节假日
-        Assert.False(AttendanceService.IsNonWorkday(Sat, null, [comp], shift));     // 周六补班：算工作日
-        Assert.True(AttendanceService.IsNonWorkday(Sun, null, [], null));           // 没排班：周六周日兜底
-    }
-
     [Theory]
     [InlineData(LeaveType.PersonalLeave, false)]
     [InlineData(LeaveType.SickLeave, false)]
@@ -472,8 +458,10 @@ public class Round11FixTests : IDisposable
             var user = new User { EmployeeNo = "N11", RealName = "晚班缺卡员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
             db.Users.Add(user);
             db.SaveChanges();
-            foreach (var d in new[] { yesterday, today })
-                db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = d, ShiftScheduleId = shift.Id });
+            // 今天故意不排班：这条测试要验证的是"昨天完全没打卡能不能被追认"，跟"今天自己是不是也排了班"
+            // 无关——如果今天也排了同一班次，测试跑到下午（今天班次自己的可打卡时刻已到）时会被 §7.29
+            // 的"今天已到可打卡时刻就优先归今天"抢先命中，变成看运行时刻而定（2026-09-30 发现）。
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = yesterday, ShiftScheduleId = shift.Id });
             await db.SaveChangesAsync();
             uid = user.Id;
         }
@@ -516,8 +504,8 @@ public class Round11FixTests : IDisposable
             var user = new User { EmployeeNo = "N12", RealName = "晚班缺卡驳回员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
             db.Users.Add(user);
             db.SaveChanges();
-            foreach (var d in new[] { yesterday, today })
-                db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = d, ShiftScheduleId = shift.Id });
+            // 今天故意不排班，理由同上一条测试：避免 §7.29 的"今天已到可打卡时刻"判断在下午跑测试时抢先命中
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = yesterday, ShiftScheduleId = shift.Id });
             // 昨晚忘打上班卡，员工提交了补卡申请，但审批人驳回了——驳回不回写考勤，
             // 考勤记录本身应该继续保持"完全没有"这条记录的状态
             db.ApprovalRequests.Add(new ApprovalRequest
@@ -1042,31 +1030,6 @@ public class Round11FixTests : IDisposable
     }
 
     [Fact]
-    public async Task 法定节假日加班_整天都可以填_不受限制()
-    {
-        var uid = SeedOvertimeWorld(restDays: "");
-        using (var db = CreateContext())
-        {
-            db.Holidays.Add(new Holiday { HolidayName = "国庆", HolidayDate = DateOnly.FromDateTime(DateTime.Today), HolidayType = HolidayType.LegalHoliday });
-            db.SaveChanges();
-        }
-        Assert.Null(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(20, 0)));
-    }
-
-    [Fact]
-    public async Task 调班补班日_算工作日_重叠照样拒绝()
-    {
-        var todayDow = ((int)DateTime.Today.DayOfWeek).ToString();
-        var uid = SeedOvertimeWorld(restDays: todayDow);            // 本来是休息日，但今天是补班日
-        using (var db = CreateContext())
-        {
-            db.Holidays.Add(new Holiday { HolidayName = "补班", HolidayDate = DateOnly.FromDateTime(DateTime.Today), HolidayType = HolidayType.CompensatoryWorkDay });
-            db.SaveChanges();
-        }
-        Assert.IsType<InvalidOperationException>(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(17, 30)));
-    }
-
-    [Fact]
     public async Task 当天没排班_不判断重叠()
     {
         var uid = SeedOvertimeWorld(restDays: "");
@@ -1406,24 +1369,6 @@ public class Round11FixTests : IDisposable
     }
 
     [Fact]
-    public async Task 模板汇总表_全公司放假加本考勤组补班同一天_按统一优先级算工作日()
-    {
-        var (uid, gid) = SeedWeekWorld();
-        using (var db = CreateContext())
-        {
-            // 周一：全公司放假 + 本考勤组补班。统一规则：考勤组自己的规则优先 → 补班（工作日）
-            db.Holidays.Add(new Holiday { HolidayName = "全公司放假", HolidayDate = Mon, HolidayType = HolidayType.LegalHoliday });
-            db.Holidays.Add(new Holiday { HolidayName = "本组补班", HolidayDate = Mon, HolidayType = HolidayType.CompensatoryWorkDay, AttendanceGroupId = gid });
-            db.SaveChanges();
-        }
-        using var db2 = CreateContext();
-        var report = await new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance).GenerateTemplateReportAsync(Mon, Mon, null);
-        var row = report.Rows.Single(r => r.EmployeeNo == "L1");
-        Assert.False(row.DailyIsRest[0]);            // 补班日：不是休息
-        Assert.Equal(1, row.ExpectedWorkdays);       // 跟"应出勤"一致
-    }
-
-    [Fact]
     public async Task 管理员手动补卡_打卡时间不在考勤日当天或第二天_直接拒绝_下班早于上班也拒绝()
     {
         var (uid, _) = SeedWeekWorld();
@@ -1437,28 +1382,6 @@ public class Round11FixTests : IDisposable
         Assert.Contains("下班时间必须晚于上班时间", reversed.Message);
         // 夜班下班在第二天：允许
         await svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(20, 0)), Tue.ToDateTime(new TimeOnly(8, 0)), null, "管理员");
-    }
-
-    [Fact]
-    public async Task 法定节假日手动补卡_不结算正班工时_状态记休假_跟考勤机口径一致()
-    {
-        // 2026-09-30 复核发现（国庆假期前一天报告）：补卡审批回写、管理员手动补卡、智能助手补卡走的
-        // RecalcWorkHoursAfterManualPunchAsync 之前只判断了"每周休息日"，没判断法定节假日/公司休息日——
-        // 国庆等假期漏打一次卡去补，会凭空多出一整天正班工时，跟已批准的加班单重复计薪。
-        var (uid, gid) = SeedWeekWorld();
-        using (var db = CreateContext())
-        {
-            db.Holidays.Add(new Holiday { HolidayName = "国庆节", HolidayDate = Mon, HolidayType = HolidayType.LegalHoliday, AttendanceGroupId = gid });
-            await db.SaveChangesAsync();
-        }
-        using var db2 = CreateContext();
-        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
-        await svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(8, 30)), Mon.ToDateTime(new TimeOnly(17, 30)), null, "管理员");
-
-        using var check = CreateContext();
-        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
-        Assert.Equal(AttendanceStatus.Holiday, rec.AttendanceStatus);
-        Assert.Equal(0m, rec.ActualWorkHours);
     }
 
     // ── ⑯ 2026-09-29 用户反馈：夜班一次卡都没打，凌晨才想起来打上班卡，被"打得太早"误拦 ──────
@@ -1559,6 +1482,10 @@ public class Round11FixTests : IDisposable
         // GetClockInRejectionAsync 只能验证"拦不拦"，实际落库走的是 PunchAsync（内部用 DateTime.Now，
         // 没法像别的测试那样注入固定的 Mon/Tue），所以这条改用真实的"今天/昨天"，并把班次的下班时间
         // 设得很晚（23:59），保证不管测试什么时候跑，"现在"都落在"昨晚班次结束之前"这个窗口内。
+        // ★ 今天故意不排班（只给昨天排）：这条测试要验证的是"完全没打卡的昨天能不能被追认"，
+        // 跟"今天自己是不是也排了班"无关——如果今天也排了同一个班次，一旦测试跑到下午（今天班次
+        // 自己的可打卡时刻已到），§7.29 的"今天已到可打卡时刻就优先归今天"这条判断会抢先命中，
+        // 导致这次打卡被错误地记成"今天"的新记录，测试变得看运行时刻而定（2026-09-30 发现）。
         var today     = DateOnly.FromDateTime(DateTime.Today);
         var yesterday = today.AddDays(-1);
         int uid;
@@ -1576,8 +1503,7 @@ public class Round11FixTests : IDisposable
             var user = new User { EmployeeNo = "N9", RealName = "夜班没打卡员工", PasswordHash = "x", IsActive = true, AttendanceGroupId = group.Id, HireDate = new DateOnly(2026, 1, 1) };
             db.Users.Add(user);
             db.SaveChanges();
-            foreach (var d in new[] { yesterday, today })
-                db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = d, ShiftScheduleId = shift.Id });
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = yesterday, ShiftScheduleId = shift.Id });
             db.SaveChanges();
             uid = user.Id;
         }

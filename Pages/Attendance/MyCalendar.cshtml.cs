@@ -19,7 +19,7 @@ public class MyCalendarModel(IAttendanceService attendanceService) : AppPageMode
     public MonthlySummaryDto? Summary { get; set; }
 
     /// <summary>日历网格里的一天：null 表示当月开头/结尾用来对齐星期几的占位空格。</summary>
-    public record CalendarCell(DateOnly Date, AttendanceRecordDto? Record, MyScheduleDto? Shift, HolidayInfoDto? Holiday);
+    public record CalendarCell(DateOnly Date, AttendanceRecordDto? Record, MyScheduleDto? Shift);
 
     /// <summary>日历网格，已按“周一开头”补好每周前面的占位空格，按 7 个一组渲染成一行。</summary>
     public List<CalendarCell?> Cells { get; set; } = [];
@@ -38,14 +38,12 @@ public class MyCalendarModel(IAttendanceService attendanceService) : AppPageMode
         var latest    = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(1);
         if (requested < earliest || requested > latest) { Year = DateTime.Today.Year; Month = DateTime.Today.Month; }
         var userId  = CurrentUserId;
-        var groupId = CurrentGroupId;
 
         var records = await attendanceService.GetPersonalAttendanceAsync(new PersonalAttendanceQueryDto
         {
             UserId = userId, Year = Year, Month = Month
         });
         var schedule = await attendanceService.GetMyScheduleAsync(userId, Year, Month);
-        var holidays = await attendanceService.GetMonthHolidaysAsync(Year, Month, groupId);
 
         // 月度汇总平时只在”月初自动生成上个月”或管理员打开月度报表时才会算，本月进行中的汇总一直是空的，
         // 员工自己在日历页也看不到本月概况。这里只在没有汇总行、或汇总行比考勤记录更新时间还旧时才重算
@@ -57,11 +55,6 @@ public class MyCalendarModel(IAttendanceService attendanceService) : AppPageMode
 
         var recByDate     = records.ToDictionary(r => r.WorkDate);
         var shiftByDate    = schedule.ToDictionary(s => s.WorkDate);
-        // 同一天可能配了多条假期规则（全公司 + 考勤组专属），调班补班优先展示（它意味着“今天要上班”，比“休息”更值得提醒）
-        var holidayByDate  = holidays
-            .GroupBy(h => h.Date)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(h => h.Type == HolidayType.CompensatoryWorkDay).First());
-
         var first = new DateOnly(Year, Month, 1);
         var last  = first.AddMonths(1).AddDays(-1);
 
@@ -71,6 +64,6 @@ public class MyCalendarModel(IAttendanceService attendanceService) : AppPageMode
         Cells = [];
         for (var i = 0; i < leadingBlanks; i++) Cells.Add(null);
         for (var d = first; d <= last; d = d.AddDays(1))
-            Cells.Add(new CalendarCell(d, recByDate.GetValueOrDefault(d), shiftByDate.GetValueOrDefault(d), holidayByDate.GetValueOrDefault(d)));
+            Cells.Add(new CalendarCell(d, recByDate.GetValueOrDefault(d), shiftByDate.GetValueOrDefault(d)));
     }
 }

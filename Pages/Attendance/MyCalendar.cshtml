@@ -26,15 +26,12 @@
         _ => "empty"
     };
 
-    // 没有考勤记录的那天，是不是“非工作日”（周末 / 法定节假日 / 公司休息日）：调班补班日要上班，不算。
-    // 有这个标记的天，日历上会灰色显示并标出原因（比如“国庆节”“周末”），不再和“还没到的日子”一样是一片空白。
+    // 没有考勤记录的那天，是不是周末：有这个标记的天，日历上会灰色显示并标出"周末"，
+    // 不再和"还没到的日子"一样是一片空白。
     bool IsRestDay(MyCalendarModel.CalendarCell cell)
-        => cell.Holiday is { Type: not AttendanceSystem.Models.Enums.HolidayType.CompensatoryWorkDay }
-           || (cell.Holiday is null && cell.Date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday);
+        => cell.Date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
 
-    // 非工作日显示的原因文字：优先用假期名称，普通周末就显示“周末”
-    string RestDayLabel(MyCalendarModel.CalendarCell cell)
-        => cell.Holiday?.Name ?? "周末";
+    string RestDayLabel(MyCalendarModel.CalendarCell cell) => "周末";
 
     // 把日历数据打包成 JS 能读的字典，key=日期文字，点某一天时直接从这里取详情，不用再发请求
     var detailsJson = System.Text.Json.JsonSerializer.Serialize(
@@ -44,8 +41,8 @@
             {
                 dateText   = c!.Date.ToString("yyyy-MM-dd"),
                 bucket     = DayBucket(c.Record?.AttendanceStatus),
-                // 没打卡记录、又是休息日（周末/节假日）时，哪怕当天挂着一条排班，也优先说明“为什么这天没数据”，
-                // 而不是显示一个容易让人误以为“这天要上班”的排班名
+                // 没打卡记录、又是休息日（周末）时，哪怕当天挂着一条排班，也优先说明"为什么这天没数据"，
+                // 而不是显示一个容易让人误以为"这天要上班"的排班名
                 statusText = c.Record?.StatusText ?? (IsRestDay(c) ? RestDayLabel(c) : (c.Shift != null ? "有排班" : "无记录")),
                 clockIn    = c.Record?.ClockInText ?? "--",
                 clockOut   = c.Record?.ClockOutText ?? "--",
@@ -94,7 +91,7 @@
             <span class="cal-legend-dot" style="background:var(--success-text)"></span><small class="text-muted me-2">正常</small>
             <span class="cal-legend-dot" style="background:var(--danger-text)"></span><small class="text-muted me-2">异常</small>
             <span class="cal-legend-dot" style="background:var(--info-text)"></span><small class="text-muted me-2">休假/出差</small>
-            <span class="cal-legend-dot" style="background:var(--gray-text)"></span><small class="text-muted">周末/节假日</small>
+            <span class="cal-legend-dot" style="background:var(--gray-text)"></span><small class="text-muted">周末</small>
         </div>
     </div>
 </div>
@@ -191,7 +188,7 @@
                             }
                             else
                             {
-                                // 没打卡记录、又是休息日（周末/节假日）→ 灰色标注原因；哪怕当天挂着排班也不例外
+                                // 没打卡记录、又是休息日（周末）→ 灰色标注原因；哪怕当天挂着排班也不例外
                                 // （避免一条误挂在假期上的排班，让人误以为节假日这天要上班）
                                 var isRest   = cell.Record is null && IsRestDay(cell);
                                 var hasData  = cell.Record != null || (cell.Shift != null && !isRest);

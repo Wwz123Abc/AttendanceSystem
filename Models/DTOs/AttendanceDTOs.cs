@@ -238,14 +238,6 @@ public class MyScheduleDto
     public bool    IsAutoAssigned { get; set; }                   // 是否系统自动排班
 }
 
-/// <summary>某天的假期信息（日历页用来标注法定节假日/公司休息日/调班补班日，即使当天没有考勤记录）。</summary>
-public class HolidayInfoDto
-{
-    public DateOnly    Date { get; set; }
-    public string      Name { get; set; } = string.Empty;
-    public HolidayType Type { get; set; }
-}
-
 /// <summary>管理看板今日统计（首页看板用）。</summary>
 public class AttendanceStatsDto
 {

@@ -80,8 +80,6 @@ public class AgentActionService(
         "registration_confirm_propose",
         "employee_create_propose",
         "punch_adjust_propose",
-        "holiday_add_propose",
-        "holiday_delete_propose",
         "user_blacklist_propose",
         "scope_change_propose",
         "approval_submit_on_behalf_propose"
@@ -98,8 +96,6 @@ public class AgentActionService(
         "registration_confirm_propose"  => "撤回=删除刚建的员工并恢复该登记为待确认（其考勤/关联数据会一并删除，请谨慎）",
         "employee_create_propose"       => "撤回=删除刚建的员工（其考勤/关联数据会一并删除，请谨慎）",
         "punch_adjust_propose"          => "撤回=恢复补卡前的打卡记录（原没有记录的会删除该天记录）",
-        "holiday_add_propose"           => "撤回=删除这条假期",
-        "holiday_delete_propose"        => "撤回=恢复这条假期",
         "user_blacklist_propose"        => "撤回=恢复该员工拉黑前的状态",
         "scope_change_propose"          => "撤回=恢复执行前的管理范围",
         "approval_submit_on_behalf_propose" => "撤回=撤销这张申请单（仅在审批人还没处理、状态仍为「待审批」时可撤）",
@@ -131,8 +127,6 @@ public class AgentActionService(
         "employee_update_propose"      => "修改员工资料",
         "employee_role_propose"        => "调整角色",
         "employee_batch_toggle_propose" => "批量启停",
-        "holiday_add_propose"          => "新增假期",
-        "holiday_delete_propose"       => "删除假期",
         "approval_handle_propose"      => "审批处理",
         "approval_submit_on_behalf_propose" => "代提申请",
         "announcement_publish_propose" => "发布公告",
@@ -389,29 +383,6 @@ public class AgentActionService(
                 };
                 return JsonSerializer.Serialize(payload);
             }
-            if (action.ToolName == "holiday_add_propose")
-            {
-                // 新增前没有行可抓，快照"将要添加的内容"，撤回时按同字段找到并删除
-                var payload = new
-                {
-                    type = "holidayadd",
-                    date = GetString(args, "date"),
-                    name = GetString(args, "name"),
-                    typeName = GetString(args, "type"),
-                    groupId = GetInt(args, "groupId")
-                };
-                return JsonSerializer.Serialize(payload);
-            }
-            if (action.ToolName == "holiday_delete_propose")
-            {
-                var hid = GetInt(args, "holidayId");
-                if (!hid.HasValue) return null;
-                var row = await db.Holidays.AsNoTracking()
-                    .Where(h => h.Id == hid.Value)
-                    .Select(h => new { h.Id, h.HolidayName, h.HolidayDate, h.HolidayType, h.AttendanceGroupId, h.Description })
-                    .FirstOrDefaultAsync();
-                return row is null ? null : JsonSerializer.Serialize(new { type = "holidaydel", row });
-            }
         }
         catch { /* 快照失败不阻塞主流程 */ }
         return null;
@@ -610,41 +581,6 @@ public class AgentActionService(
                 await attendanceService.GenerateMonthlySummaryAsync(wd.Year, wd.Month, new[] { uid });
                 return (true, $"已还原 {wd:yyyy-MM-dd} 的打卡记录");
             }
-            case "holidayadd":
-            {
-                var dateS = root.TryGetProperty("date", out var dt) ? dt.GetString() : null;
-                var name = root.TryGetProperty("name", out var nm) ? nm.GetString() : null;
-                var typeS = root.TryGetProperty("typeName", out var tp) ? tp.GetString() : null;
-                var gid = root.TryGetProperty("groupId", out var gg) && gg.ValueKind == JsonValueKind.Number ? gg.GetInt32() : (int?)null;
-                if (!DateOnly.TryParse(dateS, out var date) || string.IsNullOrEmpty(name)) return (false, "快照缺少日期/名称");
-                var holiday = await db.Holidays.FirstOrDefaultAsync(h => h.HolidayDate == date && h.HolidayName == name && h.AttendanceGroupId == gid);
-                if (holiday is null) return (false, "要撤回的假期已不存在");
-                db.Holidays.Remove(holiday);
-                await db.SaveChangesAsync();
-                return (true, $"已删除撤回的假期 {date:yyyy-MM-dd} {name}");
-            }
-            case "holidaydel":
-            {
-                var row = root.GetProperty("row");
-                var name = row.GetProperty("HolidayName").GetString()!;
-                var date = DateOnly.Parse(row.GetProperty("HolidayDate").GetString()!);   // DateOnly 序列化为 yyyy-MM-dd
-                var typeVal = row.GetProperty("HolidayType").GetInt32();
-                var gid = row.GetProperty("AttendanceGroupId").ValueKind == JsonValueKind.Number ? row.GetProperty("AttendanceGroupId").GetInt32() : (int?)null;
-                var desc = row.TryGetProperty("Description", out var de) && de.ValueKind == JsonValueKind.String ? de.GetString() : null;
-                var dup = await db.Holidays.AnyAsync(h => h.HolidayDate == date && h.HolidayName == name && h.AttendanceGroupId == gid);
-                if (dup) return (false, "该假期已被重新添加，无需重复恢复");
-                db.Holidays.Add(new Models.Entities.Holiday
-                {
-                    HolidayName = name,
-                    HolidayDate = date,
-                    HolidayType = (AttendanceSystem.Models.Enums.HolidayType)typeVal,
-                    AttendanceGroupId = gid,
-                    Description = desc,
-                    CreatedAt = DateTime.Now
-                });
-                await db.SaveChangesAsync();
-                return (true, $"已恢复假期 {date:yyyy-MM-dd} {name}");
-            }
             case "approvalsubmit":
             {
                 var reqId = root.GetProperty("requestId").GetInt32();
@@ -705,8 +641,6 @@ public class AgentActionService(
                 "employee_update_propose"      => await ExecuteUpdateEmployeeAsync(operatorUserId, args),
                 "employee_role_propose"        => await ExecuteChangeRoleAsync(operatorUserId, args),
                 "employee_batch_toggle_propose" => await ExecuteBatchToggleAsync(operatorUserId, args),
-                "holiday_add_propose"          => await ExecuteAddHolidayAsync(operatorUserId, args),
-                "holiday_delete_propose"       => await ExecuteDeleteHolidayAsync(operatorUserId, args),
                 "approval_handle_propose"      => await ExecuteHandleApprovalAsync(operatorUserId, args),
                 "approval_submit_on_behalf_propose" => await ExecuteApprovalSubmitOnBehalfAsync(operatorUserId, args),
                 "announcement_publish_propose" => await ExecutePublishAnnouncementAsync(operatorUserId, args),
@@ -1314,68 +1248,6 @@ public class AgentActionService(
 
         var n = await userService.SetActiveBatchAsync(targets, action == "activate", operatorUserId);
         return (true, $"已{(action == "deactivate" ? "停用" : "启用")} {n} 名员工");
-    }
-
-    /// <summary>假期写权限：全公司(null 组)仅总部；组假期须"关联部门全部在范围内"（比页面更严）。</summary>
-    private async Task<bool> HolidayWritableAsync(int? groupId, HashSet<int>? visibleIds, AttendanceSystem.Middlewares.CurrentUser cu)
-    {
-        if (visibleIds is null) return true;
-        if (!groupId.HasValue) return false;   // 全公司假期仅总部
-        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
-        if (deptIds.Count == 0) return false;
-        return deptIds.All(visibleIds.Contains);
-    }
-
-    private async Task<(bool, string)> ExecuteAddHolidayAsync(int operatorUserId, JsonElement args)
-    {
-        var dateS = GetString(args, "date");
-        var typeS = GetString(args, "type");
-        var groupId = GetInt(args, "groupId");
-        var name = GetString(args, "name")?.Trim();
-        if (!DateOnly.TryParse(dateS, out var date)) return (false, "date 格式不正确");
-        var type = typeS switch
-        {
-            "legal" or "LegalHoliday"             => AttendanceSystem.Models.Enums.HolidayType.LegalHoliday,
-            "rest" or "CompanyRestDay"            => AttendanceSystem.Models.Enums.HolidayType.CompanyRestDay,
-            "compensatory" or "CompensatoryWorkDay" => AttendanceSystem.Models.Enums.HolidayType.CompensatoryWorkDay,
-            _ => (AttendanceSystem.Models.Enums.HolidayType?)null
-        };
-        if (!type.HasValue) return (false, "type 不合法");
-        if (string.IsNullOrEmpty(name)) return (false, "缺少假期名称");
-
-        var (cu, visibleIds, ok, err) = await LoadOperatorAsync(operatorUserId);
-        if (!ok) return (false, err!);
-        if (!await HolidayWritableAsync(groupId, visibleIds, cu))
-            return (false, "无权给该范围设置假期（全公司假期仅总部；组假期需其部门全在范围内）");
-
-        db.Holidays.Add(new Models.Entities.Holiday
-        {
-            HolidayName       = name,
-            HolidayDate       = date,
-            HolidayType       = type!.Value,
-            AttendanceGroupId = groupId,
-            CreatedAt         = DateTime.Now
-        });
-        await db.SaveChangesAsync();
-        return (true, $"已添加假期：{date:yyyy-MM-dd} {name}" + (groupId.HasValue ? "（考勤组专属）" : "（全公司）"));
-    }
-
-    private async Task<(bool, string)> ExecuteDeleteHolidayAsync(int operatorUserId, JsonElement args)
-    {
-        var holidayId = GetInt(args, "holidayId");
-        if (!holidayId.HasValue) return (false, "参数缺失：holidayId");
-
-        var (cu, visibleIds, ok, err) = await LoadOperatorAsync(operatorUserId);
-        if (!ok) return (false, err!);
-
-        var h = await db.Holidays.FindAsync(holidayId.Value);
-        if (h is null) return (false, "该假期不存在");
-        if (!await HolidayWritableAsync(h.AttendanceGroupId, visibleIds, cu))
-            return (false, "无权删除该假期（全公司假期仅总部；组假期需其部门全在范围内）");
-
-        db.Holidays.Remove(h);
-        await db.SaveChangesAsync();
-        return (true, $"已删除假期：{h.HolidayDate:yyyy-MM-dd} {h.HolidayName}");
     }
 
     // ── 审批处理 / 公告发布撤回 / 考勤机登记变更（执行侧）────────────────────────

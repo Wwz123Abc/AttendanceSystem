@@ -196,16 +196,10 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             .GroupBy(a => a.UserId)
             .ToDictionary(g => g.Key, g => g.ToDictionary(a => a.WorkDate));
 
-        var holidays = await db.Holidays
-            .Where(h => h.HolidayDate >= start && h.HolidayDate <= end
-                     && (h.AttendanceGroupId == null || selectedGroupIds.Contains(h.AttendanceGroupId.Value)))
-            .ToListAsync();
-
         var rows = new List<(string RealName, string EmployeeNo, string GroupName, string? DeptName, List<string?> DailyShiftName, List<bool> DailyMissing, int MissingCount)>();
         foreach (var user in members)
         {
             var assignByDate = assignByUser.GetValueOrDefault(user.Id) ?? new Dictionary<DateOnly, ShiftAssignment>();
-            var myHolidays   = holidays.Where(h => h.AttendanceGroupId == null || h.AttendanceGroupId == user.AttendanceGroupId).ToList();
 
             var dailyShiftName = new List<string?>();
             var dailyMissing   = new List<bool>();
@@ -225,15 +219,12 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                     continue;
                 }
 
-                var holiday      = myHolidays.FirstOrDefault(h => h.HolidayDate == date);
-                var isCompDay    = holiday?.HolidayType == HolidayType.CompensatoryWorkDay;
-                var isHolidayOff = holiday is not null && !isCompDay;
-                var isWeekendOff = !isCompDay && date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+                var isWeekendOff = date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
 
                 dailyShiftName.Add(null);
-                if (isHolidayOff || isWeekendOff)
+                if (isWeekendOff)
                 {
-                    dailyMissing.Add(false);   // 休息日/节假日，不算漏排
+                    dailyMissing.Add(false);   // 周末，不算漏排
                 }
                 else
                 {

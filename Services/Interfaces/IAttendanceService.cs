@@ -55,10 +55,6 @@ public interface IAttendanceService
     /// 分类口径与 <see cref="GetTodayStatsAsync"/> 完全一致，保证卡片数字和点开的名单条数对得上。
     /// </summary>
     Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null);
-    /// <summary>判断指定日期是否为节假日（排除调班补班日）。</summary>
-    Task<bool>                     IsHolidayAsync(DateOnly date, int? groupId = null);
-    /// <summary>获取指定月份的假期信息列表（法定节假日/公司休息日/调班补班日），供日历页标注非工作日用。</summary>
-    Task<List<HolidayInfoDto>>     GetMonthHolidaysAsync(int year, int month, int? groupId);
     /// <summary>获取某员工某天的排班。</summary>
     Task<ShiftAssignment?>         GetShiftAssignmentAsync(int userId, DateOnly date);
     /// <summary>审批通过后回写对应考勤记录（补卡/请假）。</summary>

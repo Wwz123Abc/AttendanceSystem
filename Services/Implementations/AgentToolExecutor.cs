@@ -41,10 +41,10 @@ public class AgentToolExecutor(
             "列出操作者管理范围内的考勤机及其在线/离线状态。",
             """{"type":"object","properties":{"onlineOnly":{"type":"boolean","description":"只列在线的，可空"},"limit":{"type":"integer","description":"最多条数，默认50，上限100"}},"required":[]}"""),
         new("department_list",
-            "列出操作者管理范围内的部门树（id/名称/上级部门/所属公司/绑定的考勤组）。employee_create_propose 等工具需要的 deptId、holiday_add_propose 等需要的 groupId 都应先用这个（或 attendance_group_list）查到，不要凭空猜数字。",
+            "列出操作者管理范围内的部门树（id/名称/上级部门/所属公司/绑定的考勤组）。employee_create_propose 等工具需要的 deptId 应先用这个（或 attendance_group_list）查到，不要凭空猜数字。",
             """{"type":"object","properties":{"keyword":{"type":"string","description":"部门名称关键字，可空=返回范围内全部"}},"required":[]}"""),
         new("attendance_group_list",
-            "列出操作者管理范围内的考勤组（id/名称/审批层级/是否启用定位打卡）。holiday_add_propose 的 groupId 参数应先用这个查到。",
+            "列出操作者管理范围内的考勤组（id/名称/审批层级/是否启用定位打卡）。",
             """{"type":"object","properties":{}, "required":[]}"""),
         new("punch_adjust_propose",
             "【写操作·需管理员确认】为范围内某员工某天补录/修正上下班打卡时间。此工具只生成待确认动作，不会直接修改；管理员在页面上点\"确认执行\"后才生效。",
@@ -70,9 +70,6 @@ public class AgentToolExecutor(
         new("registration_confirm_propose",
             "【写操作·需管理员确认】把某条待确认的扫码登记正式建档为员工（认领登记：先调 pending_registration_list 拿登记 id；系统按所选部门自动生成工号，初始密码统一 123456，系统不会强制改密，需要提醒本人自行修改）。只生成待确认动作。",
             """{"type":"object","properties":{"registrationId":{"type":"integer","description":"待确认登记 id（pending_registration_list 返回的 #号数字）","minimum":1},"deptId":{"type":"integer","description":"员工归属部门 id（必须是 user_search/部门树里可见的部门）","minimum":1},"supervisorId":{"type":"integer","description":"直属上级 userId（须为该部门下角色=主管的在职员工）","minimum":1},"employeeNo":{"type":"string","description":"可选：手动指定工号（字母数字下划线短横线）；缺省自动生成"}},"required":["registrationId","deptId","supervisorId"]}"""),
-        new("holiday_list",
-            "查询某日期范围内配置的假期（法定/公司休息日/调班补班），返回每条假期的 id（holidayId），供增删工具引用。",
-            """{"type":"object","properties":{"start":{"type":"string","description":"开始日期 yyyy-MM-dd"},"end":{"type":"string","description":"结束日期 yyyy-MM-dd，可空=默认全年"},"limit":{"type":"integer","description":"最多条数，默认50，上限200"}},"required":[]}"""),
         new("employee_create_propose",
             "【写操作·需管理员确认】普通建档：新建一名员工（无扫码登记场景）。初始密码统一 123456，系统不会强制改密，需要提醒本人自行修改。只生成待确认动作。",
             """{"type":"object","properties":{"realName":{"type":"string","description":"真实姓名，必填"},"deptId":{"type":"integer","description":"归属部门 id（范围内），必填"},"supervisorId":{"type":"integer","description":"直属上级 userId（须为该部门在职主管/班组长），必填"},"phone":{"type":"string","description":"11 位手机号，必填"},"employeeNo":{"type":"string","description":"可选工号；缺省自动生成"},"position":{"type":"string","description":"岗位，可选"},"contractCompany":{"type":"string","description":"劳务/合同公司，可选"},"hireDate":{"type":"string","description":"入职日期 yyyy-MM-dd，可选"}},"required":["realName","deptId","supervisorId","phone"]}"""),
@@ -85,12 +82,6 @@ public class AgentToolExecutor(
         new("employee_batch_toggle_propose",
             "【写操作·需管理员确认】批量停用/启用多名员工（范围内，不含自己，不含黑名单）。只生成待确认动作。",
             """{"type":"object","properties":{"userIds":{"type":"array","items":{"type":"integer"},"description":"员工 userId 列表"},"action":{"type":"string","enum":["deactivate","activate"],"description":"deactivate=批量停用；activate=批量启用"}},"required":["userIds","action"]}"""),
-        new("holiday_add_propose",
-            "【写操作·需管理员确认】给某考勤组（或全公司）新增一条假期/调休。只生成待确认动作；跨公司共用组与全局假期只有总部能加。",
-            """{"type":"object","properties":{"date":{"type":"string","description":"日期 yyyy-MM-dd，必填"},"type":{"type":"string","enum":["legal","rest","compensatory"],"description":"legal=法定节假日 rest=公司休息日 compensatory=调班补班日"},"groupId":{"type":"integer","description":"考勤组 id（可空=全公司假期，仅总部可加）"},"name":{"type":"string","description":"假期名称（如：国庆节），可选"}},"required":["date","type"]}"""),
-        new("holiday_delete_propose",
-            "【写操作·需管理员确认】删除一条已配置的假期（先用 holiday_list 拿 holidayId）。只生成待确认动作。",
-            """{"type":"object","properties":{"holidayId":{"type":"integer","description":"holiday_list 返回的假期 id","minimum":1}},"required":["holidayId"]}"""),
         new("approval_pending_list",
             "列出当前登录者作为审批人、尚未处理的审批单（含单号/申请人/类型/日期/理由）。处理后用 approval_handle_propose 生成待确认动作。",
             """{"type":"object","properties":{"limit":{"type":"integer","description":"最多条数，默认30，上限50"}},"required":[]}"""),
@@ -129,7 +120,6 @@ public class AgentToolExecutor(
                 "device_status_list"          => await DeviceStatusListAsync(operatorUserId, argsJson, ct),
                 "department_list"              => await DepartmentListAsync(operatorUserId, argsJson, ct),
                 "attendance_group_list"        => await AttendanceGroupListAsync(operatorUserId, ct),
-                "holiday_list"                => await HolidayListAsync(operatorUserId, argsJson, ct),
                 "punch_adjust_propose"        => await PunchAdjustProposeAsync(operatorUserId, conversationId, argsJson, ct),
                 "registration_reject_propose" => await RejectRegistrationProposeAsync(operatorUserId, conversationId, argsJson, ct),
                 "user_toggle_propose"         => await UserToggleProposeAsync(operatorUserId, conversationId, argsJson, ct),
@@ -142,8 +132,6 @@ public class AgentToolExecutor(
                 "employee_update_propose"     => await EmployeeUpdateProposeAsync(operatorUserId, conversationId, argsJson, ct),
                 "employee_role_propose"       => await EmployeeRoleProposeAsync(operatorUserId, conversationId, argsJson, ct),
                 "employee_batch_toggle_propose" => await EmployeeBatchToggleProposeAsync(operatorUserId, conversationId, argsJson, ct),
-                "holiday_add_propose"         => await HolidayAddProposeAsync(operatorUserId, conversationId, argsJson, ct),
-                "holiday_delete_propose"      => await HolidayDeleteProposeAsync(operatorUserId, conversationId, argsJson, ct),
                 "approval_pending_list"       => await ApprovalPendingListAsync(operatorUserId, argsJson, ct),
                 "approval_handle_propose"     => await ApprovalHandleProposeAsync(operatorUserId, conversationId, argsJson, ct),
                 "approval_submit_on_behalf_propose" => await ApprovalSubmitOnBehalfProposeAsync(operatorUserId, conversationId, argsJson, ct),
@@ -905,68 +893,6 @@ public class AgentToolExecutor(
             : $"已生成待确认动作 #{proposal!.Id}：{summary}。该动作【不会自动执行】，请管理员在当前页面点「确认执行」才会真正建号；15 分钟内有效。";
     }
 
-    // ── 只读：假期列表 ────────────────────────────────────────────────────────
-
-    private async Task<string> HolidayListAsync(int operatorUserId, string argsJson, CancellationToken ct)
-    {
-        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
-        var root = doc.RootElement;
-        var start = DateOnly.TryParse(StrArg(root, "start"), out var s)
-            ? s : DateOnly.FromDateTime(DateTime.Today.AddMonths(-1));
-        var end = DateOnly.TryParse(StrArg(root, "end"), out var e) ? e : start.AddYears(1);
-        if (end < start) (start, end) = (end, start);
-        var limit = Math.Clamp(IntArg(root, "limit") ?? 50, 1, 200);
-
-        var (visibleIds, err) = await LoadScopeAsync(operatorUserId, ct);
-        if (err is not null) return err;
-
-        var rows = await db.Holidays.AsNoTracking()
-            .Where(h => h.HolidayDate >= start && h.HolidayDate <= end)
-            .OrderBy(h => h.HolidayDate)
-            .Take(limit)
-            .Select(h => new
-            {
-                h.Id, h.HolidayName, h.HolidayDate, h.HolidayType, h.AttendanceGroupId,
-                GroupName = h.AttendanceGroup != null ? h.AttendanceGroup.GroupName : null
-            })
-            .ToListAsync(ct);
-
-        if (rows.Count == 0)
-            return $"{start:yyyy-MM-dd} 至 {end:yyyy-MM-dd} 内没有配置假期。";
-
-        // 可见性（与假期管理页一致）：全公司假期/零部门组假期/关联部门落在范围内 → 可见
-        if (visibleIds is not null)
-        {
-            var gids = rows.Where(r => r.AttendanceGroupId.HasValue)
-                .Select(r => r.AttendanceGroupId!.Value).Distinct().ToList();
-            var deptByGroup = (await db.Departments.AsNoTracking()
-                    .Where(d => d.AttendanceGroupId != null && gids.Contains(d.AttendanceGroupId!.Value))
-                    .Select(d => new { d.AttendanceGroupId, d.Id })
-                    .ToListAsync(ct))
-                .GroupBy(d => d.AttendanceGroupId!.Value)
-                .ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToHashSet());
-
-            rows = rows.Where(r => r.AttendanceGroupId is null
-                || !deptByGroup.TryGetValue(r.AttendanceGroupId.Value, out var depts)
-                || depts.Any(visibleIds.Contains)).ToList();
-        }
-
-        if (rows.Count == 0) return "该日期范围内没有你能看到的假期配置。";
-
-        var sb = new System.Text.StringBuilder();
-        sb.Append($"{start:yyyy-MM-dd} 至 {end:yyyy-MM-dd} 内可见假期 {rows.Count} 条（holidayId 供增删用）：\n");
-        foreach (var h in rows)
-            sb.AppendLine($"holidayId:{h.Id} | {h.HolidayDate:yyyy-MM-dd} | {h.HolidayName} | {HolidayTypeText(h.HolidayType)} | 范围:{(h.GroupName ?? "全公司")}");
-        sb.Append("新增/删除请用 holiday_add_propose / holiday_delete_propose（需管理员确认）。");
-        return Truncate(sb.ToString(), 5000);
-    }
-
-    private static string HolidayTypeText(HolidayType t) => t switch
-    {
-        HolidayType.LegalHoliday        => "法定节假日",
-        HolidayType.CompanyRestDay      => "公司休息日",
-        _                               => "调班补班日"
-    };
 
     // 角色调整（提案）：employee/clerk/supervisor/teamleader/admin
     private async Task<string> EmployeeRoleProposeAsync(int operatorUserId, int conversationId, string argsJson, CancellationToken ct)
@@ -1557,8 +1483,6 @@ public class AgentToolExecutor(
             : $"已生成待确认动作 #{proposal!.Id}：{summary}。该动作【不会自动执行】，请管理员点「确认执行」；15 分钟内有效。";
     }
 
-    // ── 假期：增 / 删（提案） ──────────────────────────────────────────────────
-
     /// <summary>考勤组写权限（AGENT 采用"关联部门全部在范围内"口径，比页面 ANY 更严）：不受限=true；受限且零部门组=false。</summary>
     private async Task<bool> GroupWritableAsync(int groupId, HashSet<int>? visibleIds)
     {
@@ -1568,69 +1492,4 @@ public class AgentToolExecutor(
         return deptIds.All(visibleIds.Contains);
     }
 
-    private async Task<string> HolidayAddProposeAsync(int operatorUserId, int conversationId, string argsJson, CancellationToken ct)
-    {
-        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
-        var root = doc.RootElement;
-        var dateS = StrArg(root, "date");
-        var typeS = StrArg(root, "type");
-        var groupId = IntArg(root, "groupId");
-        var name = StrArg(root, "name")?.Trim();
-
-        if (!DateOnly.TryParse(dateS, out var date)) return "错误：date 格式应为 yyyy-MM-dd";
-        HolidayType? type = typeS switch
-        {
-            "legal" => HolidayType.LegalHoliday,
-            "rest"  => HolidayType.CompanyRestDay,
-            "compensatory" => HolidayType.CompensatoryWorkDay,
-            _       => null
-        };
-        if (!type.HasValue) return "错误：type 应为 legal/rest/compensatory";
-        if (string.IsNullOrEmpty(name))
-            name = type.Value switch { HolidayType.LegalHoliday => "法定节假日", HolidayType.CompanyRestDay => "公司休息日", _ => "调班补班日" };
-
-        var (visibleIds, err) = await LoadScopeAsync(operatorUserId, ct);
-        if (err is not null) return err;
-        if (groupId.HasValue)
-        {
-            if (!await GroupWritableAsync(groupId.Value, visibleIds)) return "错误：无权给该考勤组设置假期";
-        }
-        else if (visibleIds is not null)
-            return "错误：全公司通用假期只有总部管理员能添加";
-
-        var param = JsonSerializer.Serialize(new { date = dateS, type = type.Value.ToString(), groupId, name });
-        var summary = $"添加假期：{date:yyyy-MM-dd} {name}（{HolidayTypeText(type.Value)}）" + (groupId.HasValue ? "（考勤组专属）" : "（全公司）");
-        var (proposal, perr) = await CreateProposalAsync(operatorUserId, conversationId, "holiday_add_propose", param, summary, ct);
-        return perr is not null ? perr
-            : $"已生成待确认动作 #{proposal!.Id}：{summary}。该动作【不会自动执行】，请管理员点「确认执行」；15 分钟内有效。";
-    }
-
-    private async Task<string> HolidayDeleteProposeAsync(int operatorUserId, int conversationId, string argsJson, CancellationToken ct)
-    {
-        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
-        var holidayId = IntArg(doc.RootElement, "holidayId");
-        if (!holidayId.HasValue) return "错误：需要 holidayId（先用 holiday_list 查）";
-
-        var (visibleIds, err) = await LoadScopeAsync(operatorUserId, ct);
-        if (err is not null) return err;
-
-        var h = await db.Holidays.AsNoTracking()
-            .Where(x => x.Id == holidayId.Value)
-            .Select(x => new { x.Id, x.HolidayName, x.HolidayDate, x.AttendanceGroupId })
-            .FirstOrDefaultAsync(ct);
-        if (h is null) return "错误：该假期不存在";
-
-        if (h.AttendanceGroupId.HasValue)
-        {
-            if (!await GroupWritableAsync(h.AttendanceGroupId.Value, visibleIds)) return "错误：无权删除该考勤组的假期";
-        }
-        else if (visibleIds is not null)
-            return "错误：全公司通用假期只有总部管理员能删除";
-
-        var param = JsonSerializer.Serialize(new { holidayId = h.Id });
-        var summary = $"删除假期：{h.HolidayDate:yyyy-MM-dd} {h.HolidayName}";
-        var (proposal, perr) = await CreateProposalAsync(operatorUserId, conversationId, "holiday_delete_propose", param, summary, ct);
-        return perr is not null ? perr
-            : $"已生成待确认动作 #{proposal!.Id}：{summary}。该动作【不会自动执行】，请管理员点「确认执行」；15 分钟内有效。";
-    }
 }

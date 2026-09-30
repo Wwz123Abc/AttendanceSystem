@@ -117,20 +117,19 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     throw new InvalidOperationException($"单次加班时长不能超过 {MaxOvertimeHours} 小时，请检查起止时间");
                 // 工作日的加班时间段不能和当天班次的上下班时间重叠：正班时间本来就按打卡算正班工时，再填成加班会把同一段
                 // 时间算两遍（2026-09 上一期有 122 张这样的单子、约 1000 小时重叠——员工把整个工作日时间都填成了加班）。
-                // 休息日/节假日（没有"正班"）不受限，整天加班照常；当天没排班的也不判断。（2026-09-28 用户确认）
+                // 休息日（没有"正班"）不受限，整天加班照常；当天没排班的也不判断。（2026-09-28 用户确认）
                 var otDate  = DateOnly.FromDateTime(dto.OvertimeStartTime.Value);
                 var otPrev  = otDate.AddDays(-1);
                 var otAssigns = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
                     .Where(a => a.UserId == applicantUserId && (a.WorkDate == otDate || a.WorkDate == otPrev))
                     .ToListAsync();
-                var otHolidays = await db.Holidays.Where(h => h.HolidayDate == otDate || h.HolidayDate == otPrev).ToListAsync();
                 // 当天的班次，加上"昨天的跨天班次（夜班）延续到今天凌晨的那一段"——夜班员工在凌晨填的加班，
                 // 如果压在昨晚夜班的正班时间里，一样是重复计算
                 foreach (var (shiftDate, shiftAssign) in new[] { (otDate, otAssigns.FirstOrDefault(a => a.WorkDate == otDate)), (otPrev, otAssigns.FirstOrDefault(a => a.WorkDate == otPrev)) })
                 {
                     var s0 = shiftAssign?.ShiftSchedule;
                     if (s0 is null || (shiftDate == otPrev && !s0.IsCrossDay)) continue;   // 昨天的班只有跨天班次才会延续到今天
-                    if (AttendanceService.IsNonWorkday(shiftDate, user.AttendanceGroupId, otHolidays, s0)) continue;
+                    if (AttendanceService.IsShiftWeeklyRestDay(shiftDate, s0)) continue;
                     var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(shiftDate, s0);   // 班次的上下班时间（跨天班次下班顺延到第二天）
                     if (dto.OvertimeStartTime.Value < shiftEnd && dto.OvertimeEndTime.Value > shiftStart)
                         throw new InvalidOperationException(
@@ -179,17 +178,14 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
             var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
             // 跟审批通过后的逐日回写（UpdateAttendanceAfterApprovalAsync）同一口径：按班次上下班时间取交集，
-            // 事假/病假/年假/调休遇到休息日、节假日不计（婚假/产假/丧假按自然日算）
+            // 事假/病假/年假/调休遇到休息日不计（婚假/产假/丧假按自然日算）
             var skipNonWorkdays = !AttendanceService.LeaveCountsNaturalDays(dto.LeaveType);
-            var leaveHolidays   = skipNonWorkdays
-                ? await db.Holidays.Where(h => h.HolidayDate >= leaveSd && h.HolidayDate <= leaveEd).ToListAsync()
-                : [];
 
             decimal total = 0;
             for (var d = leaveSd; d <= leaveEd; d = d.AddDays(1))
             {
                 leaveShiftsInRange.TryGetValue(d, out var leaveShift);
-                if (skipNonWorkdays && AttendanceService.IsNonWorkday(d, user.AttendanceGroupId, leaveHolidays, leaveShift)) continue;
+                if (skipNonWorkdays && AttendanceService.IsShiftWeeklyRestDay(d, leaveShift)) continue;
                 var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
                 total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift);
             }

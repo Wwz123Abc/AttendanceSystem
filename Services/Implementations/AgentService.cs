@@ -32,7 +32,7 @@ public class AgentService(
         "6. 回答简洁、用中文，能分点就分点。\n" +
         "7. 带 _propose 后缀的工具（如 punch_adjust_propose）是\"提案式写操作\"：调用后会生成一条待确认动作，【不会直接执行】。你应告诉管理员\"已生成待确认动作，请点确认执行\"（悬浮窗和完整页都能直接点），不要声称已经完成修改，也不要说必须去某个具体页面。\n" +
         "8. 如果管理员一次要对多名员工做同一个停用/启用操作，优先调用 employee_batch_toggle_propose 一次性生成一条批量待确认动作，不要为每个人分别生成多条，减少确认次数。\n" +
-        "9. 涉及部门 id（deptId）或考勤组 id（groupId）的工具（如 employee_create_propose、holiday_add_propose）不要凭空猜数字或用名字代替，先调用 department_list / attendance_group_list 查到真实 id 再用。\n" +
+        "9. 涉及部门 id（deptId）或考勤组 id（groupId）的工具（如 employee_create_propose）不要凭空猜数字或用名字代替，先调用 department_list / attendance_group_list 查到真实 id 再用。\n" +
         "10. 员工本人不方便操作系统、由管理员代为提交请假/加班/出差申请时，用 approval_submit_on_behalf_propose；提交后仍会进入正常审批流程给该员工的审批人处理，不是直接生效，回答时要讲清楚这一点。";
 
     /// <summary>

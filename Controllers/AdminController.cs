@@ -11,9 +11,9 @@ using Microsoft.EntityFrameworkCore;
 namespace AttendanceSystem.Controllers;
 
 /// <summary>
-/// 后台管理接口：员工、部门、考勤组、班次、假期等基础数据的增删改查。
+/// 后台管理接口：员工、部门、考勤组、班次等基础数据的增删改查。
 /// 仅「管理员 / 文员」可访问。分公司管理员（ScopedDepartmentId 有值）只能看到/管理自己范围内的数据——
-/// 跟对应的 Razor Page（UserManage/DepartmentManage/GroupManage/ShiftManage/HolidayManage）用同一套
+/// 跟对应的 Razor Page（UserManage/DepartmentManage/GroupManage/ShiftManage）用同一套
 /// IDeptScopeService 过滤逻辑，两边口径必须保持一致，不能只在页面上挡、接口这边没挡。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]

@@ -76,7 +76,6 @@ public class ZKDeviceSyncService(
         var users = matchedUsers.Where(u => boundUserIds.Contains(u.Id)).ToList();
 
         var userByPin     = users.ToDictionary(u => u.EmployeeNo, u => u.Id);
-        var groupIdByUser = users.ToDictionary(u => u.Id, u => u.AttendanceGroupId);
 
         var matchedPins = matchedUsers.Select(u => u.EmployeeNo).ToHashSet();
         var unmatched   = pins.Where(p => !matchedPins.Contains(p)).ToList();   // 真正查无此人的（跟"查到人但没绑定这台设备"分开报，避免重复告警同一个工号）
@@ -92,13 +91,6 @@ public class ZKDeviceSyncService(
         if (uids.Count == 0) return;
 
         // 2) 预加载：已有打卡流水（去重用）、已有考勤日记录、当天排班
-
-        // 节假日打卡本地打卡（PunchAsync）是直接拒绝的，考勤机这条链路以前完全没查这个，
-        // 导致节假日设备打卡照常按正常工作日结算工时，等于没走加班审批就白得了一天工时。
-        // 这里不拒绝设备推上来的原始打卡（那样会丢数据），改成节假日当天不结算工时、
-        // 状态标成"休假"，跟本地打卡"节假日不用打卡"的语义对齐；调班补班日不算节假日，照常结算。
-        var holidays = await db.Holidays.Where(h => dates.Contains(h.HolidayDate)).ToListAsync(ct);
-        bool IsHoliday(DateOnly date, int? groupId) => AttendanceService.IsHolidayDate(date, groupId, holidays);
 
         var punchSet = (await db.AttendancePunches
                 .Where(p => uids.Contains(p.UserId) && dates.Contains(DateOnly.FromDateTime(p.PunchTime)))
@@ -196,10 +188,9 @@ public class ZKDeviceSyncService(
             }
 
             shiftByUserDate.TryGetValue((uid, workDate), out var shift);
-            groupIdByUser.TryGetValue(uid, out var punchGroupId);
             // 今天是不是这个员工的休息日：休息日没有"应上班/应下班时间"可比，不该判迟到/早退，
             // 跟本地打卡（AttendanceService.PunchCoreAsync）同一套规则
-            var isRestDay = await AttendanceService.IsNonCompRestDayAsync(db, workDate, shift, punchGroupId);
+            var isRestDay = AttendanceService.IsNonCompRestDay(workDate, shift);
 
             // 不少机型没有签到/签退按键（或员工不会用），设备上报的 Status 不可靠，改成不看 Status、
             // 按班次配置自动判断：当天第一次算上班；之后如果离排班的应下班时间还早（超过
@@ -307,14 +298,7 @@ public class ZKDeviceSyncService(
             }
             if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) continue;
 
-            groupIdByUser.TryGetValue(uid, out var groupId);
-            if (IsHoliday(workDate, groupId))
-            {
-                if (record.AttendanceStatus is not (AttendanceStatus.OnLeave or AttendanceStatus.BusinessTrip))
-                    record.AttendanceStatus = AttendanceStatus.Holiday;
-                continue;   // 节假日不结算工时，避免没走加班审批就白得工时
-            }
-            // 非节假日但当天是出差/节假日状态（比如批准出差前设备已经同步过打卡），工时已经由审批
+            // 当天是出差/节假日状态（比如批准出差前设备已经同步过打卡），工时已经由审批
             // 流程/定时任务定好了，不能被这里的考勤机同步顺手重算覆盖掉。请假不再跳过——半天假当天
             // 如果有真实打卡，走到下面按标准工时封顶结算（2026-09-17 支持半天请假）。
             if (record.AttendanceStatus is AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday)
@@ -337,7 +321,7 @@ public class ZKDeviceSyncService(
             }
 
             // 休息日不计正班工时（有加班的话只算加班）——跟本地打卡（ComputeDailyWorkHoursAsync）同一套规则
-            if (await AttendanceService.IsNonCompRestDayAsync(db, workDate, shift, groupId))
+            if (AttendanceService.IsNonCompRestDay(workDate, shift))
             {
                 record.ActualWorkHours = 0;
             }
