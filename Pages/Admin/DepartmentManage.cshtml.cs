@@ -167,7 +167,7 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
         catch (Exception ex)
         {
             logger.LogError(ex, "创建部门失败");
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
         }
 
         await LoadAsync();
@@ -229,7 +229,7 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
         catch (Exception ex)
         {
             logger.LogError(ex, "编辑部门失败，EditId={EditId}", EditId);
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
         }
 
         await LoadAsync();
@@ -289,7 +289,7 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
         catch (Exception ex)
         {
             logger.LogError(ex, "删除部门失败，DeleteIds={DeleteIds}", DeleteIds);
-            ErrorMessage = "删除失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "删除失败，请稍后重试", HttpContext);
         }
 
         await LoadAsync();

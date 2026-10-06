@@ -211,7 +211,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "驳回扫码登记失败，Id={Id}", id);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -276,7 +276,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "新建员工失败，EmployeeNo={EmployeeNo}", EmployeeNo);
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
             await CleanupAfterFailedCreateAsync(claimedByMe, newPhotoUrl);
         }
         await ReloadAsync();
@@ -341,7 +341,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "更新员工失败，EditUserId={EditUserId}", EditUserId);
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
         }
         await ReloadAsync();
         return Page();
@@ -364,7 +364,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "停用员工失败，Id={Id}", id);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -381,7 +381,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "启用员工失败，Id={Id}", id);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -398,7 +398,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "拉黑员工失败，Id={Id}", id);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -415,7 +415,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "移出黑名单失败，Id={Id}", id);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -433,7 +433,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "删除员工失败，Id={Id}", id);
-            ErrorMessage = "删除失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "删除失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -460,7 +460,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "清除人脸照片失败，Id={Id}", id);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -477,7 +477,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "重置密码失败，Id={Id}", id);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -494,7 +494,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "批量启用员工失败");
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }
@@ -508,7 +508,7 @@ public class UserManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "批量停用员工失败");
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         await ReloadAsync(); return Page();
     }

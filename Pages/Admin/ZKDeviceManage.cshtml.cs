@@ -129,7 +129,7 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
         catch (Exception ex)
         {
             logger.LogError(ex, "保存设备失败，Id={Id}，SN={SN}", Id, SN);
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
         }
 
         await LoadAsync();
@@ -167,7 +167,7 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
             catch (Exception ex)
             {
                 logger.LogError(ex, "删除设备失败，Id={Id}", id);
-                ErrorMessage = "删除失败，请稍后重试";
+                ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "删除失败，请稍后重试", HttpContext);
             }
         }
         else

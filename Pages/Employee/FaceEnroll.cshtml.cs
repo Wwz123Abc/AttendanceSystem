@@ -82,14 +82,19 @@ public class FaceEnrollModel(
         }
         // AliyunFaceApiException 也是给用户看的安全提示（阿里云调用失败/图片不合格等），
         // 跟自己抛的 InvalidOperationException 一样可以直接展示，不属于要隐藏的原始报错
-        catch (Exception ex) when (ex is InvalidOperationException or AliyunFaceApiException)
+        catch (AliyunFaceApiException ex)
+        {
+            // 阿里云调用失败：Message 本身是中文类别说明，再带上错误编号，完整异常按同一编号记日志
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, ex.Message, HttpContext);
+        }
+        catch (InvalidOperationException ex)
         {
             ErrorMessage = ex.Message;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "录入人脸参考照片失败，UserId={UserId}", CurrentUserId);
-            ErrorMessage = "操作失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "操作失败，请稍后重试", HttpContext);
         }
         CurrentPhotoUrl = await db.Users.Where(u => u.Id == CurrentUserId)
             .Select(u => u.FaceReferencePhotoUrl).FirstOrDefaultAsync();

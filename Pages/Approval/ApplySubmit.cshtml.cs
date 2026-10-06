@@ -149,7 +149,7 @@ public class ApplySubmitModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "提交申请失败，UserId={UserId}", CurrentUserId);
-            ErrorMessage = "提交失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "提交失败，请稍后重试", HttpContext);
         }
 
         MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);   // 刷新列表

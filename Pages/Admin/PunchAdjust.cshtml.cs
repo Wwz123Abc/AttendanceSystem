@@ -81,7 +81,7 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
         catch (Exception ex)
         {
             logger.LogError(ex, "管理员手动补卡失败，UserId={UserId}", UserId);
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
         }
         await LoadRecentLogAsync();
         return Page();

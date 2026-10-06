@@ -364,7 +364,9 @@ app.UseExceptionHandler(errApp => errApp.Run(async context =>
             => (StatusCodes.Status400BadRequest, error.Message),
         KeyNotFoundException      => (StatusCodes.Status404NotFound, error.Message),
         _ => (StatusCodes.Status500InternalServerError,
-              isDev && error is not null ? error.ToString() : "服务器内部错误，请稍后重试或联系管理员")
+              isDev && error is not null ? error.ToString()
+              : error is not null ? AttendanceSystem.Helpers.ErrorReport.Describe(error, "服务器内部错误，请稍后重试或联系管理员", context)
+              : "服务器内部错误，请稍后重试或联系管理员")
     };
 
     context.Response.StatusCode = status;

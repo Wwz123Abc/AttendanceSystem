@@ -98,7 +98,7 @@ public class SelfRegisterModel(
             else
             {
                 logger.LogError(ex, "自助登记提交失败");
-                ErrorMessage = "提交失败，请稍后重试";
+                ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "提交失败，请稍后重试", HttpContext);
             }
         }
         return Page();

@@ -308,7 +308,7 @@ public class GroupManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "保存考勤组失败");
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
         }
 
         return RedirectToPage();
@@ -362,7 +362,7 @@ public class GroupManageModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "删除考勤组失败，Id={Id}", id);
-            ErrorMessage = "删除失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "删除失败，请稍后重试", HttpContext);
         }
         return RedirectToPage();
     }

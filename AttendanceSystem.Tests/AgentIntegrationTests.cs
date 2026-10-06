@@ -821,14 +821,18 @@ public class AgentIntegrationTests : IDisposable
             () => svc.AdminAdjustPunchAsync(1, Wed, null, null, new string('x', 101), null));
         Assert.Equal(ours.Message, AgentErrorText.ForUser(ours));
 
-        // 框架自己抛的同一个类型（可能带出内部细节）→ 通用文案
+        // 框架自己抛的同一个类型（可能带出内部细节）→ 通用文案 + 错误编号（原文不展示）
         var framework = Assert.Throws<InvalidOperationException>(() => new List<int>().First());
-        Assert.Equal(AgentErrorText.Generic, AgentErrorText.ForUser(framework));
+        var frameworkShown = AgentErrorText.ForUser(framework);
+        Assert.StartsWith(AgentErrorText.Generic, frameworkShown);
+        Assert.Contains("错误编号 E", frameworkShown);
+        Assert.DoesNotContain(framework.Message, frameworkShown);
 
-        // 数据库错误（带表名/约束名）→ 通用文案，原文不会出现
+        // 数据库错误（带表名/约束名）→ 通用文案 + 错误编号，原文不会出现
         var dbErr = new Exception("Duplicate entry 'x' for key 'IX_User_EmployeeNo' (table `User`)");
         var shown = AgentErrorText.ForUser(dbErr);
-        Assert.Equal(AgentErrorText.Generic, shown);
+        Assert.StartsWith(AgentErrorText.Generic, shown);
+        Assert.Contains("错误编号 E", shown);
         Assert.DoesNotContain("IX_User_EmployeeNo", shown);
     }
 

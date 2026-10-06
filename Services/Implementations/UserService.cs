@@ -185,7 +185,8 @@ public class UserService(
             logger.LogWarning(ex, "新建员工 {EmployeeNo} 保存失败", user.EmployeeNo);
             if (ex.InnerException?.Message.Contains("EmployeeNo") == true)
                 throw new InvalidOperationException($"工号 {user.EmployeeNo} 刚被别人抢先用掉了，请重新生成工号或换一个再试");
-            throw new InvalidOperationException("保存失败，请稍后重试");
+            throw new InvalidOperationException(AttendanceSystem.Helpers.ErrorReport.Describe(ex,
+                $"新建员工 {user.EmployeeNo} 保存失败：数据库拒绝了这次写入（可能是某个字段过长、为空，或与已有数据冲突）"));
         }
 
         // 注意：这里不下发考勤机推送——新建的这一刻员工还没被分配任何设备（UserZKDevice 关联记录

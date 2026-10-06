@@ -181,9 +181,12 @@ public class RemotePunchModel(
                 // 不然只能靠员工截图报错，服务器这边完全查不到发生过什么。
                 logger.LogWarning(ex, "远程打卡人脸识别服务调用失败，UserId={UserId}", CurrentUserId);
                 ShowFallbackHint = true;   // 服务本身出问题时，也该给员工"改走补卡申请"的出口，不只是识别没通过才给
-                // 不拼接 ex.Message：AliyunFaceApiException/InvalidOperationException 本身已经是给用户看的
-                // 中文提示，完整异常详情已经记进上面的日志，不需要在页面上再展示一遍原始报错文本。
-                throw new InvalidOperationException("人脸识别服务暂时不可用，请稍后重试");
+                // 给员工看的是"具体原因（Aliyun 异常自带的中文说明）+ 错误编号"，不是笼统的"暂时不可用"：
+                // AliyunFaceApiException 的 Message 本来就是不含 SDK 原文的中文类别说明（超时/熔断/接口调用失败……）；
+                // 没配置密钥这类 InvalidOperationException 只说"服务未配置完整"。完整异常按同一个编号记日志。
+                var reason = ex is AliyunFaceApiException ? ex.Message : "人脸识别服务没有配置完整，请联系管理员";
+                throw new InvalidOperationException(
+                    AttendanceSystem.Helpers.ErrorReport.Describe(ex, $"人脸识别服务暂时不可用：{reason}", HttpContext));
             }
 
             // 这里记的是"人脸是否比对成功"，不是"打卡是否成功"——下面即使 PunchAsync 因为业务原因
@@ -227,7 +230,7 @@ public class RemotePunchModel(
             // 记了日志，这里只给统一的友好文案（2026-09-21 代码审查发现：以前这里不分青红皂白
             // 把 ex.Message 显示给员工，而 PunchAsync 当时完全没有日志，出问题只能靠员工截图报错）
             logger.LogError(ex, "远程打卡失败，UserId={UserId}", CurrentUserId);
-            ErrorMessage = "打卡失败，请稍后重试或联系管理员";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "打卡失败，请稍后重试或联系管理员", HttpContext);
         }
 
         await LoadStateAsync();

@@ -114,7 +114,7 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
         catch (Exception ex)
         {
             logger.LogError(ex, "发布公告失败");
-            ErrorMessage = "保存失败，请稍后重试";
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
         }
 
         await LoadAsync();
