@@ -398,6 +398,11 @@ public class UserService(
         if (user is null) return false;
         await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
+        // 有考勤/打卡/申请历史的人不允许物理删除（删除会级联清空这些数据且无法恢复），只能停用。放在其它检查前面：
+        // 这个人反正删不了，就别让管理员先白白去改审批人名单、改下属的上级（见 UserDeletionGuard）
+        if (await UserDeletionGuard.HasHistoryDataAsync(db, userId))
+            throw new InvalidOperationException(UserDeletionGuard.BlockedMessage);
+
         // 先检查这个人是不是还挂在某个考勤组的"审批人"名单里——数据库不允许删除还被这样引用着的人
         var approverOfGroups = await db.AttendanceGroupApprovers
             .Where(a => a.UserId == userId)

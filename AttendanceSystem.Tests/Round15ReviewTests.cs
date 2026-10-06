@@ -368,4 +368,67 @@ public class Round15ReviewTests : IDisposable
         Assert.False(await CanRead("bbb222.jpg"));   // 同一个申请人、别人审批的那张单上的附件
         Assert.False(await CanRead("unknown.jpg"));  // 根本没记录在任何申请单上的文件
     }
+
+    // ── M14：有考勤/打卡/申请历史的员工只能停用，不能物理删除 ────────────────────────────
+
+    private (UserService Svc, int AdminId) NewUserService(AttendanceDbContext db)
+    {
+        var admin = U("ADM1", "操作管理员");
+        admin.Role = UserRole.Admin;
+        db.Users.Add(admin);
+        db.SaveChanges();
+        var scope = new DeptScopeService(db);
+        var att = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var zk = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
+        return (new UserService(db, zk, AppOptions, scope, NullLogger<UserService>.Instance), admin.Id);
+    }
+
+    [Fact]
+    public async Task 删除员工_没有任何历史数据的空账号_可以删()
+    {
+        using var db = CreateContext();
+        var (svc, adminId) = NewUserService(db);
+        var empty = U("EMP0", "误建的空账号");
+        db.Users.Add(empty);
+        await db.SaveChangesAsync();
+
+        Assert.True(await svc.DeleteUserAsync(empty.Id, adminId));
+
+        using var check = CreateContext();
+        Assert.False(await check.Users.AnyAsync(u => u.Id == empty.Id));
+    }
+
+    [Theory]
+    [InlineData("record")]
+    [InlineData("punch")]
+    [InlineData("request")]
+    public async Task 删除员工_有考勤记录或打卡流水或申请单_只能停用_账号和历史数据都保留(string kind)
+    {
+        int uid;
+        using (var db = CreateContext())
+        {
+            var u = U("EMP-" + kind, "有历史的员工");
+            db.Users.Add(u);
+            await db.SaveChangesAsync();
+            uid = u.Id;
+            if (kind == "record")
+                db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = new DateOnly(2026, 9, 10) });
+            else if (kind == "punch")
+                db.AttendancePunches.Add(new AttendancePunch { UserId = uid, PunchTime = new DateTime(2026, 9, 10, 8, 30, 0), PunchType = PunchType.ClockIn, IsValid = true });
+            else
+                db.ApprovalRequests.Add(new ApprovalRequest { RequestNo = "QJ-DEL-1", ApplicantUserId = uid, ApprovalType = ApprovalType.Leave });
+            await db.SaveChangesAsync();
+        }
+
+        using var db2 = CreateContext();
+        var (svc, adminId) = NewUserService(db2);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.DeleteUserAsync(uid, adminId));
+        Assert.Contains("停用", ex.Message);
+
+        using var check = CreateContext();
+        Assert.True(await check.Users.AnyAsync(u => u.Id == uid));                       // 人还在
+        Assert.Equal(kind == "record" ? 1 : 0, await check.AttendanceRecords.CountAsync(r => r.UserId == uid));   // 历史没被级联清掉
+        Assert.Equal(kind == "punch" ? 1 : 0, await check.AttendancePunches.CountAsync(p => p.UserId == uid));
+        Assert.Equal(kind == "request" ? 1 : 0, await check.ApprovalRequests.CountAsync(a => a.ApplicantUserId == uid));
+    }
 }

@@ -832,7 +832,7 @@ public class AgentActionService(
         if (user!.IsBlacklisted) return (false, "黑名单员工请先移出黑名单再删除（保留黑名单记录防重复用工）");
 
         await userService.DeleteUserAsync(user.Id, operatorUserId);
-        return (true, $"已彻底删除员工 {user.RealName}（{user.EmployeeNo}）。该操作不可恢复，其考勤/审批历史已一并清除。");
+        return (true, $"已彻底删除员工 {user.RealName}（{user.EmployeeNo}）。该操作不可恢复（该账号没有考勤/打卡/申请记录）。");
     }
 
     private async Task<(bool, string)> ExecuteBlacklistUserAsync(int operatorUserId, JsonElement args)

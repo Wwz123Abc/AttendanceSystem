@@ -862,4 +862,54 @@ public class AgentIntegrationTests : IDisposable
         using var check = CreateContext();
         Assert.False(await check.ApprovalRequests.AnyAsync(r => r.ApplicantUserId == w.UserA));   // 没有落库
     }
+
+    // ── M14：AGENT 的"彻底删除员工"也只允许删没有历史数据的空账号 ─────────────────────────
+
+    [Fact]
+    public async Task 助手删除员工_有考勤记录_生成提案阶段就被拦下_提示改用停用_不生成待确认动作()
+    {
+        var w = SeedWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = w.UserA, WorkDate = Wed, AttendanceStatus = AttendanceStatus.Normal });
+            await db.SaveChangesAsync();
+        }
+        using var db2 = CreateContext();
+        var msg = await Tools(db2).ExecuteAsync(w.HqAdmin, w.ConvHq, "user_delete_propose", Args(new { userId = w.UserA }), default);
+        Assert.StartsWith("错误", msg);
+        Assert.Contains("停用", msg);
+        Assert.Equal(0, await db2.AgentPendingActions.CountAsync());
+    }
+
+    [Fact]
+    public async Task 助手删除员工_空账号_正常生成提案_确认后删除()
+    {
+        var w = SeedWorld();
+        var actionId = await ProposeAsync(w.HqAdmin, w.ConvHq, "user_delete_propose", new { userId = w.UserB });   // 员工B没有任何考勤/申请
+        using (var db = CreateContext())
+        {
+            var (ok, message) = await Actions(db).ReviewAsync(w.HqAdmin, actionId, approve: true);
+            Assert.True(ok, message);
+        }
+        using var check = CreateContext();
+        Assert.False(await check.Users.AnyAsync(u => u.Id == w.UserB));
+    }
+
+    [Fact]
+    public async Task 助手删除员工_确认执行阶段员工已经有了历史_也会被拦下_不删()
+    {
+        var w = SeedWorld();
+        var actionId = await ProposeAsync(w.HqAdmin, w.ConvHq, "user_delete_propose", new { userId = w.UserB });   // 提案时还是空账号
+        using (var db = CreateContext())
+        {   // 提案之后、确认之前，他打了卡
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = w.UserB, WorkDate = Wed, AttendanceStatus = AttendanceStatus.Normal });
+            await db.SaveChangesAsync();
+        }
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqAdmin, actionId, approve: true);
+        Assert.False(ok);
+        Assert.Contains("停用", message);
+        using var check = CreateContext();
+        Assert.True(await check.Users.AnyAsync(u => u.Id == w.UserB));
+    }
 }

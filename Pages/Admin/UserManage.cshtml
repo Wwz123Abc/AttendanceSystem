@@ -261,7 +261,7 @@
                                             {
                                                 <button class="btn btn-outline-secondary btn-sm" onclick="doAction('ClearFacePhoto',@u.Id,'确认清除该员工的人脸照片？清除后他需要重新到「人脸信息」页录入，录入前无法远程打卡。')">清除人脸</button>
                                             }
-                                            <button class="btn btn-outline-danger btn-sm" onclick="doAction('Delete',@u.Id,'确认彻底删除该员工？将同时删除其考勤/审批/通知等全部数据，且不可恢复！')">删除</button>
+                                            <button class="btn btn-outline-danger btn-sm" onclick="doAction('Delete',@u.Id,'确认彻底删除该员工？仅限没有任何考勤/打卡/申请记录的账号（比如误建的空账号），删除后不可恢复。有历史数据的员工请用「停用」。')">删除</button>
                                         </div>
                                     </td>
                                 </tr>

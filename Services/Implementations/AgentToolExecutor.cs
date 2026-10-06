@@ -56,7 +56,7 @@ public class AgentToolExecutor(
             "【写操作·需管理员确认】停用或启用范围内某员工账号（不能操作黑名单员工，也不能停用自己）。只生成待确认动作，管理员确认后才执行。",
             """{"type":"object","properties":{"userId":{"type":"integer","description":"员工 userId","minimum":1},"action":{"type":"string","enum":["deactivate","activate"],"description":"deactivate=停用；activate=启用"}},"required":["userId","action"]}"""),
         new("user_delete_propose",
-            "【高风险·写操作·需管理员确认】彻底删除某员工账号（不可恢复，历史一并清除）。只生成待确认动作；请先与管理员确认。",
+            "【高风险·写操作·需管理员确认】彻底删除某员工账号（不可恢复）。只允许删除没有任何考勤/打卡/申请记录的账号（比如误建的空账号）；有历史数据的员工请用 user_toggle_propose 停用。只生成待确认动作；请先与管理员确认。",
             """{"type":"object","properties":{"userId":{"type":"integer","description":"员工 userId","minimum":1}},"required":["userId"]}"""),
         new("user_blacklist_propose",
             "【高风险·写操作·需管理员确认】把员工拉黑（禁止登录、工号永不再用、黑名单全公司共享）或移出黑名单。只生成待确认动作。",
@@ -755,9 +755,12 @@ public class AgentToolExecutor(
 
         var isBlacklisted = await db.Users.Where(u => u.Id == userId!.Value).Select(u => u.IsBlacklisted).FirstOrDefaultAsync(ct);
         if (isBlacklisted) return "错误：黑名单员工请先移出黑名单（保留记录防重复用工）";
+        // 有考勤/打卡/申请历史的人只能停用，生成提案阶段就拦下，不生成一张注定执行失败的卡片
+        if (await UserDeletionGuard.HasHistoryDataAsync(db, userId!.Value, ct))
+            return "错误：" + UserDeletionGuard.BlockedMessage + "（可以用 user_toggle_propose 停用）";
 
         var param = JsonSerializer.Serialize(new { userId });
-        var summary = $"【高风险】彻底删除员工 {display}（不可恢复，历史一并清除）";
+        var summary = $"【高风险】彻底删除员工 {display}（该账号没有任何考勤/打卡/申请记录；删除后不可恢复）";
         var (action, perr) = await CreateProposalAsync(operatorUserId, conversationId, "user_delete_propose", param, summary, ct);
         return perr is not null ? perr
             : $"已生成待确认动作 #{action!.Id}：{summary}。该动作【不会自动执行】，请管理员在当前页面点「确认执行」；15 分钟内有效。";
