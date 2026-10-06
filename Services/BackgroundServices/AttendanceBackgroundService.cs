@@ -18,8 +18,8 @@ namespace AttendanceSystem.Services.BackgroundServices;
 /// ● 每天 23:55-23:59：把当天没打卡的在职员工标记为旷工/未打卡；
 /// ● 每月 1-3 日：生成上一个月的考勤汇总（1 号 00:10 之后是首选时间点，留几分钟缓冲给设备重传/网络延迟；
 ///   如果 1 号那次因为异常/重启被错过，2、3 号任意时间都会自动补跑一次，不用等人工点"重新生成"）；
-/// ● 每天 03:00：清理考勤机相关的过期数据（已确认的命令记录、过期的考勤照片）；
-/// ● 每隔 4 小时：给挂了 4 小时以上还没处理的待审批申请，往当前该处理的那个审批人再发一条提醒通知
+/// ● 每天 03:00：清理考勤机相关的过期数据（已确认的命令记录、过期的考勤照片）、7 天前已读的审批提醒通知；
+/// ● 每隔 4 小时：给挂了 4 小时以上还没处理的待审批申请，往当前该处理的审批人发一条汇总提醒通知（每人每轮一条）
 ///   （管理员/文员登录页面提交后就容易忘，光靠提交那一刻发的一条通知很容易被日常消息淹没）。
 /// 用「上次执行时间」做记号，保证同一时间窗内只执行一次；这个记号只在对应任务真正跑成功之后才会更新，
 /// 半途异常不会被误记成"已完成"，下一分钟还会重试。
@@ -89,6 +89,7 @@ public class AttendanceBackgroundService(
                 if (now.Hour == 3 && _lastCleanupDate.Date < now.Date)
                 {
                     await CleanupZKDeviceDataAsync();
+                    await CleanupOldReminderNotificationsAsync();
                     AgentRateLimiter.CleanupExpired();
                     _lastCleanupDate = now;
                 }
@@ -321,22 +322,25 @@ public class AttendanceBackgroundService(
     /// 保留天数和 Serilog 日志一致（30 天），不给运维增加新的心智负担。
     /// </summary>
     /// <summary>
-    /// 给挂了 4 小时以上还没处理的待审批申请，往"当前轮到谁处理"那个审批人再发一条提醒通知。一张申请单
-    /// 可能配了多级审批，同一时刻只有一个节点是"轮到你了"（StepOrder 最小、还是待审批状态的那个），跟
-    /// ApprovalService.GetMyPendingApprovalsAsync 用的是同一套"当前节点"逻辑，避免提醒了还没轮到的
-    /// 后一级审批人。
-    /// 2026-09-30 复核发现并修复的 3 个问题（原来的实现"这个任务每 4 小时跑一次就等于挂了 4 小时"这个
-    /// 假设不成立——程序刚启动/重启后会立刻先跑一次，跟"挂了多久"完全无关）：
-    /// ① 只提醒 UpdatedAt（提交或每一级审批时都会更新）在 4 小时以前的单，刚提交/刚流转到这一级的不打扰；
+    /// 给"挂了 4 小时以上还没处理"的待审批申请，往当前轮到处理的审批人发提醒。一张申请单可能配了多级审批，
+    /// 同一时刻只有一个节点是"轮到你了"（StepOrder 最小、还是待审批状态的那个），跟
+    /// ApprovalService.GetMyPendingApprovalsAsync 用的是同一套"当前节点"逻辑，避免提醒了还没轮到的后一级。
+    /// 口径：
+    /// ① 只算 UpdatedAt（提交或每一级审批时都会更新）在 4 小时以前的单，刚提交/刚流转到这一级的不打扰——
+    ///    不能指望"这个任务每 4 小时跑一次就等于挂了 4 小时"，程序刚启动/重启后会立刻先跑一次；
     /// ② 跳过已停用的审批人、以及申请人调岗后已经管不到的审批人（跟 ApproverCoversApplicantAsync/
     ///    GetPendingForApproverAsync 同一个口径），这类"审批人事实上处理不了"的单不再徒劳提醒；
-    /// ③ 同一张单、同一个审批人，发新提醒前先把之前没读的旧通知（含提交/流转时发的那条"您有新的待审批
-    ///    申请"——跟提醒用的是同一个 NotificationType，都关联同一张单）标成已读，再插入新的一条。
-    ///    每张单的未读通知始终只留最新 1 条，不会无限累积；同时因为每轮都是一条"新出现的" id，
-    ///    前端轮询才能识别成新通知、正常触发弹窗和提示音——一开始按"已有未读就跳过不发"实现过，
-    ///    结果审批人只要没点开最早提交时那条通知，后面所有提醒会被这条旧的未读一直挡住，永远收不到
-    ///    （2026-09-30 复核发现，这恰好是这个功能本来要解决的场景，已改成这个"标已读再发新的"的写法）。
+    /// ③ 每个审批人每一轮只发一条汇总通知（"您有 N 张待审批……最久的已挂 X"），不是每张单一条。
+    ///    2026-10-06 检查生产发现：积压了 2400 多张待审批单（大多是 9 月中旬起的加班单），按单发的话每天
+    ///    新增 1.3 万条通知，积压最多的审批人每 4 小时会被弹出十几张卡片、响铃，通知表三天涨到 8 万多行；
+    /// ④ 发完新汇总，把所有"更早的、还没读的审批提醒"（上一轮的汇总、改造前按单发的旧提醒）标成已读——
+    ///    每个人未读的提醒始终只有最新一条；提交/流转时发的事件通知（标题不同）不动。每一轮都是一条
+    ///    "新出现的"通知，前端轮询才能识别成新通知、触发弹窗和提示音（早先做成"已有未读就跳过"，
+    ///    结果审批人只要没点开最早那条通知就永远收不到提醒，已改掉）。先插入新的、再标旧的已读，
+    ///    万一中途失败最多是多一条重复提醒，不会丢提醒。
     /// </summary>
+    private const string ReminderTitle = "审批提醒";
+
     private async Task RemindPendingApprovalsAsync()
     {
         using var scope = scopeFactory.CreateScope();
@@ -351,7 +355,6 @@ public class AttendanceBackgroundService(
             .Include(r => r.Applicant)
             .Include(r => r.ApprovalSteps)
             .ToListAsync();
-        if (openRequests.Count == 0) return;
 
         // 当前轮到谁处理，一张单最多一个人；先批量把这些审批人的"在职状态/管理范围"查出来，
         // 不在循环里逐条查数据库
@@ -379,7 +382,8 @@ public class AttendanceBackgroundService(
             return ids.Contains(applicantDeptId.Value);
         }
 
-        var toAdd = new List<Notification>();
+        // 每个审批人：这一轮需要提醒的单子数 + 其中挂得最久的那张的"挂起起点"
+        var perApprover = new Dictionary<int, (int Count, DateTime Oldest)>();
         foreach (var req in openRequests)
         {
             var currentStep = req.ApprovalSteps
@@ -394,37 +398,52 @@ public class AttendanceBackgroundService(
                 && !await CoversApplicantAsync(approver.ScopedDepartmentId.Value, req.Applicant.DepartmentId))
                 continue;   // 申请人调岗后，原审批人已经管不到了（这类卡住的单交给总部处理，不在这里提醒）
 
-            toAdd.Add(new Notification
-            {
-                UserId           = currentStep.ApproverUserId,
-                Title            = "审批提醒",
-                Content          = $"{req.Applicant.RealName} 的{req.ApprovalType.ToDisplayName()}申请（{req.RequestNo}）还未处理，请及时审批",
-                NotificationType = "ApprovalPending",
-                RelatedId        = req.Id,
-                CreatedAt        = now
-            });
+            var id = currentStep.ApproverUserId;
+            perApprover[id] = perApprover.TryGetValue(id, out var cur)
+                ? (cur.Count + 1, req.UpdatedAt < cur.Oldest ? req.UpdatedAt : cur.Oldest)
+                : (1, req.UpdatedAt);
         }
-        if (toAdd.Count == 0) return;
 
-        // 插入这一批新提醒之前，先把这些（审批人, 申请单）组合下之前没读的旧通知标成已读——包含提交/流转
-        // 时发的那条，不然它会一直是"未读"，跟这里新插入的一起把未读数字越垒越高，而且前端也分不清
-        // 哪条才是"这一轮真正新出现的"
-        var targetUserIds = toAdd.Select(n => n.UserId).ToHashSet();
-        var targetRequestIds = toAdd.Select(n => n.RelatedId!.Value).ToHashSet();
-        var oldUnread = await db.Notifications
-            .Where(n => n.NotificationType == "ApprovalPending" && !n.IsRead
-                     && targetUserIds.Contains(n.UserId) && n.RelatedId != null && targetRequestIds.Contains(n.RelatedId.Value))
-            .ToListAsync();
-        var toAddKeys = toAdd.Select(n => (n.UserId, RelatedId: n.RelatedId!.Value)).ToHashSet();
-        foreach (var n in oldUnread)
+        if (perApprover.Count > 0)
         {
-            if (!toAddKeys.Contains((n.UserId, n.RelatedId!.Value))) continue;   // 精确匹配这一批要提醒的（审批人, 申请单）组合
-            n.IsRead = true;
-            n.ReadAt = now;
+            db.Notifications.AddRange(perApprover.Select(kv =>
+            {
+                var age     = now - kv.Value.Oldest;
+                var ageText = age.TotalHours >= 24 ? $"{(int)age.TotalDays} 天" : $"{Math.Max(1, (int)age.TotalHours)} 小时";
+                return new Notification
+                {
+                    UserId           = kv.Key,
+                    Title            = ReminderTitle,
+                    Content          = $"您有 {kv.Value.Count} 张待审批申请已超过 4 小时没处理，其中最久的已挂 {ageText}，请及时审批",
+                    NotificationType = "ApprovalPending",
+                    RelatedId        = null,   // 汇总通知不对应某一张单；点击后统一跳转到"待我审批"列表
+                    CreatedAt        = now
+                };
+            }));
+            await db.SaveChangesAsync();
         }
 
-        db.Notifications.AddRange(toAdd);
-        await db.SaveChangesAsync();
+        // 不管这一轮有没有人要提醒，都把"更早的"未读提醒清掉：没人要提醒的审批人（积压已经处理完了），
+        // 之前那条"您有 N 张待审批"也已经过时，不该一直挂在未读里
+        await db.Notifications
+            .Where(n => n.NotificationType == "ApprovalPending" && n.Title == ReminderTitle && !n.IsRead && n.CreatedAt < now)
+            .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true).SetProperty(n => n.ReadAt, now));
+    }
+
+    /// <summary>
+    /// 清掉 7 天前、已经读过的"审批提醒"：每 4 小时一条汇总，不清的话通知表会一直涨（2026-10-06 检查时
+    /// 改造前按单发的旧提醒已经积了 8 万多行）。只清提醒，不动提交/流转/审批结果这类事件通知，
+    /// 也不动没读的（没读的提醒会在下一轮被标成已读，第二天的清理就会带走）。
+    /// </summary>
+    private async Task CleanupOldReminderNotificationsAsync()
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+        var cutoff = DateTime.Now.AddDays(-7);
+        var deleted = await db.Notifications
+            .Where(n => n.NotificationType == "ApprovalPending" && n.Title == ReminderTitle && n.IsRead && n.CreatedAt < cutoff)
+            .ExecuteDeleteAsync();
+        if (deleted > 0) logger.LogInformation("已清理 {Count} 条 7 天前已读的审批提醒通知", deleted);
     }
 
     private async Task CleanupZKDeviceDataAsync()

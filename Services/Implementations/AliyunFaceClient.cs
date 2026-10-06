@@ -239,6 +239,9 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
                          || (te.Code?.Contains("Throttling", StringComparison.OrdinalIgnoreCase) ?? false),
         TaskCanceledException                => true,
         TimeoutException                     => true,
+        // 阿里云 Tea SDK 读/连接超时抛的是 WebException("operation is timeout")，不是上面几种——2026-10-04 早高峰
+        // 阿里云接口持续超时近 2 小时，1100 多次失败一次都没计入熔断（日志里从未出现"已熔断"），每个人都白等 8 秒
+        System.Net.WebException              => true,
         System.Net.Http.HttpRequestException => true,
         System.Net.Sockets.SocketException   => true,
         _                                     => false
@@ -300,6 +303,7 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
                              || (te.Message?.Contains("图片无法下载") ?? false),
             TaskCanceledException      => true,   // ReadTimeout/ConnectTimeout 触发（callerCt 没取消，走到这就是纯超时）
             TimeoutException           => true,
+            System.Net.WebException    => true,   // Tea SDK 的超时就是这个类型（见 ShouldCountForCircuitBreaker 的说明）
             System.Net.Http.HttpRequestException => true,
             System.Net.Sockets.SocketException   => true,
             _                          => false

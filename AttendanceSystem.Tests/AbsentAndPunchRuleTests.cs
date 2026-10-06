@@ -340,8 +340,9 @@ public class AbsentAndPunchRuleTests : IDisposable
 
         using var check = CreateContext();
         var notif = await check.Notifications.SingleAsync(n => n.UserId == approverId && n.NotificationType == "ApprovalPending");
-        Assert.Equal(requestId, notif.RelatedId);
-        Assert.Contains("还未处理", notif.Content);
+        Assert.Null(notif.RelatedId);   // 汇总通知不对应某一张单
+        Assert.Contains("1 张", notif.Content);
+        Assert.Contains("没处理", notif.Content);
     }
 
     [Fact]
@@ -537,7 +538,7 @@ public class AbsentAndPunchRuleTests : IDisposable
         await RunRemindPendingApprovalsAsync();
 
         using var check = CreateContext();
-        var all = await check.Notifications.Where(n => n.UserId == approverId && n.RelatedId == requestId).ToListAsync();
+        var all = await check.Notifications.Where(n => n.UserId == approverId).ToListAsync();
         Assert.Equal(2, all.Count);                                    // 旧的还在，新增了一条
         Assert.Single(all, n => !n.IsRead);                            // 未读的只剩新的这一条
         Assert.Single(all, n => n.IsRead && n.Content == "上一轮的提醒");   // 旧的已经被标成已读，内容没变
@@ -591,9 +592,168 @@ public class AbsentAndPunchRuleTests : IDisposable
         await RunRemindPendingApprovalsAsync();
 
         using var check = CreateContext();
-        var all = await check.Notifications.Where(n => n.UserId == approverId && n.RelatedId == requestId).ToListAsync();
-        Assert.Equal(2, all.Count);                                                 // 提交时那条 + 新的提醒
-        Assert.Equal(1, all.Count(n => !n.IsRead));                                 // 未读始终只有 1 条，不是"永远没有"
-        Assert.Contains(all, n => !n.IsRead && n.Content.Contains("还未处理"));       // 新的这条是提醒专用的文案
+        var all = await check.Notifications.Where(n => n.UserId == approverId).ToListAsync();
+        Assert.Equal(2, all.Count);                                                 // 提交时那条事件通知 + 新的汇总提醒
+        Assert.Contains(all, n => n.Title == "审批提醒" && !n.IsRead && n.Content.Contains("1 张"));   // 提醒没有被"提交时那条还没读"挡住——这是前一版的 bug
+        Assert.Contains(all, n => n.RelatedId == requestId && n.Title != "审批提醒" && !n.IsRead);     // 提交时那条事件通知原样保留，不被动
+    }
+
+    // ── 2026-10-06：汇总提醒（每人每轮一条）+ 清理 ───────────────────────────────
+
+    private async Task RunCleanupOldReminderNotificationsAsync()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<AttendanceDbContext>(o => o.UseSqlite(_connection));
+        using var provider = services.BuildServiceProvider();
+        var svc = new AttendanceBackgroundService(provider.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<AttendanceBackgroundService>.Instance);
+        var method = typeof(AttendanceBackgroundService).GetMethod("CleanupOldReminderNotificationsAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)method.Invoke(svc, [])!;
+    }
+
+    private static ApprovalRequest StaleRequest(string no, int applicantId) => new()
+    {
+        RequestNo = no, ApplicantUserId = applicantId, ApprovalType = ApprovalType.Overtime,
+        ApprovalStatus = ApprovalStatus.Pending, UpdatedAt = DateTime.Now.AddHours(-5)
+    };
+
+    [Fact]
+    public async Task 待审批提醒_一个审批人压着好几张单_只发一条汇总_不是每张单一条()
+    {
+        int busyId, otherId;
+        using (var db = CreateContext())
+        {
+            var applicant = U("A20", "申请人壬");
+            var busy      = U("S20", "积压审批人");
+            var other     = U("S21", "另一个审批人");
+            db.Users.AddRange(applicant, busy, other);
+            db.SaveChanges();
+            busyId = busy.Id; otherId = other.Id;
+
+            var reqs = new[] { StaleRequest("JB-AG-1", applicant.Id), StaleRequest("JB-AG-2", applicant.Id), StaleRequest("JB-AG-3", applicant.Id), StaleRequest("JB-AG-4", applicant.Id) };
+            reqs[0].UpdatedAt = DateTime.Now.AddDays(-3);   // 最久的一张挂了 3 天
+            db.ApprovalRequests.AddRange(reqs);
+            db.SaveChanges();
+            for (var i = 0; i < reqs.Length; i++)
+                db.ApprovalSteps.Add(new ApprovalStep { ApprovalRequestId = reqs[i].Id, ApproverUserId = i < 3 ? busyId : otherId, StepOrder = 1, ApprovalStatus = ApprovalStatus.Pending });
+            db.SaveChanges();
+        }
+
+        await RunRemindPendingApprovalsAsync();
+
+        using var check = CreateContext();
+        var busyNotif = await check.Notifications.SingleAsync(n => n.UserId == busyId);   // 3 张单只有 1 条通知
+        Assert.Contains("3 张", busyNotif.Content);
+        Assert.Contains("3 天", busyNotif.Content);
+        Assert.Equal("审批提醒", busyNotif.Title);
+        Assert.Null(busyNotif.RelatedId);
+        var otherNotif = await check.Notifications.SingleAsync(n => n.UserId == otherId);
+        Assert.Contains("1 张", otherNotif.Content);
+    }
+
+    [Fact]
+    public async Task 待审批提醒_改造前按单发的旧提醒和上一轮汇总_一律标成已读_提交时的事件通知不动()
+    {
+        int approverId;
+        using (var db = CreateContext())
+        {
+            var applicant = U("A21", "申请人癸");
+            var approver  = U("S22", "审批人癸");
+            db.Users.AddRange(applicant, approver);
+            db.SaveChanges();
+            approverId = approver.Id;
+
+            var req = StaleRequest("JB-LG-1", applicant.Id);
+            db.ApprovalRequests.Add(req);
+            db.SaveChanges();
+            db.ApprovalSteps.Add(new ApprovalStep { ApprovalRequestId = req.Id, ApproverUserId = approverId, StepOrder = 1, ApprovalStatus = ApprovalStatus.Pending });
+            db.Notifications.AddRange(
+                new Notification { UserId = approverId, Title = "审批提醒", Content = "旧版按单发的提醒", NotificationType = "ApprovalPending", RelatedId = req.Id, CreatedAt = DateTime.Now.AddHours(-9) },
+                new Notification { UserId = approverId, Title = "审批提醒", Content = "上一轮的汇总", NotificationType = "ApprovalPending", RelatedId = null, CreatedAt = DateTime.Now.AddHours(-4) },
+                new Notification { UserId = approverId, Title = "您有新的待审批申请", Content = "提交时的事件通知", NotificationType = "ApprovalPending", RelatedId = req.Id, CreatedAt = DateTime.Now.AddHours(-5) });
+            db.SaveChanges();
+        }
+
+        await RunRemindPendingApprovalsAsync();
+
+        using var check = CreateContext();
+        var all = await check.Notifications.Where(n => n.UserId == approverId).ToListAsync();
+        Assert.Equal(4, all.Count);
+        Assert.True(all.Single(n => n.Content == "旧版按单发的提醒").IsRead);
+        Assert.True(all.Single(n => n.Content == "上一轮的汇总").IsRead);
+        Assert.False(all.Single(n => n.Content == "提交时的事件通知").IsRead);   // 事件通知不是提醒，不该被动
+        Assert.Single(all, n => n.Title == "审批提醒" && !n.IsRead);            // 提醒的未读始终只有最新这一条
+    }
+
+    [Fact]
+    public async Task 待审批提醒_积压已经处理完_之前那条汇总被清成已读_不再发新的()
+    {
+        int approverId;
+        using (var db = CreateContext())
+        {
+            var approver = U("S23", "积压清完的审批人");
+            db.Users.Add(approver);
+            db.SaveChanges();
+            approverId = approver.Id;
+            db.Notifications.Add(new Notification { UserId = approverId, Title = "审批提醒", Content = "您有 5 张待审批申请……", NotificationType = "ApprovalPending", CreatedAt = DateTime.Now.AddHours(-4) });
+            db.SaveChanges();
+        }
+
+        await RunRemindPendingApprovalsAsync();   // 现在没有任何待审批申请了
+
+        using var check = CreateContext();
+        var only = await check.Notifications.SingleAsync(n => n.UserId == approverId);
+        Assert.True(only.IsRead);   // 过时的汇总不该一直挂在未读里
+    }
+
+    [Fact]
+    public async Task 审批提醒清理_只删7天前已读的提醒_未读的_较新的_事件通知都保留()
+    {
+        using (var db = CreateContext())
+        {
+            var u = U("S24", "清理对象");
+            db.Users.Add(u);
+            db.SaveChanges();
+            var old = DateTime.Now.AddDays(-8);
+            db.Notifications.AddRange(
+                new Notification { UserId = u.Id, Title = "审批提醒", Content = "旧已读提醒", NotificationType = "ApprovalPending", IsRead = true, CreatedAt = old },
+                new Notification { UserId = u.Id, Title = "审批提醒", Content = "旧未读提醒", NotificationType = "ApprovalPending", IsRead = false, CreatedAt = old },
+                new Notification { UserId = u.Id, Title = "审批提醒", Content = "新已读提醒", NotificationType = "ApprovalPending", IsRead = true, CreatedAt = DateTime.Now.AddDays(-1) },
+                new Notification { UserId = u.Id, Title = "您有新的待审批申请", Content = "旧已读事件通知", NotificationType = "ApprovalPending", IsRead = true, CreatedAt = old });
+            db.SaveChanges();
+        }
+
+        await RunCleanupOldReminderNotificationsAsync();
+
+        using var check = CreateContext();
+        var left = (await check.Notifications.Select(n => n.Content).ToListAsync()).OrderBy(x => x).ToList();
+        Assert.Equal(new[] { "新已读提醒", "旧已读事件通知", "旧未读提醒" }.OrderBy(x => x).ToList(), left);
+    }
+
+    // ── 阿里云人脸接口：超时类异常要计入熔断、也要重试（2026-10-04 早高峰实测没计入）──────────
+
+    private static T CallFaceClientStatic<T>(string name, params object[] args)
+    {
+        var m = typeof(AliyunFaceClient).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!;
+        return (T)m.Invoke(null, args)!;
+    }
+
+    [Fact]
+    public void 人脸接口_Tea_SDK超时抛的WebException_计入熔断也算可重试()
+    {
+        // 生产日志里 10/4 早上 1100 多次失败的真实异常就是这个：System.Net.WebException: operation is timeout
+        var timeout = new System.Net.WebException("operation is timeout");
+        Assert.True(CallFaceClientStatic<bool>("ShouldCountForCircuitBreaker", timeout));
+        Assert.True(CallFaceClientStatic<bool>("IsRetryable", timeout, CancellationToken.None));
+    }
+
+    [Fact]
+    public void 人脸接口_参数类错误不计入熔断_调用方自己取消的不重试()
+    {
+        var bad = new InvalidOperationException("参数错误");
+        Assert.False(CallFaceClientStatic<bool>("ShouldCountForCircuitBreaker", bad));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.False(CallFaceClientStatic<bool>("IsRetryable", new System.Net.WebException("operation is timeout"), cts.Token));   // 调用方已经取消，不再白花调用量
     }
 }
