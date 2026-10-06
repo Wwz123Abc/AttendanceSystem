@@ -51,6 +51,10 @@ public class RemotePunchModel(
     /// 的内存缓冲区）之前挡掉恶意构造的超大字符串，避免有人直接绕过前端拿超大 payload 打这个接口刷内存。</summary>
     private const int MaxCapturedPhotoDataLength = 5 * 1024 * 1024;
 
+    /// <summary>是不是一张像样的 JPEG：至少 1KB（480 宽的真实人脸照片远大于此），且以 JPEG 文件头 FF D8 开头。</summary>
+    public static bool IsUsableJpeg(byte[] bytes) =>
+        bytes.Length >= 1024 && bytes[0] == 0xFF && bytes[1] == 0xD8;
+
     public async Task OnGetAsync() => await LoadStateAsync();
 
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)
@@ -153,6 +157,12 @@ public class RemotePunchModel(
             {
                 throw new InvalidOperationException("拍摄的照片数据不完整，请重试");
             }
+
+            // 空数据/非 JPEG 直接拒绝，不去调（付费的）阿里云：摄像头还没出画面就点打卡时，前端截到的是 0×0 画布，
+            // toDataURL 返回 "data:,"，解码出来是 0 字节——以前这种情况会原样传给阿里云，被报"图片无法下载"并白白重试 3 次
+            // （2026-10-04 阿里云确认服务端收到的图片是空白的）
+            if (!IsUsableJpeg(liveBytes))
+                throw new InvalidOperationException("没有拍到有效的画面（摄像头可能还没出画面），请等预览画面出现后再点打卡；如果一直没有画面，请刷新页面并允许摄像头权限后重试");
 
             var refPath = Path.Combine(PrivateFileStorage.GetRoot(env), user.FaceReferencePhotoUrl!.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
             // 优先用专门给比对用的瘦身版（"_verify" 后缀，体积只有留档版的三四分之一，每次打卡都传，越小越好）；

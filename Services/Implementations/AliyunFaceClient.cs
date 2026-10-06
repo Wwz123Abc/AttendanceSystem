@@ -279,13 +279,46 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
             }
             try
             {
-                return await action();
+                return await TimedAttemptAsync(action, attempt);
             }
             catch (Exception ex) when (attempt < _opt.MaxRetryAttempts && IsRetryable(ex, callerCt) && HasTimeForAnotherAttempt(clock))
             {
                 logger.LogWarning(ex, "阿里云人脸识别接口调用失败（第 {Attempt} 次尝试），判定为瞬时错误，准备重试", attempt + 1);
             }
         }
+    }
+
+    /// <summary>跑一次尝试；失败时记一行"卡在哪一步、花了多久"（不带堆栈，整段堆栈由外层日志负责）。
+    /// SDK 的 XxxAdvance 方法内部分三步：①向 openplatform 要上传授权 ②把图片传到阿里云 OSS ③调真正的识别接口。
+    /// 2026-10-04 早高峰超时 1100 多次，阿里云说他们只收到 3 个识别请求——超时全在前两步，但当时日志里看不出来，
+    /// 只能靠翻堆栈分类，所以现在每次失败直接把阶段和耗时写出来。</summary>
+    private async Task<T> TimedAttemptAsync<T>(Func<Task<T>> action, int attempt)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            return await action();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("阿里云人脸识别第 {Attempt} 次尝试失败：卡在【{Stage}】，本次尝试耗时 {ElapsedMs}ms，异常类型 {ExType}",
+                attempt + 1, ClassifyFailedStage(ex), sw.ElapsedMilliseconds, ex.GetType().Name);
+            throw;
+        }
+    }
+
+    /// <summary>根据异常堆栈判断失败发生在 SDK 的哪一步（只用于日志）。</summary>
+    internal static string ClassifyFailedStage(Exception ex) => ClassifyStageFromStack(ex.StackTrace);
+
+    internal static string ClassifyStageFromStack(string? stackTrace)
+    {
+        if (string.IsNullOrEmpty(stackTrace)) return "未知";
+        if (stackTrace.Contains("_postOSSObjectAsync", StringComparison.Ordinal)) return "②上传图片到阿里云 OSS";
+        // 真正的识别接口：堆栈里会有 XxxWithOptionsAsync（SDK 内部在第③步才调它）
+        if (stackTrace.Contains("WithOptionsAsync", StringComparison.Ordinal)) return "③调用识别接口";
+        // 其余落在 Advance 方法里直接走 CallApiAsync 的，是第①步（向 openplatform 申请上传授权）
+        if (stackTrace.Contains("AdvanceAsync", StringComparison.Ordinal)) return "①申请上传授权";
+        return "未知";
     }
 
     /// <summary>

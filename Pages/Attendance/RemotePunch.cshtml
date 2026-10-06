@@ -299,6 +299,7 @@ if (cameraVideo) startCamera();
 // 从视频当前画面截一帧，压成不大的 JPEG（限宽 480，够人脸识别用，不用传原始高清大图）
 function captureFrame() {
     const canvas = document.getElementById('captureCanvas');
+    if (!cameraVideo.videoWidth || !cameraVideo.videoHeight) return '';   // 摄像头还没出画面：不能截（会得到 0×0 的空画布）
     const maxW = 480;
     const scale = cameraVideo.videoWidth > maxW ? maxW / cameraVideo.videoWidth : 1;
     canvas.width  = Math.round(cameraVideo.videoWidth * scale);
@@ -316,8 +317,14 @@ function submitPunch() {
     // 每个都会真的调一次收费的阿里云接口，白白多花钱，也会在识别记录里留下容易看着困惑的重复条目
     const btn = document.getElementById('punchBtn');
     if (btn.disabled) return;
+    // getUserMedia 成功只代表"拿到了摄像头流"，画面可能还没出来（手机上常见）——截不到画面就不提交
+    const photo = captureFrame();
+    if (!photo || photo.length < 1000) {
+        alert('摄像头还没出画面，请等预览画面出现后再点打卡；如果一直没有画面，请刷新页面并允许摄像头权限');
+        return;
+    }
     btn.disabled = true;
-    document.getElementById('capturedPhotoData').value = captureFrame();
+    document.getElementById('capturedPhotoData').value = photo;
     document.getElementById('punchForm').submit();
 }
 </script>

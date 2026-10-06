@@ -496,4 +496,35 @@ public class Round15ReviewTests : IDisposable
         Assert.True(ids.Count >= 45);   // 同一秒内 4 位随机数偶有重复，但绝大多数不同
         Assert.NotEqual(AttendanceSystem.Helpers.ErrorReport.Describe(ex, "a"), AttendanceSystem.Helpers.ErrorReport.Describe(ex, "a"));
     }
+
+    // ── 远程打卡：空白/非 JPEG 的画面不能传给阿里云（2026-10-04 阿里云确认收到的图片是空白的）──────
+
+    [Fact]
+    public void 远程打卡_空数据和非JPEG画面被判为不可用_正常JPEG通过()
+    {
+        // 摄像头没出画面时，前端 toDataURL 返回 "data:,"，服务端解码出来是 0 字节
+        Assert.False(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(Convert.FromBase64String("")));
+        Assert.False(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(new byte[] { 0xFF, 0xD8, 0xFF }));   // 太小
+        Assert.False(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(new byte[4096]));                    // 全 0，不是 JPEG
+        var ok = new byte[4096]; ok[0] = 0xFF; ok[1] = 0xD8;
+        Assert.True(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(ok));
+    }
+
+    [Fact]
+    public void 人脸接口_失败阶段分类_授权_OSS上传_识别接口三步分得清()
+    {
+        var typ = typeof(AliyunFaceClient);
+        string Classify(string? stack) => (string)typ.GetMethod("ClassifyStageFromStack",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, new object?[] { stack })!;
+
+        // 2026-10-04 日志里三种真实堆栈
+        var oss  = "at Client._postOSSObjectAsync(...) at Client.DetectLivingFaceAdvanceAsync(...)";
+        var auth = "at Client.DoRequestAsync(...) at Client.CallApiAsync(...) at Client.DetectLivingFaceAdvanceAsync(...)";
+        var api  = "at Client.DoRequestAsync(...) at Client.CallApiAsync(...) at Client.DetectLivingFaceWithOptionsAsync(...) at Client.DetectLivingFaceAdvanceAsync(...)";
+
+        Assert.Contains("OSS", Classify(oss));
+        Assert.Contains("授权", Classify(auth));
+        Assert.Contains("识别接口", Classify(api));
+        Assert.Equal("未知", Classify(null));
+    }
 }
