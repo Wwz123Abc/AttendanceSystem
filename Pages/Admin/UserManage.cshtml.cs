@@ -680,7 +680,7 @@ public class UserManageModel(
             throw new InvalidOperationException("请填写姓名");
         if (RealName.Trim().Length > 50)
             throw new InvalidOperationException("姓名不能超过 50 个字");
-        if (!Enum.TryParse<UserRole>(Role, out _))
+        if (!Enum.TryParse<UserRole>(Role, out var parsedRole) || !Enum.IsDefined(parsedRole))   // 数字串 "99" 也能 TryParse 成功，必须再确认是已定义的角色
             throw new InvalidOperationException("请选择正确的角色");
         if (!string.IsNullOrEmpty(HireDate) && !DateOnly.TryParse(HireDate, out _))
             throw new InvalidOperationException("入职日期格式不正确");

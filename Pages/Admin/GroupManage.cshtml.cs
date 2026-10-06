@@ -197,7 +197,8 @@ public class GroupManageModel(
         if (string.IsNullOrWhiteSpace(GroupName)) { ErrorMessage = "考勤组名称不能为空"; return RedirectToPage(); }
         if (GroupName.Trim().Length > 100) { ErrorMessage = "考勤组名称不能超过 100 个字"; return RedirectToPage(); }
         if (ApproverUserIds.Count == 0) { ErrorMessage = "请至少选择一位审批人"; return RedirectToPage(); }
-        if (!Enum.TryParse<Models.Enums.ApprovalLevelType>(ApprovalLevel, out var approvalLevel)) approvalLevel = Models.Enums.ApprovalLevelType.Level1;
+        if (!Enum.TryParse<Models.Enums.ApprovalLevelType>(ApprovalLevel, out var approvalLevel) || !Enum.IsDefined(approvalLevel))
+            approvalLevel = Models.Enums.ApprovalLevelType.Level1;   // 数字串越界（如 "99"）也回落成默认值，不能落库成未定义枚举
         foreach (var loc in Locations)
         {
             if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;   // 没填全经纬度的行本来就会被跳过，不用校验

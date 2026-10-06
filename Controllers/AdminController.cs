@@ -267,11 +267,28 @@ public class AdminController(
     {
         if (Cu.IsScoped && !dept.ParentId.HasValue) return Forbid();
         if (!await deptScopeService.CanAccessDeptAsync(Cu, dept.ParentId)) return Forbid();
+        // 部门跟随考勤组：受限管理员不能把部门挂到别的分公司的考勤组上
+        if (dept.AttendanceGroupId.HasValue && !await IsGroupWritableAsync(dept.AttendanceGroupId.Value)) return Forbid();
 
-        dept.CreatedAt = dept.UpdatedAt = DateTime.Now;
-        db.Departments.Add(dept);
+        // 不能直接把请求体反序列化出来的实体存库：Department 带着 Users/ChildDepartments 这类可写的导航集合，
+        // 请求里夹带一个 "users":[{...role:1...}] 就会连带落库一个不受范围限制的总部超管账号（X1，2026-10-06 复核）。
+        // 只按白名单拷贝部门自己的标量字段，导航集合一律不接受
+        var newDept = new Department
+        {
+            DeptName          = dept.DeptName,
+            DeptCode          = dept.DeptCode,
+            ParentId          = dept.ParentId,
+            CompanyName       = dept.CompanyName,
+            Description       = dept.Description,
+            AttendanceGroupId = dept.AttendanceGroupId,
+            IsActive          = dept.IsActive,
+            SortIndex         = dept.SortIndex,
+            CreatedAt         = DateTime.Now,
+            UpdatedAt         = DateTime.Now
+        };
+        db.Departments.Add(newDept);
         await db.SaveChangesAsync();
-        return Ok(new { Success = true, DeptId = dept.Id });
+        return Ok(new { Success = true, DeptId = newDept.Id });
     }
 
     /// <summary>修改部门。</summary>
@@ -410,6 +427,26 @@ public class AdminController(
         return Ok(new { Success = true, Data = shifts });
     }
 
+    /// <summary>班次字段范围校验：跟 ShiftManage 页面保存时的数值范围一致（页面有完整校验，这两个 API 以前原样落库，
+    /// 可以写出让应出勤/工时全错的配置，2026-10-06 复核）。通过返回 null，否则返回给调用方看的中文原因。
+    /// 午间窗口的"必须落在班次时段内"这类语义校验仍只在页面里做，这里只限格式长度。</summary>
+    private static string? ValidateShiftFields(string? name, int lateTol, int earlyTol, int otThreshold, int earliestIn,
+        decimal stdHours, string? color, string? restDays, string? midCheckWindows)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "请填写班次名称";
+        if (name.Trim().Length > 50) return "班次名称不能超过 50 个字";
+        if (lateTol is < 0 or > 60) return "迟到容忍分钟数请填 0-60 之间";
+        if (earlyTol is < 0 or > 60) return "早退容忍分钟数请填 0-60 之间";
+        if (earliestIn < 0) return "最多提前打卡分钟数不能为负数";
+        if (otThreshold is < 0 or > 120) return "加班判定阈值请填 0-120 分钟之间";
+        if (stdHours is <= 0 or > 24) return "标准工时请填 0-24 小时之间";
+        if (color is not null && !System.Text.RegularExpressions.Regex.IsMatch(color, "^#[0-9A-Fa-f]{6}$")) return "班次颜色格式不正确";
+        if (!string.IsNullOrEmpty(restDays) && !System.Text.RegularExpressions.Regex.IsMatch(restDays, @"^[0-6](,[0-6])*$"))
+            return "每周休息日格式不正确（如 0,6，0=周日…6=周六）";
+        if (midCheckWindows is { Length: > 500 }) return "午间必打卡窗口配置过长";
+        return null;
+    }
+
     /// <summary>新增班次。用 DTO 而不是直接绑 ShiftSchedule 实体：ShiftSchedule.AttendanceGroup 是
     /// 非空导航属性（真正外键是 AttendanceGroupId），[ApiController] 会把它当成"必填字段"校验，
     /// 调用方不传一个完整的 attendanceGroup 嵌套对象就直接 400——调用方只应该传 attendanceGroupId
@@ -418,6 +455,9 @@ public class AdminController(
     public async Task<IActionResult> CreateShift([FromBody] CreateShiftRequest req)
     {
         if (!await IsGroupWritableAsync(req.AttendanceGroupId)) return Forbid();
+        if (ValidateShiftFields(req.ShiftName, req.LateToleranceMinutes, req.EarlyLeaveToleranceMinutes, req.OvertimeThresholdMinutes,
+                req.EarliestClockInMinutes, req.StandardWorkHours, req.Color, req.RestDaysOfWeek, req.MidCheckWindows) is { } createErr)
+            return BadRequest(new { Success = false, Message = createErr });
         // 非跨天班次，下班时间必须晚于上班时间——不然会配出一个 08:00~08:00 甚至反过来的班次，
         // 后面算迟到/早退/工时全部会跟着算错，但当时不会报任何错，很难排查
         if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
@@ -458,6 +498,9 @@ public class AdminController(
         var shift = await db.ShiftSchedules.FindAsync(id);
         if (shift is null) return NotFound();
         if (!await IsGroupWritableAsync(shift.AttendanceGroupId)) return Forbid();
+        if (ValidateShiftFields(req.ShiftName, req.LateToleranceMinutes, req.EarlyLeaveToleranceMinutes, req.OvertimeThresholdMinutes,
+                req.EarliestClockInMinutes ?? 0, req.StandardWorkHours, req.Color, req.RestDaysOfWeek, req.MidCheckWindows) is { } updateErr)
+            return BadRequest(new { Success = false, Message = updateErr });
         if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
             return BadRequest(new { Success = false, Message = "非跨天班次的下班时间必须晚于上班时间" });
         if (req.IsCrossDay && req.WorkEndTime > req.WorkStartTime)

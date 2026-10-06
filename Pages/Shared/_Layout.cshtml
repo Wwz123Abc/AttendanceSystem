@@ -583,6 +583,15 @@
             badge.textContent = data.count > 99 ? '99+' : data.count;       // 超过99条就显示"99+"，不然数字太长挤不下
             badge.style.display = data.count > 0 ? 'flex' : 'none';         // 没有未读就把这个红色气泡隐藏掉
 
+            // 弹窗/响铃的"新通知"判断必须放在"空列表就提前返回"之前：打开页面时没有未读通知是最常见的情况，
+            // 如果空列表分支直接 return，notifFirstLoad/notifPrevCount 就一直停在初始值，接下来第一条新通知会被
+            // 当成"打开页面时就有的旧通知"，不弹卡片、不响铃，只有铃铛数字 +1（2026-10-06 复核发现）
+            const freshOnes = notifFirstLoad ? [] : data.items.filter(n => !seenNotifIds.has(n.id));
+            data.items.forEach(n => seenNotifIds.add(n.id));
+            const missedCount = notifFirstLoad ? 0 : Math.max(0, (data.count - notifPrevCount) - freshOnes.length);
+            notifPrevCount  = data.count;
+            notifFirstLoad  = false;
+
             if (data.items.length === 0) {
                 list.innerHTML = '<div class="text-center text-muted py-3 small">暂无未读通知</div>';
                 return;
@@ -600,20 +609,14 @@
                     <div class="notif-content">${escapeHtml(n.content)}</div>
                 </div>`).join('');
 
-            // 挑出"这次轮询里新出现的"通知 id（第一次拉取时不算新——那是打开页面前就攒下的旧未读）。
+            // 上面已经算出"这次轮询里新出现的"通知（第一次拉取时不算新——那是打开页面前就攒下的旧未读）。
             // 每条新通知弹一张小卡片；弹窗数量不设上限（真出现好几条一起弹，按顺序往下排队也不会乱），
             // 但铃声只响一次，避免同一刻来了好几条通知就连响好几下
-            const freshOnes = notifFirstLoad ? [] : data.items.filter(n => !seenNotifIds.has(n.id));
-            data.items.forEach(n => seenNotifIds.add(n.id));
-
             // /api/notifications 只返回最新 15 条未读（GetUnread 的 Take(15)），未读总数 count 不受这个限制。
             // 如果两次轮询之间一次性新增的未读比这 15 条还多（比如"待审批提醒"一次给同一个人发了十几条），
             // 排在第 15 条以外的那几条不会出现在 data.items 里，也就没法像别的新通知一样单独弹卡片——
             // 用总数的增量减去这次实际弹出的卡片数，算出"这次没弹出来的"有几条，另外弹一条汇总提示兜底，
             // 不然这几条会安安静静地待在铃铛数字里，用户完全不会注意到还有新通知进来（2026-09-30 复核发现）。
-            const missedCount = notifFirstLoad ? 0 : Math.max(0, (data.count - notifPrevCount) - freshOnes.length);
-            notifPrevCount  = data.count;
-            notifFirstLoad  = false;
             if (freshOnes.length > 0 || missedCount > 0) {
                 playNotifSound();
                 freshOnes.forEach(showNotifToast);

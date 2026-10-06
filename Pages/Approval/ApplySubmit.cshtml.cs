@@ -115,7 +115,8 @@ public class ApplySubmitModel(
                 else if (ApprovalType == "PunchReplenishment")
                 {
                     dto.PunchDate = string.IsNullOrEmpty(PunchDate) ? null : DateOnly.Parse(PunchDate);
-                    dto.PunchType = Enum.TryParse<Models.Enums.PunchType>(PunchTypeVal, out var ptv) ? ptv : null;
+                    // 数字串 "3" 也能被 TryParse 成 MidCheck，补卡回写里"不是上班就当下班"，非法类型会被写成下班卡
+                    dto.PunchType = Enum.TryParse<Models.Enums.PunchType>(PunchTypeVal, out var ptv) && Enum.IsDefined(ptv) ? ptv : null;
                     dto.PunchTime = string.IsNullOrEmpty(PunchTime) ? null : TimeOnly.Parse(PunchTime);
                 }
                 else if (ApprovalType == "Overtime")

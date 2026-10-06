@@ -256,7 +256,8 @@ public class AttendanceBackgroundService(
         // 未闭合记录不会因为只被检查漏过一次就从此再也追不上，这里会把它们都一起补标。
         var activeUserIds = users.Select(u => u.Id).ToHashSet();   // 复用上面已查好的"当前在职员工"名单
         var openRecords = (await db.AttendanceRecords
-            .Where(r => r.WorkDate < today && r.ClockInTime != null && r.ClockOutTime == null
+            .Where(r => r.WorkDate < today && r.WorkDate >= today.AddDays(-60)   // 加下限：更早的不再每晚全表扫一遍（停机几天的追赶用 60 天足够）
+                     && r.ClockInTime != null && r.ClockOutTime == null
                      && r.AttendanceStatus != AttendanceStatus.NotPunched
                      && r.AttendanceStatus != AttendanceStatus.OnLeave
                      && r.AttendanceStatus != AttendanceStatus.Holiday

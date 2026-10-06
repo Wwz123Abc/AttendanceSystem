@@ -30,6 +30,10 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
         if (string.IsNullOrWhiteSpace(relativePath)) return NotFound();
 
         var segments = relativePath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        // 判权是按"拆出来的路径段"做的，而真正读文件用的是 GetFullPath 归一化后的路径——如果路径里带 ".." 段，
+        // 两边看到的是两条不同的路径（"approvals/{自己}/../idcards/{别人}/x" 判成自己的附件、实际读到别人的身份证照）。
+        // Kestrel/nginx 通常会先把 ".." 归一化掉，这里不依赖它们，含 "."/".." 段的一律拒绝（纵深防御，2026-10-06 复核）
+        if (segments.Any(s => s is "." or "..")) return NotFound();
         var category = segments.Length > 0 ? segments[0] : "";
         var cu        = HttpContext.GetCurrentUser()!;
         var isManager = cu.Role is UserRole.Admin or UserRole.Clerk;
@@ -66,6 +70,8 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
             _       => "image/jpeg"
         };
         Response.Headers["X-Content-Type-Options"] = "nosniff";
+        // 身份证照/人脸照/审批附件都是敏感文件：不让浏览器和中间代理缓存，退出登录后不能再从缓存里翻出来
+        Response.Headers["Cache-Control"] = "no-store";
         // Word/Excel 浏览器打不开，直接给下载（审批附件允许上传的类型，以前一律按 jpg 返回，PDF/Word/Excel 点开是一张破图）
         return ext is ".doc" or ".docx" or ".xls" or ".xlsx"
             ? PhysicalFile(fullPath, contentType, Path.GetFileName(fullPath))
@@ -162,7 +168,14 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
             if (await deptScopeService.CanAccessDeptAsync(cu, deptId)) return true;
         }
 
+        // 审批人只能看"他审批的那几张单"里带的附件，不能因为曾经审批过这个人的某一张单，就能读他之后所有的附件
+        // （含病假证明）：按文件名（GUID）去匹配申请单上记录的附件地址
+        var fileName = segments.Length > 2 ? segments[^1] : "";
+        if (string.IsNullOrEmpty(fileName)) return false;
         return await db.ApprovalSteps
-            .AnyAsync(s => s.ApproverUserId == cu.UserId && s.ApprovalRequest.ApplicantUserId == applicantId);
+            .AnyAsync(s => s.ApproverUserId == cu.UserId
+                        && s.ApprovalRequest.ApplicantUserId == applicantId
+                        && s.ApprovalRequest.AttachmentUrls != null
+                        && s.ApprovalRequest.AttachmentUrls.Contains(fileName));
     }
 }

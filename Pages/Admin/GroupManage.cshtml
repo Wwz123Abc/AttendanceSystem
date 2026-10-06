@@ -665,6 +665,10 @@ document.getElementById('amapPickerModal').addEventListener('click', e => {
 // 点某一行的"地图选点"按钮：记下目标行，打开弹窗，首次显示时才初始化地图（此时容器才有尺寸）
 function openAMapPicker(btn) {
     amapTargetRow = btn.closest('.location-row');
+    // 上一次选点留下的坐标/地址不能带到这一次：给"还没填坐标"的行选点时，如果定位/反查还没返回就点
+    // "使用此位置"，会把上一行的坐标和地址名静默写进当前行（围栏配错，员工在正确地点反而打不上卡）
+    amapPickerState = null;
+    document.getElementById('amapPickerResult').textContent = '';
     document.getElementById('amapAddressInput').value = '';
     hideAMapSearchResults();
     const modalEl = document.getElementById('amapPickerModal');

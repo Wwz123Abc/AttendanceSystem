@@ -470,6 +470,9 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 再复核一遍我现在管不管得到申请人现在所在的部门——申请人调岗后原来的审批节点不会自动失效，
         // 不加这一步的话，调走前留下的旧申请会一直挂在原公司审批人的待办里，能看到姓名/请假理由等隐私
         var result = new List<ApprovalRequestDto>();
+        // "管不管得到申请人所在部门"每次都要现查审批人范围 + 逐级查部门祖先；积压几百张单时，同一个部门的申请人
+        // 反复查同一个答案，打开页面就是几百上千次查询——按部门缓存一次（2026-10-06 复核）
+        var coverCache = new Dictionary<int, bool>();   // key：申请人 DepartmentId，没有部门记 -1
         foreach (var a in candidates)
         {
             var activeOrder = a.ApprovalSteps
@@ -479,7 +482,10 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                                          && s.ApproverUserId == approverUserId
                                          && s.ApprovalStatus == ApprovalStatus.Pending);
             if (!isMyTurn) continue;
-            if (!await ApproverCoversApplicantAsync(approverUserId, a.Applicant.DepartmentId)) continue;
+            var deptKey = a.Applicant.DepartmentId ?? -1;
+            if (!coverCache.TryGetValue(deptKey, out var covers))
+                coverCache[deptKey] = covers = await ApproverCoversApplicantAsync(approverUserId, a.Applicant.DepartmentId);
+            if (!covers) continue;
             result.Add(ToDto(a));
         }
         return result;

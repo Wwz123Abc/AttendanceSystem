@@ -49,13 +49,16 @@ public class ZKDeviceController(
         // 统一记成一个），并且字典条目太多时整体清空——只是"看得见异常"的辅助计数，清了最多晚一点报警
         var key = string.IsNullOrWhiteSpace(sn) ? "(空)" : sn.Length > 50 ? "(超长SN)" : sn;
         if (UnknownSnAttempts.Count > 2000) UnknownSnAttempts.Clear();
-        logger.LogWarning("未知/未启用设备序列号尝试访问考勤机接口 {Endpoint}：SN={SN}，来源IP={RemoteIp}",
-            endpoint, key, HttpContext.Connection.RemoteIpAddress);
-
         var now   = DateTime.Now;
         var entry = UnknownSnAttempts.AddOrUpdate(key,
             _ => (1, now),
             (_, old) => now - old.WindowStart > UnknownSnAlertWindow ? (1, now) : (old.Count + 1, old.WindowStart));
+
+        // 这几个接口是匿名的，被刷（随便换 SN 狂敲）时每个请求一条 Warning 会写满日志盘：同一个 SN 每个窗口里
+        // 只完整记前 5 次、之后每 100 次记一条，次数照样累计，阈值那条 Error 报警不受影响（2026-10-06 复核）
+        if (entry.Count <= 5 || entry.Count % 100 == 0)
+            logger.LogWarning("未知/未启用设备序列号尝试访问考勤机接口 {Endpoint}：SN={SN}，来源IP={RemoteIp}（本窗口第 {Count} 次）",
+                endpoint, key, HttpContext.Connection.RemoteIpAddress, entry.Count);
 
         if (entry.Count == UnknownSnAlertThreshold)   // 只在刚跨过阈值那一次报警，不用每次都刷屏
             logger.LogError(

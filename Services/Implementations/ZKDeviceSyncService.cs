@@ -212,7 +212,12 @@ public class ZKDeviceSyncService(
                     : PunchType.MidCheck
             };
 
-            if (!punchSet.Add((uid, type, TruncateToMinute(r.Time)))) continue;   // 去重：同一人同类型同一分钟已经存过就跳过
+            // 去重：同一人同类型同一分钟已经存过就跳过。
+            // ★ 键里的"类型"是按当时库里的状态现场推导的（当天有没有上班卡、离上班多久……），设备补传一批更早的打卡
+            //   之后，同一次刷卡可能被重新推导成另一种类型而绕过这道去重、多存一条流水——2026-10-06 复核提过，
+            //   但没有改成"不带类型"：那样第一次被误判的类型（比如先到的唯一一条 17:29 被当成上班卡）就永远没法
+            //   重新归类，补传更早的上班卡之后下班卡丢失，反而更糟。多出来的只是审计流水，不影响考勤记录结果。
+            if (!punchSet.Add((uid, type, TruncateToMinute(r.Time)))) continue;
             touchedKeys.Add((uid, workDate));
 
             db.AttendancePunches.Add(new AttendancePunch
@@ -371,7 +376,8 @@ public class ZKDeviceSyncService(
         // 姓名里如果混进了 "\r\nC:" 这种内容，会把当前这条命令行提前截断、伪造出一条新的设备命令行，
         // 等于借着改自己姓名夹带命令注入进设备指令流
         var name = user.RealName.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
-        var commandText = $"DATA UPDATE USERINFO PIN={user.EmployeeNo}\tName={name}\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ=0000000000000000\tVerify=0\tViceCard=";
+        var pin  = user.EmployeeNo.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');   // 工号同理（删除指令那边早就过滤了）
+        var commandText = $"DATA UPDATE USERINFO PIN={pin}\tName={name}\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ=0000000000000000\tVerify=0\tViceCard=";
 
         foreach (var sn in snList)
         {

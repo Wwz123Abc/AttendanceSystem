@@ -168,18 +168,18 @@ public class TemplateReportRowDto
     /// 下标和 DailyHours/TemplateReportResultDto.Dates 一一对应。</summary>
     public List<bool> DailyIsNightShift { get; set; } = [];
 
-    /// <summary>每天是不是"休息"（周末/法定节假日/公司休息日/排班自己配置的休息日，不含调班补班日）；导出 Excel 时，
+    /// <summary>每天是不是"休息"（排班自己配置的每周休息日；没排班按周六周日兜底。系统已不再区分法定节假日/调班补班日）；导出 Excel 时，
     /// 休息且当天没有工时的格子标浅灰底，把"纯空白"只留给"应出勤但没有数据"，两种情况一眼能分开。
     /// 下标和 DailyHours/TemplateReportResultDto.Dates 一一对应。</summary>
     public List<bool> DailyIsRest { get; set; } = [];
 
     /// <summary>应出勤天数：跟网页月度汇总（MonthlySummaryDto.ExpectedWorkdays）同一个口径——
-    /// 入职日期晚于周期开始的，从入职日起算；扣掉节假日和休息日，补班日算应出勤。</summary>
+    /// 入职日期晚于周期开始的，从入职日起算；扣掉休息日（排班自己配置的每周休息日，没排班按周六周日）。</summary>
     public int ExpectedWorkdays { get; set; }
 
     public decimal ActualWorkdays  { get; set; }   // 出勤天数（半天假的那天算 0.5 天，跟 MonthlySummaryDto 同一口径）
     public decimal LeaveDays       { get; set; }   // 请假天数（按小时折算，半天假算 0.5 天）
-    public int     RestDays        { get; set; }   // 休息天数（周末/法定节假日/公司休息日，不含调班补班日）
+    public int     RestDays        { get; set; }   // 休息天数（排班自己配置的每周休息日，没排班按周六周日）
 
     /// <summary>正班工时（不含加班）：跟每日打卡格子、"考勤机/打卡/审批回写"那套算法算出来的是同一个数字，
     /// 只是这里单独拆出来展示，方便区分"正常上班的时长"和"另外走加班申请批的时长"。</summary>

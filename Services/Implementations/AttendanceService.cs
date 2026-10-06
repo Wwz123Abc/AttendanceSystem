@@ -909,6 +909,22 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// </summary>
     public async Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null)
     {
+        try
+        {
+            await GenerateMonthlySummaryCoreAsync(year, month, onlyUserIds);
+        }
+        catch (DbUpdateException)
+        {
+            // (UserId, Year, Month) 有唯一索引：月初后台任务和管理员手动重算几乎同时跑时，两边都认为"这个人这个月
+            // 还没有汇总"而各插一条，后到的那次 SaveChanges 整批回滚、当月汇总静默缺失。清掉没存成功的改动重来
+            // 一次——这时对方那条已经落库了，会走"已有汇总→更新"的分支（项目里其它有唯一索引的写入路径也是这么重试的）
+            db.ChangeTracker.Clear();
+            await GenerateMonthlySummaryCoreAsync(year, month, onlyUserIds);
+        }
+    }
+
+    private async Task GenerateMonthlySummaryCoreAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds)
+    {
         var start = new DateOnly(year, month, 1);
         var end   = start.AddMonths(1).AddDays(-1);
 
@@ -1087,7 +1103,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         // 剩下那批"今天还没来打卡、但又不属于旷工/请假/节假日"的人（比如上午还没到岗），
         // 不然旷工当天晚上 23:55 被后台任务标记成 Absent 之后，同一个人会同时被"旷工"和"未打卡"
         // 两张卡各数一遍，两个数字加起来会比总人数还多，看板数据对不上。
-        var accountedForCount = records.Count(r =>
+        // 只数"没出勤"的：半天假当天打了上班卡的记录同时是"出勤"和"请假"，两边都减一遍会把"未打卡"扣少
+        // （卡片数小于下钻名单、人少时还可能出现负数，跟 GetTodayStatsDetailAsync 的 notpunched 名单对不上）
+        var accountedForCount = records.Count(r => !IsPresent(r) &&
             r.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.OnLeave or AttendanceStatus.Holiday);
 
         return new AttendanceStatsDto
@@ -1504,6 +1522,10 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             var td = DateOnly.FromDateTime(t.Value);
             if (td < workDate || td > workDate.AddDays(1))
                 throw new InvalidOperationException($"打卡时间 {t.Value:yyyy-MM-dd HH:mm} 不在考勤日 {workDate:yyyy-MM-dd} 当天或第二天，请检查日期");
+            // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点（员工自助补卡/审批回写都是这个口径）——
+            // 不挡的话可以给未来任意一天写打卡、结算工时、刷新那个未来月的月度汇总
+            if (t.Value > DateTime.Now)
+                throw new InvalidOperationException($"打卡时间 {t.Value:yyyy-MM-dd HH:mm} 还没到，不能补录未来的打卡");
         }
         if (clockIn.HasValue && clockOut.HasValue && clockOut.Value <= clockIn.Value)
             throw new InvalidOperationException("下班时间必须晚于上班时间（夜班下班在第二天，请把日期选到第二天）");
