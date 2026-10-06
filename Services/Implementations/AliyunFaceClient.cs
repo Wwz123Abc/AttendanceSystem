@@ -267,6 +267,7 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
     /// </summary>
     private async Task<T> ExecuteWithRetryAsync<T>(Func<Task<T>> action, MemoryStream[] streamsToReset, CancellationToken callerCt, CancellationToken opCt)
     {
+        var clock = Stopwatch.StartNew();
         for (var attempt = 0; ; attempt++)
         {
             opCt.ThrowIfCancellationRequested();
@@ -280,12 +281,22 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
             {
                 return await action();
             }
-            catch (Exception ex) when (attempt < _opt.MaxRetryAttempts && IsRetryable(ex, callerCt))
+            catch (Exception ex) when (attempt < _opt.MaxRetryAttempts && IsRetryable(ex, callerCt) && HasTimeForAnotherAttempt(clock))
             {
                 logger.LogWarning(ex, "阿里云人脸识别接口调用失败（第 {Attempt} 次尝试），判定为瞬时错误，准备重试", attempt + 1);
             }
         }
     }
+
+    /// <summary>
+    /// 总预算（OverallBudgetMs）还够不够再跑一次完整的尝试。阿里云 SDK 的调用不接受取消信号，"总共最多 12 秒"
+    /// 只能在两次尝试之间检查一次——不加这道判断的话，第一次卡满 8 秒超时后还剩 4 秒，仍然会退避 0.5 秒再试一次，
+    /// 第二次又卡满 8 秒，一次失败要让员工白等约 16.5 秒（2026-10-06 复核发现，是"超时计入重试"那次修复带来的）。
+    /// 现在剩余时间不够一次完整尝试（连接+读取超时+退避）就不再重试：超时当场失败（仍然计入熔断），
+    /// 而"图片无法下载""限流"这类几乎立刻返回的瞬时错误，剩余时间还够，照常重试。
+    /// </summary>
+    private bool HasTimeForAnotherAttempt(Stopwatch clock) =>
+        _opt.OverallBudgetMs - clock.ElapsedMilliseconds >= _opt.RetryBackoffMs + _opt.ConnectTimeoutMs + _opt.ReadTimeoutMs;
 
     /// <summary>callerCt 是调用方原始的取消令牌：如果调用方已经主动取消了（比如员工关掉了页面），
     /// 就算 SDK 抛的是"看起来能重试"的异常也不该再重试——没人等着这个结果了，重试只是白花调用量。</summary>

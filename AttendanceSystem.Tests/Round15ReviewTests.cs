@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -430,5 +431,44 @@ public class Round15ReviewTests : IDisposable
         Assert.Equal(kind == "record" ? 1 : 0, await check.AttendanceRecords.CountAsync(r => r.UserId == uid));   // 历史没被级联清掉
         Assert.Equal(kind == "punch" ? 1 : 0, await check.AttendancePunches.CountAsync(p => p.UserId == uid));
         Assert.Equal(kind == "request" ? 1 : 0, await check.ApprovalRequests.CountAsync(a => a.ApplicantUserId == uid));
+    }
+
+    // ── 阿里云人脸接口：超时重试不能突破总预算（2026-10-06 复核：故障时每人白等约 16.5 秒）──────────
+
+    private static async Task<(int Result, int Calls, long ElapsedMs, Exception? Error)> RunRetry(Func<int, Task<int>> attemptBody)
+    {
+        // 生产参数按 1/10 缩小：连接 3000 + 读取 5000 = 单次 8 秒 → 100 + 700 = 0.8 秒；总预算 12000 → 1200；退避 500 → 50
+        var opt = new AliyunFaceOptions { ConnectTimeoutMs = 100, ReadTimeoutMs = 700, OverallBudgetMs = 1200, RetryBackoffMs = 50, MaxRetryAttempts = 2 };
+        var client = new AliyunFaceClient(Options.Create(opt), NullLogger<AliyunFaceClient>.Instance);
+        using var budget = new CancellationTokenSource(opt.OverallBudgetMs);
+        var calls = 0;
+        var method = typeof(AliyunFaceClient).GetMethod("ExecuteWithRetryAsync", BindingFlags.NonPublic | BindingFlags.Instance)!.MakeGenericMethod(typeof(int));
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var result = await (Task<int>)method.Invoke(client, [new Func<Task<int>>(() => attemptBody(++calls)), Array.Empty<MemoryStream>(), CancellationToken.None, budget.Token])!;
+            return (result, calls, sw.ElapsedMilliseconds, null);
+        }
+        catch (Exception ex) { return (0, calls, sw.ElapsedMilliseconds, ex); }
+    }
+
+    [Fact]
+    public async Task 人脸接口_单次尝试就卡满超时_剩余预算不够再来一次_不再重试_按一次的时长失败()
+    {
+        var r = await RunRetry(async _ => { await Task.Delay(800); throw new System.Net.WebException("operation is timeout"); });
+
+        Assert.IsType<System.Net.WebException>(r.Error);   // 原样抛出（上层会计入熔断），不是被总预算取消
+        Assert.Equal(1, r.Calls);                           // 修复前是 2 次（换算到生产就是 16.5 秒）
+        Assert.InRange(r.ElapsedMs, 700, 1100);             // 约 0.8 秒；修复前约 1.7 秒
+    }
+
+    [Fact]
+    public async Task 人脸接口_几乎立刻返回的瞬时错误_剩余预算够_照常重试并成功()
+    {
+        var r = await RunRetry(n => n == 1 ? throw new System.Net.WebException("operation is timeout") : Task.FromResult(7));
+
+        Assert.Null(r.Error);
+        Assert.Equal(7, r.Result);
+        Assert.Equal(2, r.Calls);
     }
 }
