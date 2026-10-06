@@ -1112,12 +1112,17 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// 请假审批回写、补卡后重算……），分钟数不一定同步清掉，直接拿来汇总会跟"迟到次数"（按状态数）对不上。
     /// 所有展示和汇总的迟到分钟都走这个方法，保证逐日相加 = 合计，分钟和次数同一个口径。
     /// </summary>
-    public static int EffectiveLateMinutes(AttendanceRecord r) =>
-        r.AttendanceStatus == AttendanceStatus.Late ? r.LateMinutes : 0;
+    public static int EffectiveLateMinutes(AttendanceRecord r) => EffectiveLateMinutes(r.AttendanceStatus, r.LateMinutes);
 
-    /// <summary>这条记录算数的"早退分钟"：只有状态本身就是"早退"才算，理由同 <see cref="EffectiveLateMinutes"/>。</summary>
-    public static int EffectiveEarlyLeaveMinutes(AttendanceRecord r) =>
-        r.AttendanceStatus == AttendanceStatus.EarlyLeave ? r.EarlyLeaveMinutes : 0;
+    /// <summary>同上，给只投影了"状态 + 分钟数"、手上没有完整记录对象的查询用（比如 AGENT 的异常清单）。</summary>
+    public static int EffectiveLateMinutes(AttendanceStatus status, int lateMinutes) =>
+        status == AttendanceStatus.Late ? lateMinutes : 0;
+
+    /// <summary>这条记录算数的"早退分钟"：只有状态本身就是"早退"才算，理由同 <see cref="EffectiveLateMinutes(AttendanceRecord)"/>。</summary>
+    public static int EffectiveEarlyLeaveMinutes(AttendanceRecord r) => EffectiveEarlyLeaveMinutes(r.AttendanceStatus, r.EarlyLeaveMinutes);
+
+    public static int EffectiveEarlyLeaveMinutes(AttendanceStatus status, int earlyLeaveMinutes) =>
+        status == AttendanceStatus.EarlyLeave ? earlyLeaveMinutes : 0;
 
     /// <summary>判断某天算不算“出勤”：打了上班卡，或者当天已批准出差（出差无需打卡也算全勤）。</summary>
     private static bool IsPresent(AttendanceRecord r) => r.ClockInTime.HasValue || r.AttendanceStatus == AttendanceStatus.BusinessTrip;

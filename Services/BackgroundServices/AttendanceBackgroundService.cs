@@ -358,12 +358,11 @@ public class AttendanceBackgroundService(
 
         // 当前轮到谁处理，一张单最多一个人；先批量把这些审批人的"在职状态/管理范围"查出来，
         // 不在循环里逐条查数据库
-        var currentSteps = openRequests
-            .Select(r => r.ApprovalSteps.Where(s => s.ApprovalStatus == ApprovalStatus.Pending).OrderBy(s => s.StepOrder).FirstOrDefault())
-            .Where(s => s is not null)
-            .Cast<ApprovalStep>()
+        var currentStepOf = openRequests
+            .Select(r => (Request: r, Step: r.ApprovalSteps.Where(s => s.ApprovalStatus == ApprovalStatus.Pending).OrderBy(s => s.StepOrder).FirstOrDefault()))
+            .Where(x => x.Step is not null)   // 理论上不会为空：整单还是 Pending/InProgress 就一定有一个待处理节点，这里只是防御性判断
             .ToList();
-        var approverIds = currentSteps.Select(s => s.ApproverUserId).ToHashSet();
+        var approverIds = currentStepOf.Select(x => x.Step!.ApproverUserId).ToHashSet();
         var approvers = await db.Users.Where(u => approverIds.Contains(u.Id))
             .Select(u => new { u.Id, u.IsActive, u.ScopedDepartmentId })
             .ToDictionaryAsync(u => u.Id);
@@ -384,15 +383,9 @@ public class AttendanceBackgroundService(
 
         // 每个审批人：这一轮需要提醒的单子数 + 其中挂得最久的那张的"挂起起点"
         var perApprover = new Dictionary<int, (int Count, DateTime Oldest)>();
-        foreach (var req in openRequests)
+        foreach (var (req, currentStep) in currentStepOf)
         {
-            var currentStep = req.ApprovalSteps
-                .Where(s => s.ApprovalStatus == ApprovalStatus.Pending)
-                .OrderBy(s => s.StepOrder)
-                .FirstOrDefault();
-            if (currentStep is null) continue;   // 理论上不会发生：整单还是 Pending/InProgress 就一定有一个待处理节点，这里只是防御性判断
-
-            if (!approvers.TryGetValue(currentStep.ApproverUserId, out var approver) || !approver.IsActive)
+            if (!approvers.TryGetValue(currentStep!.ApproverUserId, out var approver) || !approver.IsActive)
                 continue;   // 审批人账号不存在或已停用，提醒了也没人处理
             if (approver.ScopedDepartmentId.HasValue
                 && !await CoversApplicantAsync(approver.ScopedDepartmentId.Value, req.Applicant.DepartmentId))

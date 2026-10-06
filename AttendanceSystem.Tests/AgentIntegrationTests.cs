@@ -772,4 +772,94 @@ public class AgentIntegrationTests : IDisposable
         }));
         Assert.Contains("还没到", ex.Message);
     }
+
+    // ── 2026-10-06 第三方复核：异常清单口径 / 日期跨度 / 错误文案 / 假别校验 ─────────────────
+
+    [Fact]
+    public async Task 异常清单_状态已是旷工的记录_字段里残留的迟到分钟不再报出来_跟报表口径一致()
+    {
+        var w = SeedWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = w.UserA, WorkDate = Wed, AttendanceStatus = AttendanceStatus.Absent, LateMinutes = 811 });
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = w.UserB, WorkDate = Wed, AttendanceStatus = AttendanceStatus.Late, LateMinutes = 12, ClockInTime = Wed.ToDateTime(new TimeOnly(8, 42)) });
+            await db.SaveChangesAsync();
+        }
+        using var db2 = CreateContext();
+        var msg = await Tools(db2).ExecuteAsync(w.HqAdmin, w.ConvHq, "attendance_anomaly_list",
+            Args(new { start = "2026-09-16", end = "2026-09-16" }), default);
+        Assert.Contains("旷工", msg);
+        Assert.DoesNotContain("811", msg);        // 状态是旷工，残留的迟到分钟不算数
+        Assert.Contains("迟到12分", msg);          // 状态就是迟到的，照常报
+    }
+
+    [Fact]
+    public async Task 异常清单_日期跨度超过92天_直接报错让模型分段_92天以内照常查()
+    {
+        var w = SeedWorld();
+        using var db = CreateContext();
+        var tooLong = await Tools(db).ExecuteAsync(w.HqAdmin, w.ConvHq, "attendance_anomaly_list",
+            Args(new { start = "2000-01-01", end = "2100-01-01" }), default);
+        Assert.StartsWith("错误", tooLong);
+        Assert.Contains("92", tooLong);
+
+        var edgeOk = await Tools(db).ExecuteAsync(w.HqAdmin, w.ConvHq, "attendance_anomaly_list",
+            Args(new { start = "2026-07-01", end = "2026-09-30" }), default);   // 正好 92 天
+        Assert.DoesNotContain("跨度", edgeOk);
+        var edgeOver = await Tools(db).ExecuteAsync(w.HqAdmin, w.ConvHq, "attendance_anomaly_list",
+            Args(new { start = "2026-06-30", end = "2026-09-30" }), default);   // 93 天
+        Assert.Contains("跨度", edgeOver);
+    }
+
+    [Fact]
+    public async Task AGENT错误文案_本程序抛的业务提示原样给用户_框架或数据库抛的换成通用文案()
+    {
+        // 本程序自己抛的 InvalidOperationException：服务层专门给用户看的提示，保留
+        using var ctx = CreateContext();
+        var svc = new AttendanceService(ctx, AppOptions, NullLogger<AttendanceService>.Instance);
+        var ours = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.AdminAdjustPunchAsync(1, Wed, null, null, new string('x', 101), null));
+        Assert.Equal(ours.Message, AgentErrorText.ForUser(ours));
+
+        // 框架自己抛的同一个类型（可能带出内部细节）→ 通用文案
+        var framework = Assert.Throws<InvalidOperationException>(() => new List<int>().First());
+        Assert.Equal(AgentErrorText.Generic, AgentErrorText.ForUser(framework));
+
+        // 数据库错误（带表名/约束名）→ 通用文案，原文不会出现
+        var dbErr = new Exception("Duplicate entry 'x' for key 'IX_User_EmployeeNo' (table `User`)");
+        var shown = AgentErrorText.ForUser(dbErr);
+        Assert.Equal(AgentErrorText.Generic, shown);
+        Assert.DoesNotContain("IX_User_EmployeeNo", shown);
+    }
+
+    [Fact]
+    public async Task 代提交请假_确认执行时假别数值不合法_直接拒绝_不强转落库()
+    {
+        var w = SeedWorld();
+        int actionId;
+        using (var db = CreateContext())
+        {
+            var action = new AgentPendingAction
+            {
+                ConversationId = w.ConvHq, ToolName = "approval_submit_on_behalf_propose",
+                ParamJson = Args(new
+                {
+                    userId = w.UserA, type = "leave", leaveType = 99,
+                    startTime = DateTime.Now.AddHours(1).ToString("yyyy-MM-dd HH:mm"),
+                    endTime = DateTime.Now.AddHours(4).ToString("yyyy-MM-dd HH:mm"), reason = "t"
+                }),
+                SummaryText = "t", Status = AgentActionStatus.Pending, CreatedBy = w.HqAdmin,
+                CreatedAt = DateTime.Now, ExpiresAt = DateTime.Now.AddMinutes(15)
+            };
+            db.AgentPendingActions.Add(action);
+            await db.SaveChangesAsync();
+            actionId = action.Id;
+        }
+        using var db2 = CreateContext();
+        var (ok, message) = await Actions(db2).ReviewAsync(w.HqAdmin, actionId, approve: true);
+        Assert.False(ok);
+        Assert.Contains("请假类型", message);
+        using var check = CreateContext();
+        Assert.False(await check.ApprovalRequests.AnyAsync(r => r.ApplicantUserId == w.UserA));   // 没有落库
+    }
 }

@@ -433,7 +433,7 @@ public class AgentActionService(
             await db.AgentPendingActions.Where(a => a.Id == actionId)
                 .ExecuteUpdateAsync(s => s.SetProperty(a => a.UndoneAt, (DateTime?)null).SetProperty(a => a.UndoneBy, (int?)null));
             logger.LogWarning(ex, "AGENT 撤回失败：动作 {ActionId}", actionId);
-            return (false, $"撤回失败：{ex.Message}");
+            return (false, $"撤回失败：{AgentErrorText.ForUser(ex)}");
         }
     }
 
@@ -655,7 +655,7 @@ public class AgentActionService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "AGENT 动作执行失败：{ToolName} 动作 {ActionId}", action.ToolName, action.Id);
-            return (false, ex.Message);
+            return (false, AgentErrorText.ForUser(ex));
         }
     }
 
@@ -1004,7 +1004,7 @@ public class AgentActionService(
                 CreatedAt             = DateTime.Now,
                 UpdatedAt             = DateTime.Now
             };
-            await userService.CreateUserAsync(newUser, "123456");   // 固定初始密码，首登强制改
+            await userService.CreateUserAsync(newUser, "123456");   // 固定初始密码（系统不强制首登改密，见下面的提示文案）
             await registrationService.MarkConfirmedAsync(reg.Id, newUser.Id);
             return (true, $"已将登记 #{reg.Id}（{reg.RealName}）建档：工号 {finalEmployeeNo}，部门【{deptName}】，直属上级 {sup.RealName}。初始密码 123456（系统不会强制改密，请提醒本人自行修改）");
         }
@@ -1012,7 +1012,7 @@ public class AgentActionService(
         {
             // 建档失败：登记已被认领消费（与页面行为一致），提示管理员在员工管理页善后
             logger.LogWarning(ex, "AGENT 认领建档失败：登记 #{RegId}（目标工号 {Eno}）", reg.Id, finalEmployeeNo);
-            return (false, $"建档失败：{ex.Message}（该登记已被认领，请到\"员工管理→待确认\"核对是否需要人工补建）");
+            return (false, $"建档失败：{AgentErrorText.ForUser(ex)}（该登记已被认领，请到\"员工管理→待确认\"核对是否需要人工补建）");
         }
     }
 
@@ -1312,6 +1312,9 @@ public class AgentActionService(
         {
             case "leave":
                 dto.ApprovalType = ApprovalType.Leave;
+                // 提案阶段已经校验过假别，这里是纵深防御：不认识的数值直接拒绝，不能强转后让非法假别落库
+                if (leaveTypeI.HasValue && !Enum.IsDefined(typeof(LeaveType), leaveTypeI.Value))
+                    return (false, "请假类型不合法");
                 dto.LeaveType = leaveTypeI.HasValue ? (LeaveType)leaveTypeI.Value : null;
                 dto.LeaveStartTime = start; dto.LeaveEndTime = end;
                 break;

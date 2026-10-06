@@ -22,7 +22,8 @@ public class ChatModel(
     IAgentActionService actionService,
     IAgentToolExecutor toolExecutor,
     IAntiforgery antiforgery,
-    IOptions<AgentOptions> agentOptions) : AppPageModel
+    IOptions<AgentOptions> agentOptions,
+    ILogger<ChatModel> logger) : AppPageModel
 {
     public List<AgentConversationDto> Conversations { get; set; } = [];
     public List<AgentMessageDto> Messages { get; set; } = [];
@@ -100,7 +101,8 @@ public class ChatModel(
             }
             catch (Exception ex)
             {
-                ErrorMessage = ex.Message;
+                if (!AgentErrorText.IsBusinessMessage(ex)) logger.LogWarning(ex, "智能助手对话失败");
+                ErrorMessage = AgentErrorText.ForUser(ex);
             }
         }
 
@@ -169,7 +171,8 @@ public class ChatModel(
 
             if (sendErr is not null)
             {
-                await FailAsync(sendErr.Message);
+                if (!AgentErrorText.IsBusinessMessage(sendErr)) logger.LogWarning(sendErr, "智能助手对话失败（流式）");
+                await FailAsync(AgentErrorText.ForUser(sendErr));
             }
             else
             {

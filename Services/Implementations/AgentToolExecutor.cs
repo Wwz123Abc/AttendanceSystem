@@ -145,7 +145,7 @@ public class AgentToolExecutor(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "AGENT 工具 {Tool} 执行异常（操作者 {UserId}）", toolName, operatorUserId);
-            return $"错误：工具执行失败：{ex.Message}";
+            return $"错误：工具执行失败：{AgentErrorText.ForUser(ex)}";
         }
     }
 
@@ -347,6 +347,8 @@ public class AgentToolExecutor(
 
     // ── 工具 3：考勤异常清单 ──────────────────────────────────────────────────
 
+    private const int MaxAnomalyQueryDays = 92;
+
     private async Task<string> AttendanceAnomalyListAsync(int operatorUserId, string argsJson, CancellationToken ct)
     {
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
@@ -357,6 +359,10 @@ public class AgentToolExecutor(
             return "错误：start 参数格式应为 yyyy-MM-dd（如 2026-09-01）";
         var end = DateOnly.TryParse(StrArg(args, "end"), out var e) ? e : start;
         if (end < start) (start, end) = (end, start);
+        // 不限跨度的话，一句"查 2000-01-01 到 2100-01-01 的全部异常"就会对 22 万行且还在增长的 AttendanceRecord
+        // 做全表 count + join（2026-10-06 复核发现），超了让模型按月/按季分段查
+        if (end.DayNumber - start.DayNumber + 1 > MaxAnomalyQueryDays)
+            return $"错误：单次查询的日期跨度不能超过 {MaxAnomalyQueryDays} 天，请缩小范围或分段查询";
         var type  = StrArg(args, "type");
         var limit = Math.Clamp(IntArg(args, "limit") ?? 50, 1, 100);
 
@@ -399,8 +405,12 @@ public class AgentToolExecutor(
         foreach (var r in rows)
         {
             var detail = new System.Collections.Generic.List<string> { AttStatusText(r.AttendanceStatus) };
-            if (r.LateMinutes > 0) detail.Add($"迟到{r.LateMinutes}分");
-            if (r.EarlyLeaveMinutes > 0) detail.Add($"早退{r.EarlyLeaveMinutes}分");
+            // 走全系统统一口径（只认状态本身就是迟到/早退的记录）：状态已被后台改成旷工/未打卡的记录，
+            // 字段里可能还残留几百分钟，直接拼进回复会跟报表里的 0 自相矛盾（2026-10-06 复核发现）
+            var lateMin  = AttendanceService.EffectiveLateMinutes(r.AttendanceStatus, r.LateMinutes);
+            var earlyMin = AttendanceService.EffectiveEarlyLeaveMinutes(r.AttendanceStatus, r.EarlyLeaveMinutes);
+            if (lateMin > 0) detail.Add($"迟到{lateMin}分");
+            if (earlyMin > 0) detail.Add($"早退{earlyMin}分");
             var ci = r.ClockInTime?.ToString("HH:mm") ?? "-";
             var co = r.ClockOutTime?.ToString("HH:mm") ?? "-";
             sb.AppendLine($"{r.WorkDate:MM-dd} {r.Name}({r.Eno}) [{string.Join("，", detail)}] 上班{ci} 下班{co}");
