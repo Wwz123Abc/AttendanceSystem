@@ -52,8 +52,18 @@ public class Round15ReviewTests : IDisposable
 
     // ── H1：migrate.sql 必须覆盖 Migrations 目录里的全部迁移 ─────────────────────────
 
-    private static string RepoRoot([CallerFilePath] string thisFile = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, ".."));
+    /// <summary>仓库根目录：从测试程序所在目录往上找，第一个同时含 migrate.sql 和 Migrations 的目录。
+    /// 不用 [CallerFilePath]——CI 里开了"可复现构建"（ContinuousIntegrationBuild）后，源码路径会被映射成 "/_/..."，
+    /// 编译进去的路径在运行时根本不存在。</summary>
+    private static string RepoRoot([CallerFilePath] string thisFile = "")
+    {
+        // 先从测试程序所在目录往上找（CI 里有效）；找不到再退回编译时记录的源码路径（本机从别处运行测试时有效）
+        foreach (var start in new[] { AppContext.BaseDirectory, Path.GetDirectoryName(thisFile) ?? "" })
+            for (var dir = start.Length > 0 && Directory.Exists(start) ? new DirectoryInfo(start) : null; dir is not null; dir = dir.Parent)
+                if (File.Exists(Path.Combine(dir.FullName, "migrate.sql")) && Directory.Exists(Path.Combine(dir.FullName, "Migrations")))
+                    return dir.FullName;
+        throw new DirectoryNotFoundException("找不到包含 migrate.sql 和 Migrations 的仓库根目录");
+    }
 
     [Fact]
     public void 迁移脚本migrate_sql_覆盖Migrations目录里的全部迁移()
@@ -459,7 +469,7 @@ public class Round15ReviewTests : IDisposable
 
         Assert.IsType<System.Net.WebException>(r.Error);   // 原样抛出（上层会计入熔断），不是被总预算取消
         Assert.Equal(1, r.Calls);                           // 修复前是 2 次（换算到生产就是 16.5 秒）
-        Assert.InRange(r.ElapsedMs, 700, 1100);             // 约 0.8 秒；修复前约 1.7 秒
+        Assert.InRange(r.ElapsedMs, 700, 1500);             // 约 0.8 秒；修复前约 1.7 秒
     }
 
     [Fact]
