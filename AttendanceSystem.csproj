@@ -21,6 +21,8 @@
 
     <!-- Excel 导出 -->
     <PackageReference Include="NPOI" Version="2.7.5" />
+    <!-- NPOI 2.7.5 间接依赖的 System.Security.Cryptography.Xml 8.0.2 有已知高危漏洞，这里直接引用已修复的版本压过去（我们只用 NPOI 导出 Excel，用不到这块功能） -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.4" />
     <PackageReference Include="QRCoder" Version="1.8.0" />
 
     <!-- 日志 -->
@@ -28,7 +30,7 @@
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.11" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>
 
 </Project>
