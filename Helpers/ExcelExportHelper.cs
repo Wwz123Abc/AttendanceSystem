@@ -34,7 +34,7 @@ public static class ExcelExportHelper
         // 第 0 行：大标题，并把前 14 列合并成一格
         var titleRow = sheet.CreateRow(0);
         SetCell(titleRow, 0, $"{year}年{month:D2}月员工考勤汇总表", titleStyle);
-        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 14));
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 15));
         titleRow.HeightInPoints = 28;
 
         // 第 1 行：表头（每一列的名字）
@@ -43,14 +43,14 @@ public static class ExcelExportHelper
             "工号", "姓名", "部门", "岗位",
             "应出勤天数", "实际出勤天数", "夜班天数",
             "迟到次数", "早退次数", "旷工天数", "未打卡次数", "请假天数",
-            "加班工时(h)", "实际工时(h)", "审批通过次数"
+            "加班工时(h)", "实际工时(h)", "审批通过次数", "排班说明"
         ];
         var headerRow = sheet.CreateRow(1);
         headerRow.HeightInPoints = 20;
         for (var i = 0; i < headers.Length; i++)
         {
             SetCell(headerRow, i, headers[i], headerStyle);
-            sheet.SetColumnWidth(i, 14 * 256);   // 设置列宽（NPOI 里 1 个字符宽 = 256）
+            sheet.SetColumnWidth(i, (i == headers.Length - 1 ? 44 : 14) * 256);   // 设置列宽（NPOI 里 1 个字符宽 = 256；最后一列"排班说明"文字长，放宽）
         }
         sheet.SetAutoFilter(new CellRangeAddress(1, 1, 0, headers.Length - 1));   // 表头加筛选箭头，方便按列筛选/排序
         ApplyLookAndFeel(sheet, freezeCols: 4, freezeRows: 2, repeatHeaderRows: 2);   // 冻结"工号/姓名/部门/岗位"这几列+标题表头
@@ -77,6 +77,7 @@ public static class ExcelExportHelper
             SetCell(row, 12, (double)dto.TotalOvertimeHours,              hStyle);
             SetCell(row, 13, (double)dto.TotalWorkHours,                  hStyle);
             SetCell(row, 14, dto.ApprovedCount,                           baseStyle);
+            SetCell(row, 15, NoShiftNote(dto.NoShiftDays),                dto.NoShiftDays > 0 ? orangeStyle : baseStyle);   // 没排班的人标注（橙字）
         }
 
         // 最后一行：各列合计
@@ -96,6 +97,7 @@ public static class ExcelExportHelper
             SetCell(totalRow, 12, (double)summaries.Sum(s => s.TotalOvertimeHours),          headerStyle);
             SetCell(totalRow, 13, (double)summaries.Sum(s => s.TotalWorkHours),              headerStyle);
             SetCell(totalRow, 14, summaries.Sum(s => s.ApprovedCount),                       headerStyle);
+            SetCell(totalRow, 15, "",                                                        headerStyle);
         }
 
         return ToBytes(wb);   // 把 Excel 转成字节数组返回（供下载）
@@ -190,7 +192,7 @@ public static class ExcelExportHelper
             "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
             "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
-            "应出勤天数"
+            "应出勤天数", "排班说明"
         ];
         var tailCols   = tailHeaders.Length;      // 直接取表头个数，不再手写数字
         var totalCols  = fixedCols + dayCount + tailCols;
@@ -256,7 +258,7 @@ public static class ExcelExportHelper
             ("出勤与工时",                     tailStart,      tailStart + 3,  "DDEBF7", HorizontalAlignment.Center),
             ("迟到 · 早退 · 缺卡 · 旷工",       tailStart + 4,  tailStart + 10, "FBE5D6", HorizontalAlignment.Center),
             ("出差 · 夜班 · 加班",              tailStart + 11, tailStart + 16, "E2EFDA", HorizontalAlignment.Center),
-            ("对照",                           tailStart + 17, tailStart + 17, "DDEBF7", HorizontalAlignment.Center),
+            ("对照",                           tailStart + 17, tailStart + 18, "DDEBF7", HorizontalAlignment.Center),
         ];
         foreach (var g in groups)
         {
@@ -298,6 +300,7 @@ public static class ExcelExportHelper
         for (var i = 0; i < fixedCols; i++) sheet.SetColumnWidth(i, fixedWidths[i] * 256);
         for (var i = 0; i < dayCount; i++) sheet.SetColumnWidth(fixedCols + i, (int)(4.8 * 256));
         for (var i = 0; i < tailCols; i++) sheet.SetColumnWidth(tailStart + i, (int)(8.2 * 256));
+        sheet.SetColumnWidth(totalCols - 1, 60 * 256);   // 最后一列"排班说明"是整句文字，放宽
         ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 4, repeatHeaderRows: 4);   // 冻结前 6 列（姓名..合同公司）+ 前 4 行
         // 打印：这份表 56 列，只有 A3 横向才看得清；页边距收窄、水平居中、每页加页码和打印日期（只设这份报表，不影响其它导出）
         sheet.PrintSetup.PaperSize = 8;   // 8 = A3
@@ -370,7 +373,9 @@ public static class ExcelExportHelper
             Put(xRow, c, (double)row.TotalOvertimeHours, Num(c), true); c++;
             Put(xRow, c, (double)row.WeekdayOvertimeHours, Num(c), true); c++;
             Put(xRow, c, (double)row.RestDayOvertimeHours, Num(c), true); c++;
-            Put(xRow, c, row.ExpectedWorkdays, Num(c), false);   // 应出勤天数（放最后一列）
+            Put(xRow, c, row.ExpectedWorkdays, Num(c), false); c++;   // 应出勤天数
+            // 排班说明（新列只能加在最后）：没排班的人正班工时没有按班次封顶、已含工作日加班，提醒别和加班总时长直接相加
+            SetCell(xRow, c, NoShiftNote(row.NoShiftDays), row.NoShiftDays > 0 ? st.Get(font: orange, h: HorizontalAlignment.Left, indent: 1) : Txt(true, c));
         }
 
         // 筛选箭头：列名行是第 4 行（下标 3），范围到最后一条员工数据为止——合计行在范围外，不会被筛掉或排序打乱
@@ -390,7 +395,7 @@ public static class ExcelExportHelper
             sheet.AddMergedRegion(new CellRangeAddress(totalRowIndex, totalRowIndex, 0, fixedCols - 1));
             var firstExcelRow = 5;                       // Excel 行号 = 下标 + 1；第一条数据的下标是 4
             var lastExcelRow  = 4 + result.Rows.Count;   // 最后一条数据的下标是 3 + Rows.Count，对应 Excel 行号 4 + Rows.Count
-            for (var col = fixedCols; col < totalCols; col++)
+            for (var col = fixedCols; col < totalCols - 1; col++)   // 最后一列是文字说明，不求和
             {
                 var letter = CellReference.ConvertNumToColString(col);
                 var isDay  = col < tailStart;
@@ -408,6 +413,11 @@ public static class ExcelExportHelper
 
         return ToBytes(wb);
     }
+
+    /// <summary>"没排班"员工的标注文字：他们的正班工时没有按班次封顶，已经包含了工作日加班时间。没有就返回空串。</summary>
+    public static string NoShiftNote(int noShiftDays) => noShiftDays > 0
+        ? $"没排班{noShiftDays}天：正班/实际工时未按8h封顶，已含工作日加班，勿与加班时长直接相加"
+        : "";
 
     // 工时列的数字格式：1 位小数、0 显示"-"、负数带负号
     private const string HourFormat = "0.0;-0.0;\"-\"";

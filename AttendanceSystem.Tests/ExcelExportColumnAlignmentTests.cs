@@ -24,7 +24,7 @@ public class ExcelExportColumnAlignmentTests
         "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
         "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
         "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
-        "应出勤天数"
+        "应出勤天数", "排班说明"
     ];
 
     private static TemplateReportRowDto FullRow(string name, string no, decimal dayHours = 8) => new()

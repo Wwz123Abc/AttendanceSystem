@@ -626,6 +626,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         var dto = MapSummary(summary, daily.Select(ToDto).ToList());
         var night = await ComputeNightShiftDaysAsync([userId], year, month);
         dto.NightShiftDays = night.GetValueOrDefault(userId);
+        dto.NoShiftDays    = (await ComputeNoShiftDaysAsync([userId], start, end)).GetValueOrDefault(userId);
         return dto;
     }
 
@@ -654,6 +655,26 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     }
 
     /// <summary>
+    /// 批量算"有打卡但没排班"的天数（按员工）：没排班的人正班工时不按班次封顶（没有 StandardWorkHours 可封），
+    /// 工作日晚上的加班时间已经算在正班里，加班单又记一遍，月度汇总里"正班工时 + 加班"会重复。
+    /// 导出表用这个数给这类员工加标注，提醒算薪时不要直接相加。
+    /// </summary>
+    internal async Task<Dictionary<int, int>> ComputeNoShiftDaysAsync(List<int> userIds, DateOnly start, DateOnly end)
+    {
+        if (userIds.Count == 0) return [];
+        var punched = await db.AttendanceRecords
+            .Where(r => userIds.Contains(r.UserId) && r.WorkDate >= start && r.WorkDate <= end
+                        && (r.ClockInTime != null || r.ClockOutTime != null))
+            .Select(r => new { r.UserId, r.WorkDate }).ToListAsync();
+        var assigned = (await db.ShiftAssignments
+            .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end)
+            .Select(a => new { a.UserId, a.WorkDate }).ToListAsync())
+            .Select(a => (a.UserId, a.WorkDate)).ToHashSet();
+        return punched.Where(p => !assigned.Contains((p.UserId, p.WorkDate)))
+            .GroupBy(p => p.UserId).ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    /// <summary>
     /// 取某部门/考勤组某月的汇总列表（不含每日明细）。
     /// 这里故意不按"当前是否在职"过滤——月度报表是历史记录，员工哪怕后来离职/停用了，
     /// 只要那个月确实生成过汇总，也应该继续能查到，不然离职员工那个月的数据会从报表里凭空消失。
@@ -678,6 +699,9 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
         // 夜班天数不单独存表，这里按排班/打卡时间批量算出来回填
         var night = await ComputeNightShiftDaysAsync(dtos.Select(d => d.UserId).ToList(), year, month);
         foreach (var d in dtos) d.NightShiftDays = night.GetValueOrDefault(d.UserId);
+        var mStart = new DateOnly(year, month, 1);
+        var noShift = await ComputeNoShiftDaysAsync(dtos.Select(d => d.UserId).ToList(), mStart, mStart.AddMonths(1).AddDays(-1));
+        foreach (var d in dtos) d.NoShiftDays = noShift.GetValueOrDefault(d.UserId);
         return dtos;
     }
 
@@ -756,7 +780,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             decimal totalWork = 0, businessTripHours = 0, nightShiftHours = 0;
             decimal totalOtHours = 0, weekdayOtHours = 0, restOtHours = 0;
             decimal actualDays = 0, leaveDays = 0;
-            int restDays = 0, absentDays = 0, missingIn = 0, missingOut = 0;
+            int restDays = 0, absentDays = 0, missingIn = 0, missingOut = 0, noShiftDays = 0;
             int lateMin = 0, earlyMin = 0, lateCnt = 0, earlyCnt = 0;
 
             foreach (var date in dates)
@@ -803,6 +827,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                     if (rec.AttendanceStatus == AttendanceStatus.OnLeave)
                         leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);
+                    if (assign is null && (rec.ClockInTime is not null || rec.ClockOutTime is not null)) noShiftDays++;   // 有打卡但没排班
                     if (rec.AttendanceStatus == AttendanceStatus.Absent && !user.IsAttendanceExempt) absentDays++;   // 免考勤的人不统计旷工
                     // 缺卡/迟到/早退次数的判定口径统一改成跟 GenerateMonthlySummaryAsync 一样按"状态"算
                     // （不再按分钟数/裸打卡时间判断），并排除旷工/请假/节假日/出差——不然半天假当天上午
@@ -858,6 +883,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // "我的记录"统一口径后变成跟正班工时数值完全相同，2026-09-22 直接删掉了那个重复字段和对应的列
             // （加班单独看 TotalOvertimeHours），不用两处都留着同一个数字。
             row.RegularWorkHours        = totalWork;
+            row.NoShiftDays             = noShiftDays;
             row.LateMinutes             = lateMin;
             row.EarlyLeaveMinutes       = earlyMin;
             row.LateCount               = lateCnt;

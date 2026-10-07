@@ -165,7 +165,7 @@
                     @foreach (var row in Model.Rows)
                     {
                         <tr>
-                            <td class="fw-semibold bg-white" style="position:sticky;left:0;z-index:1">@row.RealName</td>
+                            <td class="fw-semibold bg-white" style="position:sticky;left:0;z-index:1">@row.RealName@if (row.NoShiftDays > 0) { <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem" title="@AttendanceSystem.Helpers.ExcelExportHelper.NoShiftNote(row.NoShiftDays)">没排班</span> }</td>
                             <td class="small">@row.GroupName</td>
                             <td class="small">@row.DeptName</td>
                             <td class="small text-muted bg-white" style="position:sticky;left:80px;z-index:1">@row.EmployeeNo</td>
