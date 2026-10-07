@@ -1,6 +1,5 @@
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Services.Implementations;
-using Xunit;
 
 namespace AttendanceSystem.Tests;
 

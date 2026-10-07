@@ -7,7 +7,6 @@ using AttendanceSystem.Services.Implementations;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Xunit;
 
 namespace AttendanceSystem.Tests;
 

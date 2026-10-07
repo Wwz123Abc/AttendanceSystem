@@ -1,5 +1,3 @@
-using AttendanceSystem.Models.Enums;
-
 namespace AttendanceSystem.Models.DTOs;
 
 /// <summary>

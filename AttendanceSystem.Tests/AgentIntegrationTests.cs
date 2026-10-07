@@ -4,12 +4,10 @@ using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Implementations;
-using AttendanceSystem.Services.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using Xunit;
 
 namespace AttendanceSystem.Tests;
 

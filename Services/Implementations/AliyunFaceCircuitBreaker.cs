@@ -1,4 +1,3 @@
-using AlibabaCloud.SDK.Facebody20191230;
 using AlibabaCloud.SDK.Facebody20191230.Models;
 using AlibabaCloud.TeaUtil.Models;
 using Microsoft.Extensions.Options;

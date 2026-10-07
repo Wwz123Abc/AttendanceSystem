@@ -2,7 +2,6 @@ using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
 using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
-using Xunit;
 
 namespace AttendanceSystem.Tests;
 

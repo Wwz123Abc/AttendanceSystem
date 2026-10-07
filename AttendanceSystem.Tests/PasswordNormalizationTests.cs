@@ -1,5 +1,4 @@
 using AttendanceSystem.Services.Implementations;
-using Xunit;
 
 namespace AttendanceSystem.Tests;
 

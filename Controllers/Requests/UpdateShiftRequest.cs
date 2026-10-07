@@ -1,10 +1,8 @@
-using Microsoft.AspNetCore.Mvc;
 using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
-using Microsoft.EntityFrameworkCore;
 
 namespace AttendanceSystem.Controllers;
 

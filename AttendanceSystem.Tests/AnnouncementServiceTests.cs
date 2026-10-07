@@ -5,7 +5,6 @@ using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Implementations;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Xunit;
 
 namespace AttendanceSystem.Tests;
 

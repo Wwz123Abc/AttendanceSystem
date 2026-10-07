@@ -10,7 +10,6 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using NPOI.XSSF.UserModel;
-using Xunit;
 
 namespace AttendanceSystem.Tests;
 
