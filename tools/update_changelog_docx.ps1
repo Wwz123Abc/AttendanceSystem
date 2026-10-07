@@ -1,5 +1,5 @@
-﻿# 把 docs/更新日志.md 的最新内容，同步生成成 docs/考勤系统更新日志_完整版.docx。
-# 用法：每次给 docs/更新日志.md 加完一条新记录后，跑一下这个脚本，Word 版本就自动跟着更新了。
+﻿# 把 docs/变更记录/更新日志.md 的最新内容，同步生成成 docs/变更记录/考勤系统更新日志_完整版.docx。
+# 用法：每次给 docs/变更记录/更新日志.md 加完一条新记录后，跑一下这个脚本，Word 版本就自动跟着更新了。
 #   powershell -ExecutionPolicy Bypass -File tools/update_changelog_docx.ps1
 #
 # 原理：docx 文件本质是一个 zip 包，里面的 word/document.xml 存正文内容，其它文件（样式/字体/主题）
@@ -8,9 +8,9 @@
 $ErrorActionPreference = "Stop"
 
 $root       = Split-Path -Parent $PSScriptRoot   # tools/ 的上一级，即 AttendanceSystem 项目根目录
-$mdPath     = Join-Path $root "docs\更新日志.md"
+$mdPath     = Join-Path $root "docs\变更记录\更新日志.md"
 $templateDir = Join-Path $PSScriptRoot "docx_template"
-$outDocx    = Join-Path $root "docs\考勤系统更新日志_完整版.docx"
+$outDocx    = Join-Path $root "docs\变更记录\考勤系统更新日志_完整版.docx"
 
 if (-not (Test-Path $mdPath)) { throw "找不到 $mdPath" }
 if (-not (Test-Path $templateDir)) { throw "找不到模板目录 $templateDir" }

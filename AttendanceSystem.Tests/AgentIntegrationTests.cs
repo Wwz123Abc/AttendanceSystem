@@ -12,7 +12,7 @@ using Microsoft.Extensions.Options;
 namespace AttendanceSystem.Tests;
 
 /// <summary>
-/// 管理员智能助手（AGENT）合入主项目后的联调验收（对应 docs/AGENT验收清单.md 第 3、6 节里不依赖大模型的部分）：
+/// 管理员智能助手（AGENT）合入主项目后的联调验收（对应 docs/审查与验收/AGENT验收清单.md 第 3、6 节里不依赖大模型的部分）：
 /// 分公司越权拦截、"停用→撤回"要清掉停用时间、"补下班卡→撤回"要连工时和状态一起还原。
 /// 这里绕过大模型，直接调工具执行器（提案）和动作服务（确认/撤回），验证的是主项目里的真实业务逻辑。
 /// </summary>
