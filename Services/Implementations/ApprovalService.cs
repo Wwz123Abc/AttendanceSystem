@@ -560,7 +560,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         if (user?.AttendanceGroupId is null) return [];   // 没有考勤组，就没有名单可选
 
         return await db.AttendanceGroupApprovers
-            .Where(a => a.AttendanceGroupId == user.AttendanceGroupId && a.Approver.IsActive)
+            .Where(a => a.AttendanceGroupId == user.AttendanceGroupId && a.Approver.IsActive
+                        && ApproverResolver.ApproverRoles.Contains(a.Approver.Role))   // 降成普通员工的人进不了待审批页面，不能再当可选审批人
             .Include(a => a.Approver)
             .OrderBy(a => a.Approver.RealName)
             .Select(a => new ApproverOptionDto
@@ -615,7 +616,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
 
         var groupApproverIds = await db.AttendanceGroupApprovers
             .Where(a => a.AttendanceGroupId == applicant.AttendanceGroupId)
-            .Include(a => a.Approver).Where(a => a.Approver.IsActive)   // 过滤掉已停用的审批人，避免审批节点指派给一个永远登不了录的账号，导致申请卡死
+            .Include(a => a.Approver).Where(a => a.Approver.IsActive && ApproverResolver.ApproverRoles.Contains(a.Approver.Role))   // 过滤掉已停用、或已降成普通员工（打不开待审批页面）的审批人，避免审批节点指派给一个处理不了的账号，导致申请卡死
             .Select(a => a.UserId)
             .ToListAsync();
 

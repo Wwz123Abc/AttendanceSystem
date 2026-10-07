@@ -42,7 +42,7 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     public async Task<IActionResult> Cancel(int id)
     {
         var ok = await approvalService.CancelApprovalAsync(CurrentUserId, id);
-        return Ok(new { Success = ok, Message = ok ? "已撤销" : "仅待审批状态可撤销" });
+        return Ok(new { Success = ok, Message = ok ? "已撤销" : "仅待审批或审批中的申请可以撤销" });
     }
 
     /// <summary>我提交的申请列表。</summary>

@@ -309,6 +309,7 @@ public class UserService(
         existing.EmployeeNo         = user.EmployeeNo;
         existing.DepartmentId       = user.DepartmentId;
         existing.Position           = user.Position;
+        var oldRole = existing.Role;
         existing.Role               = user.Role;
         existing.AttendanceGroupId  = user.AttendanceGroupId;
         existing.SupervisorUserId   = user.SupervisorUserId;
@@ -325,6 +326,9 @@ public class UserService(
         // 注意：不在这里覆盖 Email。员工表单不含这个字段，若在这里赋值，每次编辑都会把数据库里已有的值冲成空。
         existing.UpdatedAt          = DateTime.Now;
         await db.SaveChangesAsync();
+        // 审批类角色（管理员/文员/主管/班组长）降成普通员工：他进不了"待我审批"页面了，名下没处理的审批单要像停用一样改派
+        if (ApproverResolver.ApproverRoles.Contains(oldRole) && !ApproverResolver.ApproverRoles.Contains(existing.Role))
+            await TryReassignPendingApprovalsAsync([existing.Id]);
         await TryPushToZKDeviceAsync(existing);
         if (oldEmployeeNo != existing.EmployeeNo)
             await TryDeleteFromZKDeviceAsync(oldEmployeeNo, existing.Id);

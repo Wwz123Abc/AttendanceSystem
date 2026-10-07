@@ -552,6 +552,7 @@ public class AbsentAndPunchRuleTests : IDisposable
         {
             var applicant = U("A13", "申请人辛");
             var approver  = U("S9", "审批人辛");
+            approver.Role = UserRole.TeamLeader;   // 名单里的审批人必须是审批类角色（降成普通员工的人不再算）
             db.Users.AddRange(applicant, approver);
             db.SaveChanges();
             applicantId = applicant.Id; approverId = approver.Id;

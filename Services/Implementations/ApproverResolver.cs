@@ -11,6 +11,10 @@ namespace AttendanceSystem.Services.Implementations;
 /// </summary>
 public static class ApproverResolver
 {
+    /// <summary>有审批权限的角色（和 Program.cs 里 ApprovePolicy 一致）：管理员、文员、主管、班组长。
+    /// 角色被降成普通员工的人进不了"待我审批"页面、也调不了审批接口，不能再当审批人。</summary>
+    public static readonly UserRole[] ApproverRoles = [UserRole.Admin, UserRole.Clerk, UserRole.Supervisor, UserRole.TeamLeader];
+
     /// <summary>取某部门自己 + 一路向上所有祖先部门的 id 集合（deptId 为空时返回空集合）。</summary>
     public static async Task<HashSet<int>> GetAncestorDeptIdsAsync(AttendanceDbContext db, int? deptId)
     {
@@ -42,13 +46,14 @@ public static class ApproverResolver
     }
 
     /// <summary>
-    /// "直属上级，没有就兜底"：直属上级必须是在职的、而且不能是申请人本人——否则会出现"自己批自己的单"
-    /// （上级被误设成本人）或者"单子派给一个已经停用、谁也看不到的人"（2026-10-07 第 18 轮审查）。
+    /// "直属上级，没有就兜底"：直属上级必须是在职的、有审批权限的角色、而且不能是申请人本人——否则会出现
+    /// "自己批自己的单"（上级被误设成本人）、"单子派给已经停用的人"或"派给已降成普通员工、打不开待审批页面的人"
+    /// （2026-10-07 第 18 轮审查）。
     /// </summary>
     public static async Task<int?> ResolveSupervisorOrFallbackAsync(AttendanceDbContext db, User applicant)
     {
         if (applicant.SupervisorUserId is { } sid && sid != applicant.Id
-            && await db.Users.AnyAsync(u => u.Id == sid && u.IsActive))
+            && await db.Users.AnyAsync(u => u.Id == sid && u.IsActive && ApproverRoles.Contains(u.Role)))
             return sid;
         return await ResolveFallbackApproverAsync(db, applicant);
     }
@@ -63,6 +68,7 @@ public static class ApproverResolver
         if (deactivatedUserIds.Count == 0) return 0;
         var steps = await db.ApprovalSteps
             .Include(s => s.ApprovalRequest).ThenInclude(r => r.Applicant)
+            .Include(s => s.ApprovalRequest).ThenInclude(r => r.ApprovalSteps)
             .Where(s => s.ApprovalStatus == ApprovalStatus.Pending
                         && deactivatedUserIds.Contains(s.ApproverUserId)
                         && (s.ApprovalRequest.ApprovalStatus == ApprovalStatus.Pending
@@ -73,9 +79,13 @@ public static class ApproverResolver
         {
             var applicant = step.ApprovalRequest.Applicant;
             if (applicant is null) continue;
+            // 同一张单上别的节点已经是这个人的话（比如二级审批里直属上级本来就是第二级），换一个人，免得同一个人连点两次"通过"
+            var otherApprovers = step.ApprovalRequest.ApprovalSteps.Where(x => x.Id != step.Id).Select(x => x.ApproverUserId).ToHashSet();
             var supervisorOk = applicant.SupervisorUserId is { } sid && sid != applicant.Id && !deactivatedUserIds.Contains(sid)
-                               && await db.Users.AnyAsync(u => u.Id == sid && u.IsActive);
+                               && !otherApprovers.Contains(sid)
+                               && await db.Users.AnyAsync(u => u.Id == sid && u.IsActive && ApproverRoles.Contains(u.Role));
             var newApprover = supervisorOk ? applicant.SupervisorUserId : await ResolveFallbackApproverAsync(db, applicant);
+            // 兜底人选如果也撞了，宁可让他多点一次，也不能让单子没人批，所以这里不再换人
             if (newApprover is null || newApprover == step.ApproverUserId || deactivatedUserIds.Contains(newApprover.Value)) continue;
 
             step.ApproverUserId = newApprover.Value;

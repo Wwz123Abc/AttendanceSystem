@@ -45,7 +45,7 @@ public class ApprovalStepGenerationTests : IDisposable
         using (var db = CreateContext())
         {
             db.AttendanceGroups.Add(new AttendanceGroup { Id = 999, GroupName = "二级审批组", ApprovalLevel = ApprovalLevelType.Level2 });
-            db.Users.Add(new User { Id = SupervisorId, EmployeeNo = "E002", RealName = "直属上级", PasswordHash = "x" });
+            db.Users.Add(new User { Id = SupervisorId, EmployeeNo = "E002", RealName = "直属上级", PasswordHash = "x", Role = UserRole.Supervisor });
             db.Users.Add(new User
             {
                 Id = ApplicantId, EmployeeNo = "E001", RealName = "申请人", PasswordHash = "x",
