@@ -59,7 +59,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
                 UserId           = uid,
                 Title            = "新公告：" + announcement.Title,
                 Content          = briefContent,
-                NotificationType = "Announcement",
+                NotificationType = NotificationTypes.Announcement,
                 RelatedId        = announcement.Id,
                 CreatedAt        = now
             });
@@ -87,7 +87,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         // 点进去却因为 IsActive=false 在公告栏里看不到了（NotificationController 的未读列表
         // 只看 UserId/IsRead，不管公告本身是不是已经撤下——2026-09-21 代码审查发现）
         await db.Notifications
-            .Where(n => n.NotificationType == "Announcement" && n.RelatedId == announcementId && !n.IsRead)
+            .Where(n => n.NotificationType == NotificationTypes.Announcement && n.RelatedId == announcementId && !n.IsRead)
             .ExecuteUpdateAsync(n => n
                 .SetProperty(x => x.IsRead, true)
                 .SetProperty(x => x.ReadAt, DateTime.Now));

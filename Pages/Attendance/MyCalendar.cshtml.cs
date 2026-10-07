@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
 using AttendanceSystem.Models.DTOs;
-using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Attendance;

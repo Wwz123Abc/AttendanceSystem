@@ -9,16 +9,3 @@ public enum RegistrationStatus
     Confirmed = 2,  // 已确认：管理员补全部门/工号等信息后，正式建了账号
     Rejected  = 3   // 已驳回：管理员认为这条登记有问题，不予录入
 }
-
-/// <summary>RegistrationStatus 的辅助方法。</summary>
-public static class RegistrationStatusExtensions
-{
-    /// <summary>把状态转成中文名，给页面显示用。</summary>
-    public static string ToDisplayName(this RegistrationStatus s) => s switch
-    {
-        RegistrationStatus.Pending   => "待确认",
-        RegistrationStatus.Confirmed => "已确认",
-        RegistrationStatus.Rejected  => "已驳回",
-        _                            => "未知"
-    };
-}

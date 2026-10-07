@@ -22,27 +22,3 @@ public enum AttendanceStatus
     NotPunched  = 8,  // 未打卡：打了上班卡但漏打下班卡（或反之）
     BusinessTrip = 9  // 出差：已通过出差审批，出差期间算全勤，不需要打卡
 }
-
-/// <summary>打卡类型：这次打卡是上班、下班，还是午间必打卡。</summary>
-public enum PunchType
-{
-    ClockIn  = 1,  // 上班打卡
-    ClockOut = 2,  // 下班打卡
-    MidCheck = 3   // 午间打卡（本地打卡页专用；设备同步的打卡按时间是否落在窗口内判定，不依赖这个类型）
-}
-
-/// <summary>班次类型：这个班次的上下班时间规则是哪一种。</summary>
-public enum ShiftType
-{
-    Fixed    = 1,  // 固定班：上下班时间固定（如 9:00–18:00）
-    Flexible = 2,  // 弹性班：上班时间可在一定范围内浮动
-    Free     = 3   // 自由班：不限定具体时间
-}
-
-/// <summary>假期类型：这一天属于哪种特殊日子。</summary>
-public enum HolidayType
-{
-    LegalHoliday        = 1,  // 法定节假日（如国庆），不用上班
-    CompanyRestDay      = 2,  // 公司自定的休息日，不用上班
-    CompensatoryWorkDay = 3   // 调班补班日：原本是周末，但要上班
-}

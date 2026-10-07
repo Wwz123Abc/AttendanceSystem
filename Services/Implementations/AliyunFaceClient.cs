@@ -10,9 +10,6 @@ using Tea;
 
 namespace AttendanceSystem.Services.Implementations;
 
-/// <summary>阿里云人脸识别接口调用失败（网络/签名/服务端错误），消息已经是给管理员/日志看的中文说明。</summary>
-public class AliyunFaceApiException(string message) : Exception(message);
-
 /// <summary>
 /// 阿里云"视觉智能开放平台"（Facebody）人脸识别客户端：先活体检测、再 1:1 人脸比对。
 /// 两步都调用官方 SDK 的 XxxAdvance 方法，直接传内存里的图片字节流，不用先传到 OSS。
@@ -353,29 +350,5 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
             System.Net.Sockets.SocketException   => true,
             _                          => false
         };
-    }
-}
-
-/// <summary>
-/// 简单的进程内熔断器：连续失败达到阈值就打开一段时间，期间所有调用直接快速失败，
-/// 不再真的请求阿里云接口。静态字段是有意的——AliyunFaceClient 是按请求 Scoped 注册的，
-/// 熔断状态必须跨请求共享才有意义。
-/// </summary>
-internal static class AliyunFaceCircuitBreaker
-{
-    private static int  _consecutiveFailures;
-    private static long _openUntilTicks;
-
-    public static bool IsOpen => Environment.TickCount64 < Interlocked.Read(ref _openUntilTicks);
-
-    public static void RecordSuccess() => Interlocked.Exchange(ref _consecutiveFailures, 0);
-
-    /// <summary>返回这一次失败是否正好把熔断打开了（供调用方决定要不要额外记一条更高级别的日志）。</summary>
-    public static bool RecordFailure(int threshold, int openSeconds)
-    {
-        if (Interlocked.Increment(ref _consecutiveFailures) < threshold) return false;
-        Interlocked.Exchange(ref _openUntilTicks, Environment.TickCount64 + openSeconds * 1000L);
-        Interlocked.Exchange(ref _consecutiveFailures, 0);   // 熔断打开后重新计数，避免打开期间还在累加
-        return true;
     }
 }

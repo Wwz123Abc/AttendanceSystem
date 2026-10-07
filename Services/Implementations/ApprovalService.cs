@@ -716,7 +716,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         var applicant = await db.Users.FindAsync(request.ApplicantUserId);
         await AddNotificationAsync(firstStep.ApproverUserId, "您有新的待审批申请",
             $"{applicant?.RealName} 提交了{request.ApprovalType.ToDisplayName()}申请（{request.RequestNo}），请及时处理",
-            "ApprovalPending", request.Id);
+            NotificationTypes.ApprovalPending, request.Id);
     }
 
     /// <summary>多级审批：上一级通过后，通知下一级审批人。</summary>
@@ -725,7 +725,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         var applicant = await db.Users.FindAsync(request.ApplicantUserId);
         await AddNotificationAsync(nextStep.ApproverUserId, "审批流转通知",
             $"{applicant?.RealName} 的{request.ApprovalType.ToDisplayName()}申请（{request.RequestNo}）已流转至您，请处理",
-            "ApprovalPending", request.Id);
+            NotificationTypes.ApprovalPending, request.Id);
     }
 
     /// <summary>每处理完一个节点都会调用，通知申请人当前进展。以前统一按"Approved 才算已通过，否则
@@ -742,7 +742,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         };
         await AddNotificationAsync(request.ApplicantUserId, $"审批{(request.ApprovalStatus == ApprovalStatus.InProgress ? "进展" : statusText)}",
             $"您的{request.ApprovalType.ToDisplayName()}申请（{request.RequestNo}）{statusText}",
-            "ApprovalResult", request.Id);
+            NotificationTypes.ApprovalResult, request.Id);
     }
 
     /// <summary>写一条站内通知并立即保存（上面三个通知方法都调它）。</summary>

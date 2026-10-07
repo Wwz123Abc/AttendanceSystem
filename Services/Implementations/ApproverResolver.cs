@@ -94,7 +94,7 @@ public static class ApproverResolver
                 UserId           = newApprover.Value,
                 Title            = "审批流转通知",
                 Content          = $"{applicant.RealName} 的{step.ApprovalRequest.ApprovalType.ToDisplayName()}申请（{step.ApprovalRequest.RequestNo}）原审批人已离职/停用，已转交给您，请处理",
-                NotificationType = "ApprovalPending",
+                NotificationType = NotificationTypes.ApprovalPending,
                 RelatedId        = step.ApprovalRequestId,
                 CreatedAt        = DateTime.Now,
             });

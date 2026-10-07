@@ -1,11 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Options;
-using AttendanceSystem.Pages;
 using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
 

@@ -11,16 +11,3 @@ public enum EmployeeStatus
     Disabled    = 1,  // 已停用（禁止登录，但没拉黑，可再启用）
     Blacklisted = 2   // 黑名单（禁止登录，且标记为“永不录用”）
 }
-
-/// <summary>EmployeeStatus 的辅助方法。</summary>
-public static class EmployeeStatusExtensions
-{
-    /// <summary>把状态转成中文名，给页面显示用。</summary>
-    public static string ToDisplayName(this EmployeeStatus s) => s switch
-    {
-        EmployeeStatus.Active      => "在职",
-        EmployeeStatus.Disabled    => "已停用",
-        EmployeeStatus.Blacklisted => "黑名单",
-        _                          => "未知"
-    };
-}

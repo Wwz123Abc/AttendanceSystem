@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
@@ -174,7 +173,7 @@ public class AttendanceBackgroundService(
                     UserId           = user.Id,
                     Title            = "今日旷工提醒",
                     Content          = $"您今日（{today:MM/dd}）未打卡，已被标记为旷工，如有异议请提交补卡申请",
-                    NotificationType = "PunchReminder",
+                    NotificationType = NotificationTypes.PunchReminder,
                     CreatedAt        = DateTime.Now
                 });
                 marked++;
@@ -193,7 +192,7 @@ public class AttendanceBackgroundService(
                         UserId           = user.Id,
                         Title            = "上班未打卡提醒",
                         Content          = $"您今日（{today:MM/dd}）未打上班卡，如有异议请提交补卡申请",
-                        NotificationType = "PunchReminder",
+                        NotificationType = NotificationTypes.PunchReminder,
                         CreatedAt        = DateTime.Now
                     });
                     marked++;
@@ -211,7 +210,7 @@ public class AttendanceBackgroundService(
                         UserId           = user.Id,
                         Title            = "今日旷工提醒",
                         Content          = $"您今日（{today:MM/dd}）未打上班卡，已被标记为旷工，如有异议请提交补卡申请",
-                        NotificationType = "PunchReminder",
+                        NotificationType = NotificationTypes.PunchReminder,
                         CreatedAt        = DateTime.Now
                     });
                 }
@@ -241,7 +240,7 @@ public class AttendanceBackgroundService(
                     UserId           = user.Id,
                     Title            = "下班未打卡提醒",
                     Content          = $"您今日（{today:MM/dd}）未打下班卡，如有异议请提交补卡申请",
-                    NotificationType = "PunchReminder",
+                    NotificationType = NotificationTypes.PunchReminder,
                     CreatedAt        = DateTime.Now
                 });
             }
@@ -289,7 +288,7 @@ public class AttendanceBackgroundService(
                     UserId           = record.UserId,
                     Title            = "下班未打卡提醒",
                     Content          = $"您 {record.WorkDate:MM/dd} 的夜班一直未打下班卡，如有异议请提交补卡申请",
-                    NotificationType = "PunchReminder",
+                    NotificationType = NotificationTypes.PunchReminder,
                     CreatedAt        = DateTime.Now
                 });
                 marked++;
@@ -409,7 +408,7 @@ public class AttendanceBackgroundService(
                     UserId           = kv.Key,
                     Title            = ReminderTitle,
                     Content          = $"您有 {kv.Value.Count} 张待审批申请已超过 4 小时没处理，其中最久的已挂 {ageText}，请及时审批",
-                    NotificationType = "ApprovalPending",
+                    NotificationType = NotificationTypes.ApprovalPending,
                     RelatedId        = null,   // 汇总通知不对应某一张单；点击后统一跳转到"待我审批"列表
                     CreatedAt        = now
                 };
@@ -420,7 +419,7 @@ public class AttendanceBackgroundService(
         // 不管这一轮有没有人要提醒，都把"更早的"未读提醒清掉：没人要提醒的审批人（积压已经处理完了），
         // 之前那条"您有 N 张待审批"也已经过时，不该一直挂在未读里
         await db.Notifications
-            .Where(n => n.NotificationType == "ApprovalPending" && n.Title == ReminderTitle && !n.IsRead && n.CreatedAt < now)
+            .Where(n => n.NotificationType == NotificationTypes.ApprovalPending && n.Title == ReminderTitle && !n.IsRead && n.CreatedAt < now)
             .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true).SetProperty(n => n.ReadAt, now));
     }
 
@@ -435,7 +434,7 @@ public class AttendanceBackgroundService(
         var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
         var cutoff = DateTime.Now.AddDays(-7);
         var deleted = await db.Notifications
-            .Where(n => n.NotificationType == "ApprovalPending" && n.Title == ReminderTitle && n.IsRead && n.CreatedAt < cutoff)
+            .Where(n => n.NotificationType == NotificationTypes.ApprovalPending && n.Title == ReminderTitle && n.IsRead && n.CreatedAt < cutoff)
             .ExecuteDeleteAsync();
         if (deleted > 0) logger.LogInformation("已清理 {Count} 条 7 天前已读的审批提醒通知", deleted);
     }

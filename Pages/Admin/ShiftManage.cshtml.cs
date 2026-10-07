@@ -6,7 +6,6 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
-using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Admin;
