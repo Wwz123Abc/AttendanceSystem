@@ -22,11 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 装 8.0（运行测试需要 .NET 8 运行时）和 10.0（和开发机一致的 SDK：编译、还原都用它；
+      # global.json 只约定"不低于 8.0.100"，会自动选最高的那个）
       - name: 安装 .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
-          dotnet-version: 8.0.x
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: 显示 SDK 信息（排查环境差异用）
+        run: dotnet --info
 
       - name: 还原依赖
         run: dotnet restore AttendanceSystem.slnx
