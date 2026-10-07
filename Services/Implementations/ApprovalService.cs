@@ -32,6 +32,25 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     /// <summary>
     /// 提交申请：算请假/加班时长 → 生成申请单(带单号) → 建审批节点(员工自选审批人/直属上级/兜底管理员) → 通知审批人。
     /// </summary>
+    /// <summary>
+    /// 附件地址只接受系统自己保存的格式：/{上传目录}/approvals/{申请人Id}/{32位小写十六进制}.{允许的后缀}。
+    /// 以前接口收到什么地址就存什么，审批人在"待我审批"里打开详情时附件地址直接拼进页面，任何登录员工都能
+    /// 把一段脚本伪装成附件地址提交上去，审批人一点开就以审批人的身份执行（存储型 XSS，2026-10-07 第 18 轮审查）。
+    /// 只允许是申请人自己目录下的文件，也顺带挡住了"引用别人的附件/外部地址"。
+    /// </summary>
+    public static void ValidateAttachmentUrls(IReadOnlyCollection<string>? urls, int applicantUserId, string? uploadPath)
+    {
+        if (urls is null || urls.Count == 0) return;
+        if (urls.Count > 20) throw new InvalidOperationException("附件数量过多");
+        var prefix = "/" + (uploadPath ?? "uploads").Trim('/', '\\') + "/approvals/" + applicantUserId + "/";
+        var ok = new System.Text.RegularExpressions.Regex(@"^[0-9a-f]{32}\.(jpg|jpeg|png|gif|pdf|doc|docx|xls|xlsx)$");
+        foreach (var u in urls)
+        {
+            if (string.IsNullOrEmpty(u) || !u.StartsWith(prefix, StringComparison.Ordinal) || !ok.IsMatch(u[prefix.Length..]))
+                throw new InvalidOperationException("附件地址不合法，请重新上传附件");
+        }
+    }
+
     public async Task<ApprovalRequest> SubmitApprovalAsync(int applicantUserId, SubmitApprovalDto dto)
     {
         var user = await db.Users.FindAsync(applicantUserId)
@@ -46,6 +65,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             throw new InvalidOperationException("请填写申请原因");
         if (dto.Reason.Trim().Length > 1000)
             throw new InvalidOperationException("申请理由不能超过 1000 个字");
+        ValidateAttachmentUrls(dto.AttachmentUrls, applicantUserId, appOptions.Value.UploadPath);
         if (!string.IsNullOrWhiteSpace(dto.BusinessTripDestination) && dto.BusinessTripDestination.Trim().Length > 200)
             throw new InvalidOperationException("出差目的地不能超过 200 个字");
 
@@ -377,14 +397,15 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         return true;
     }
 
-    /// <summary>申请人撤销自己的申请（只有“待审批”状态能撤）。</summary>
+    /// <summary>申请人撤销自己的申请（“待审批”和“审批中”都能撤；二级审批过了第一级变成“审批中”后，第二级审批人离职/卡住时，申请人也要能撤回重提）。</summary>
     public async Task<bool> CancelApprovalAsync(int userId, int approvalRequestId)
     {
         // 跟 HandleApprovalAsync 用同一套"抢占式"条件更新：只有整单现在确实还是 Pending 才能撤，
         // 直接在数据库层面做条件更新，不会有"先查到还是 Pending、还没来得及写就被审批人抢先处理掉"
         // 这种先查后写之间的竞态窗口。
         var claimed = await db.ApprovalRequests
-            .Where(a => a.Id == approvalRequestId && a.ApplicantUserId == userId && a.ApprovalStatus == ApprovalStatus.Pending)
+            .Where(a => a.Id == approvalRequestId && a.ApplicantUserId == userId
+                        && (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress))
             .ExecuteUpdateAsync(a => a
                 .SetProperty(x => x.ApprovalStatus, ApprovalStatus.Cancelled)
                 .SetProperty(x => x.UpdatedAt, DateTime.Now));
@@ -611,7 +632,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         else
         {
             // 组里没配名单：退回直属上级；没上级就兜底找个管理员/文员
-            approverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
+            approverId = await ApproverResolver.ResolveSupervisorOrFallbackAsync(db, applicant);   // 上级须在职且不是本人，否则兜底
         }
 
         // 没有任何可用审批人（没配名单、没上级、兜底也找不到一个在职管理员/文员覆盖这个部门）时，
@@ -637,7 +658,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 这里两者相同就不再生成二级节点，一级通过即整单通过，跟单级审批的组行为一致。
         if (group?.ApprovalLevel == ApprovalLevelType.Level2)
         {
-            var level2ApproverId = applicant.SupervisorUserId ?? await ResolveFallbackApproverAsync(applicant);
+            var level2ApproverId = await ApproverResolver.ResolveSupervisorOrFallbackAsync(db, applicant);
             if (level2ApproverId.HasValue && level2ApproverId.Value != approverId.Value)
                 db.ApprovalSteps.Add(new ApprovalStep
                 {
@@ -662,33 +683,12 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     /// 申请人自己没有部门（DepartmentId 为空）时，只有总部超级管理员能兜底——跟”无部门归属的数据
     /// 只总部可见”是同一个口径。
     /// </summary>
-    private async Task<int?> ResolveFallbackApproverAsync(User applicant)
-    {
-        var ancestorIds = await GetAncestorDeptIdsAsync(applicant.DepartmentId);
-        var managers = await db.Users
-            .Where(u => u.IsActive
-                     && (u.Role == UserRole.Admin || u.Role == UserRole.Clerk)
-                     && u.Id != applicant.Id
-                     && (u.ScopedDepartmentId == null
-                         || (applicant.DepartmentId != null && ancestorIds.Contains(u.ScopedDepartmentId.Value))))
-            .Select(u => new { u.Id, u.AttendanceGroupId })
-            .ToListAsync();
-        if (managers.Count == 0) return null;
-        var sameGroup = managers.FirstOrDefault(m => m.AttendanceGroupId == applicant.AttendanceGroupId);
-        return (sameGroup ?? managers[0]).Id;   // 优先同组，否则取第一个
-    }
+    private Task<int?> ResolveFallbackApproverAsync(User applicant) => ApproverResolver.ResolveFallbackApproverAsync(db, applicant);
 
     /// <summary>取某部门自己 + 一路向上所有祖先部门的 id 集合（deptId 为空时返回空集合）——
     /// 用来判断”某个 ScopedDepartmentId 是否覆盖这个部门”：只要 ScopedDepartmentId 出现在这个集合里，
     /// 说明这个部门是那个范围根节点的自己或下级，落在对方的管理范围内。</summary>
-    private async Task<HashSet<int>> GetAncestorDeptIdsAsync(int? deptId)
-    {
-        var ids = new HashSet<int>();
-        var cur = deptId;
-        while (cur.HasValue && ids.Add(cur.Value))
-            cur = await db.Departments.Where(d => d.Id == cur.Value).Select(d => d.ParentId).FirstOrDefaultAsync();
-        return ids;
-    }
+    private Task<HashSet<int>> GetAncestorDeptIdsAsync(int? deptId) => ApproverResolver.GetAncestorDeptIdsAsync(db, deptId);
 
     /// <summary>这个审批人现在还管不管得到申请人现在所在的部门——审批节点生成后 ApproverUserId 是固定的，
     /// 不会随申请人后续调岗自动失效；这里在”查待办/查详情/处理审批”这几个入口现查一遍当前范围，

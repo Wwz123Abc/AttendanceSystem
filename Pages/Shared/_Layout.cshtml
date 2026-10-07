@@ -679,7 +679,8 @@
     function escapeHtml(s) {
         const d = document.createElement('div');
         d.textContent = s ?? '';
-        return d.innerHTML;
+        // innerHTML 只转义 < > &，不转义引号——拼进 href="..." 这类属性值时，带引号的内容能跳出属性、塞进 onmouseover 之类的事件（2026-10-07 第 18 轮审查），所以引号也要转义
+        return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // 点某一条通知：先告诉后台"这条我看过了"（标记已读），

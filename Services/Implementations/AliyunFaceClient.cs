@@ -230,13 +230,14 @@ public class AliyunFaceClient(IOptions<AliyunFaceOptions> options, ILogger<Aliyu
         }
     }
 
-    /// <summary>只有"服务端/网络类"的失败才计入熔断（5xx、限流、超时、连接失败）；4xx 参数错误
+    /// <summary>只有"服务端/网络类"的失败才计入熔断（5xx、超时、连接失败）；4xx 参数错误
     /// （比如某个员工传了畸形/超大图片）说明是这一次请求本身有问题，跟阿里云服务是否健康无关，
     /// 不该被算进熔断计数——否则单个员工连续传错几次图，就能把全公司的远程打卡熔断掉。</summary>
     private static bool ShouldCountForCircuitBreaker(Exception ex) => ex switch
     {
-        TeaException te => te.StatusCode >= 500
-                         || (te.Code?.Contains("Throttling", StringComparison.OrdinalIgnoreCase) ?? false),
+        // 限流（Throttling）不计入熔断：它只说明"这一秒请求太多"（账号 QPS 上限很低，早高峰同一秒多人打卡就会碰到），
+        // 不说明阿里云服务坏了；照样重试，但不能因为连续几次被限流就把全公司的远程打卡熔断 60 秒（2026-10-07 审查）
+        TeaException te => te.StatusCode >= 500,
         TaskCanceledException                => true,
         TimeoutException                     => true,
         // 阿里云 Tea SDK 读/连接超时抛的是 WebException("operation is timeout")，不是上面几种——2026-10-04 早高峰

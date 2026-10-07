@@ -294,6 +294,11 @@ public class UserService(
 
         ValidateEmployeeNoFormat(user.EmployeeNo);
 
+        // 直属上级不能是员工本人：设成本人的话，没配审批人名单的组里第一级审批会派给他自己、自己批自己的单
+        // （2026-10-07 第 18 轮审查；页面、接口、智能助手都走这个方法，这里统一拦）
+        if (user.SupervisorUserId.HasValue && user.SupervisorUserId.Value == existing.Id)
+            throw new InvalidOperationException("直属上级不能是员工本人");
+
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo, user.Id))
             throw new InvalidOperationException($"工号 {user.EmployeeNo} 已被其他员工占用");
 
@@ -339,8 +344,23 @@ public class UserService(
         user.DeactivatedAt = DateTime.Now;
         user.UpdatedAt     = DateTime.Now;
         await db.SaveChangesAsync();
+        await TryReassignPendingApprovalsAsync([user.Id]);
         await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
         return true;
+    }
+
+    /// <summary>停用/拉黑后，把他名下没处理的审批节点改派给别人；改派失败不影响停用本身，只记日志。</summary>
+    private async Task TryReassignPendingApprovalsAsync(IReadOnlyCollection<int> deactivatedUserIds)
+    {
+        try
+        {
+            var n = await ApproverResolver.ReassignPendingStepsAsync(db, deactivatedUserIds);
+            if (n > 0) logger.LogInformation("账号停用后改派了 {Count} 个待处理审批节点（原审批人 Id：{Ids}）", n, string.Join(",", deactivatedUserIds));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "账号停用后改派待处理审批失败（原审批人 Id：{Ids}），这些单子需要人工处理", string.Join(",", deactivatedUserIds));
+        }
     }
 
     /// <summary>重新启用员工。黑名单员工不能直接启用，需先移出黑名单。停用时考勤机上的记录被删过，
@@ -374,6 +394,7 @@ public class UserService(
         user.DeactivatedAt = DateTime.Now;
         user.UpdatedAt     = DateTime.Now;
         await db.SaveChangesAsync();
+        await TryReassignPendingApprovalsAsync([user.Id]);
         await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
         return true;
     }
@@ -472,6 +493,7 @@ public class UserService(
             changed++;
         }
         if (changed > 0) await db.SaveChangesAsync();
+        if (deactivatedEmployeeNos.Count > 0) await TryReassignPendingApprovalsAsync(deactivatedEmployeeNos.Select(d => d.UserId).ToList());
         foreach (var (employeeNo, userId) in deactivatedEmployeeNos)
             await TryDeleteFromZKDeviceAsync(employeeNo, userId);
         foreach (var u in activatedUsers)

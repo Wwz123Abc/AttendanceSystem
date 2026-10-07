@@ -175,7 +175,7 @@
                                     </td>
                                     <td class="small">@item.SubmittedAt.ToString("MM-dd HH:mm")</td>
                                     <td>
-                                        @if (item.ApprovalStatus == AttendanceSystem.Models.Enums.ApprovalStatus.Pending)
+                                        @if (item.ApprovalStatus is AttendanceSystem.Models.Enums.ApprovalStatus.Pending or AttendanceSystem.Models.Enums.ApprovalStatus.InProgress)
                                         {
                                             <form method="post" asp-page-handler="Cancel" class="d-inline"
                                                   onsubmit="return confirm('确认撤销该申请？')">

@@ -748,6 +748,18 @@ public class AbsentAndPunchRuleTests : IDisposable
     }
 
     [Fact]
+    public void 人脸接口_被限流_照常重试但不计入熔断()
+    {
+        // 生产日志里的真实异常：code: 400, 调用被限流(...当前QPS:3,QPS阈值:2)——只说明请求太密，不说明服务坏了
+        var throttled = new Tea.TeaException(new Dictionary<string, object>
+        {
+            ["code"] = "Throttling.User", ["message"] = "调用被限流", ["data"] = new Dictionary<string, object> { ["statusCode"] = 400 },
+        });
+        Assert.True(CallFaceClientStatic<bool>("IsRetryable", throttled, CancellationToken.None));
+        Assert.False(CallFaceClientStatic<bool>("ShouldCountForCircuitBreaker", throttled));
+    }
+
+    [Fact]
     public void 人脸接口_参数类错误不计入熔断_调用方自己取消的不重试()
     {
         var bad = new InvalidOperationException("参数错误");

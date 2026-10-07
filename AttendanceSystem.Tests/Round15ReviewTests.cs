@@ -577,4 +577,124 @@ public class Round15ReviewTests : IDisposable
             DailyHours = [8m], DailyIsNightShift = [false], DailyIsRest = [false],
         };
     }
+
+    // ── 第 18 轮审查：附件地址 XSS / 上级=本人 / 审批人停用后的待办 ─────────────────────────────
+
+    [Fact]
+    public void 附件地址_只接受系统自己保存的格式_脚本_外链_别人的目录_怪后缀都拒绝()
+    {
+        var guid = "0123456789abcdef0123456789abcdef";
+        void Check(string url) => ApprovalService.ValidateAttachmentUrls([url], 7, "uploads");
+        Check($"/uploads/approvals/7/{guid}.jpg");     // 正常的不抛
+        Check($"/uploads/approvals/7/{guid}.pdf");
+
+        foreach (var bad in new[]
+        {
+            "javascript:alert(1)",
+            "\" onmouseover=\"alert(1)",
+            "<img src=x onerror=alert(1)>",
+            "https://evil.example.com/a.jpg",
+            $"/uploads/approvals/8/{guid}.jpg",          // 别人的目录
+            $"/uploads/approvals/7/../8/{guid}.jpg",
+            $"/uploads/approvals/7/{guid}.html",         // 不允许的后缀
+            $"/uploads/approvals/7/{guid}.jpg\"><script>alert(1)</script>",
+            "/uploads/approvals/7/short.jpg",
+        })
+            Assert.Throws<InvalidOperationException>(() => Check(bad));
+
+        Assert.Throws<InvalidOperationException>(() =>
+            ApprovalService.ValidateAttachmentUrls(Enumerable.Repeat($"/uploads/approvals/7/{guid}.jpg", 21).ToList(), 7, "uploads"));
+        ApprovalService.ValidateAttachmentUrls([], 7, "uploads");   // 没有附件不抛
+    }
+
+    [Fact]
+    public async Task 直属上级设成本人_保存员工时被拦住()
+    {
+        using var db = CreateContext();
+        var (svc, adminId) = NewUserService(db);
+        var emp = U("SELF1", "自己当上级的人");
+        db.Users.Add(emp);
+        await db.SaveChangesAsync();
+
+        emp.SupervisorUserId = emp.Id;
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateUserAsync(emp, adminId));
+        Assert.Contains("不能是员工本人", ex.Message);
+    }
+
+    [Fact]
+    public async Task 审批人解析_上级是本人或已停用时改用兜底管理员_上级正常就用上级()
+    {
+        using var db = CreateContext();
+        var admin = U("ADM9", "兜底管理员"); admin.Role = UserRole.Admin;
+        var boss  = U("BOSS", "正常上级");
+        var gone  = U("GONE", "已停用的上级"); gone.IsActive = false;
+        db.Users.AddRange(admin, boss, gone);
+        await db.SaveChangesAsync();
+
+        var selfRef = U("E1", "上级是自己"); db.Users.Add(selfRef); await db.SaveChangesAsync();
+        selfRef.SupervisorUserId = selfRef.Id; await db.SaveChangesAsync();
+        var withGone = U("E2", "上级已停用"); withGone.SupervisorUserId = gone.Id;
+        var normal   = U("E3", "上级正常"); normal.SupervisorUserId = boss.Id;
+        db.Users.AddRange(withGone, normal); await db.SaveChangesAsync();
+
+        Assert.Equal(admin.Id, await ApproverResolver.ResolveSupervisorOrFallbackAsync(db, selfRef));   // 不能自己批自己
+        Assert.Equal(admin.Id, await ApproverResolver.ResolveSupervisorOrFallbackAsync(db, withGone));  // 不派给已停用的人
+        Assert.Equal(boss.Id,  await ApproverResolver.ResolveSupervisorOrFallbackAsync(db, normal));
+    }
+
+    [Fact]
+    public async Task 停用审批人_他名下待处理的审批节点自动改派给申请人的上级并发通知()
+    {
+        int approverId, bossId, stepId, requestId;
+        using (var db = CreateContext())
+        {
+            var boss      = U("B1", "申请人上级");
+            var oldAppr   = U("B2", "即将离职的审批人");
+            db.Users.AddRange(boss, oldAppr);
+            await db.SaveChangesAsync();
+            var applicant = U("B3", "申请人"); applicant.SupervisorUserId = boss.Id;
+            db.Users.Add(applicant); await db.SaveChangesAsync();
+            var req = new ApprovalRequest { RequestNo = "JB-9", ApplicantUserId = applicant.Id, ApprovalType = ApprovalType.Overtime, ApprovalStatus = ApprovalStatus.InProgress };
+            db.ApprovalRequests.Add(req); await db.SaveChangesAsync();
+            var step = new ApprovalStep { ApprovalRequestId = req.Id, ApproverUserId = oldAppr.Id, StepOrder = 2, ApprovalStatus = ApprovalStatus.Pending };
+            db.ApprovalSteps.Add(step); await db.SaveChangesAsync();
+            approverId = oldAppr.Id; bossId = boss.Id; stepId = step.Id; requestId = req.Id;
+        }
+
+        using (var db = CreateContext())
+        {
+            var (svc, adminId) = NewUserService(db);
+            Assert.True(await svc.DeactivateUserAsync(approverId, adminId));
+        }
+
+        using var check = CreateContext();
+        Assert.Equal(bossId, (await check.ApprovalSteps.FindAsync(stepId))!.ApproverUserId);
+        Assert.True(await check.Notifications.AnyAsync(n => n.UserId == bossId && n.RelatedId == requestId));
+    }
+
+    [Fact]
+    public async Task 申请人可以撤销审批中的单_待处理节点一并作废()
+    {
+        int userId, reqId;
+        using (var db = CreateContext())
+        {
+            var applicant = U("C1", "申请人"); var approver = U("C2", "二级审批人");
+            db.Users.AddRange(applicant, approver); await db.SaveChangesAsync();
+            var req = new ApprovalRequest { RequestNo = "JB-8", ApplicantUserId = applicant.Id, ApprovalType = ApprovalType.Overtime, ApprovalStatus = ApprovalStatus.InProgress };
+            db.ApprovalRequests.Add(req); await db.SaveChangesAsync();
+            db.ApprovalSteps.AddRange(
+                new ApprovalStep { ApprovalRequestId = req.Id, ApproverUserId = approver.Id, StepOrder = 1, ApprovalStatus = ApprovalStatus.Approved },
+                new ApprovalStep { ApprovalRequestId = req.Id, ApproverUserId = approver.Id, StepOrder = 2, ApprovalStatus = ApprovalStatus.Pending });
+            await db.SaveChangesAsync();
+            userId = applicant.Id; reqId = req.Id;
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+            Assert.True(await svc.CancelApprovalAsync(userId, reqId));
+        }
+        using var check = CreateContext();
+        Assert.Equal(ApprovalStatus.Cancelled, (await check.ApprovalRequests.FindAsync(reqId))!.ApprovalStatus);
+        Assert.DoesNotContain(await check.ApprovalSteps.Where(x => x.ApprovalRequestId == reqId).ToListAsync(), x => x.ApprovalStatus == ApprovalStatus.Pending);
+    }
 }
