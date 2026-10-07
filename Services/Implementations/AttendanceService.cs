@@ -595,7 +595,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     /// <summary>查某部门/考勤组在一段时间内的所有人考勤记录。</summary>
     public async Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto q, HashSet<int>? deptIds = null)
     {
-        var userIds = await BuildUserIdQueryAsync(q.DepartmentId, q.AttendanceGroupId, deptIds);   // 先圈出这批人
+        var userIds = await BuildUserIdQueryAsync(q.DepartmentId, q.AttendanceGroupId, deptIds, excludeExempt: true);   // 先圈出这批人（免考勤的正式工不显示）
 
         return (await db.AttendanceRecords
             .Include(r => r.User).ThenInclude(u => u.Department)
@@ -683,7 +683,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
     public async Task<List<MonthlySummaryDto>> GetDeptMonthlySummariesAsync(
         int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null)
     {
-        var idQuery = db.Users.AsQueryable();
+        var idQuery = db.Users.NeedingAttendance();   // 免考勤的正式工不进汇总表
         if (deptId.HasValue)  idQuery = idQuery.Where(u => u.DepartmentId == deptId.Value);
         if (groupId.HasValue) idQuery = idQuery.Where(u => u.AttendanceGroupId == groupId.Value);
         if (scopeDeptIds is not null) idQuery = idQuery.Where(u => u.DepartmentId != null && scopeDeptIds.Contains(u.DepartmentId.Value));
@@ -728,7 +728,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             .Include(u => u.Department)
             .Include(u => u.AttendanceGroup)
             .Where(u => relevantIds.Contains(u.Id))
-            .AsQueryable();
+            .NeedingAttendance();   // 免考勤的正式工（管理员/文员/主管/班组长，或勾了免考勤）不进报表
         // deptIds 是页面那棵"公司/部门"合并树里勾选出来的部门编号（勾大范围=公司节点，会连带展开成它底下所有部门的编号）；
         // 不勾任何部门 = 不筛选，导出全公司所有人。
         if (deptIds is { Count: > 0 }) q = q.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
@@ -828,7 +828,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                         leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);
                     if (assign is null && (rec.ClockInTime is not null || rec.ClockOutTime is not null)) noShiftDays++;   // 有打卡但没排班
-                    if (rec.AttendanceStatus == AttendanceStatus.Absent && !user.IsAttendanceExempt) absentDays++;   // 免考勤的人不统计旷工
+                    if (rec.AttendanceStatus == AttendanceStatus.Absent && !user.IsExemptFromAttendance()) absentDays++;   // 免考勤的人不统计旷工
                     // 缺卡/迟到/早退次数的判定口径统一改成跟 GenerateMonthlySummaryAsync 一样按"状态"算
                     // （不再按分钟数/裸打卡时间判断），并排除旷工/请假/节假日/出差——不然半天假当天上午
                     // 迟到、或旷工那天"当然两次都没打"，会被这份表额外多算一次迟到/缺卡，跟月度汇总的
@@ -872,7 +872,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 入职日期晚于周期开始的从入职日起算；没填入职日期的按整个周期算
             var effStart = user.HireDate is { } hireDate && hireDate > start ? hireDate : start;
             // 免考勤的人不需要打卡，没有"应出勤"这回事（不然会显示"应出勤 22 天 / 出勤 0 天"，像是整月没来）
-            row.ExpectedWorkdays = user.IsAttendanceExempt || effStart > end ? 0
+            row.ExpectedWorkdays = user.IsExemptFromAttendance() || effStart > end ? 0
                 : CountExpectedWorkdays(effStart, end, assignByDate.ToDictionary(a => a.Key, a => a.Value.ShiftSchedule));
 
             // 各项工时在上面累加时就已经按"半小时"取整过了，这里直接赋值（合计只会是整数或 x.5）
@@ -911,7 +911,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             .Distinct()
             .ToListAsync();
 
-        var uq = db.Users.Where(u => relevantIds.Contains(u.Id)).AsQueryable();
+        var uq = db.Users.Where(u => relevantIds.Contains(u.Id)).NeedingAttendance();
         if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
         var userIds = await uq.Select(u => u.Id).ToListAsync();
 
@@ -964,7 +964,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 .Union(db.MonthlyAttendanceSummaries.Where(s => s.Year == year && s.Month == month).Select(s => s.UserId))
                 .Distinct()
                 .ToListAsync();
-        var users = await db.Users.Where(u => candidateIds.Contains(u.Id)).ToListAsync();
+        var users = await db.Users.Where(u => candidateIds.Contains(u.Id)).NeedingAttendance().ToListAsync();   // 免考勤的正式工不生成汇总
 
         // 本月每个人“审批通过”的申请数（一次性批量查，避免循环里逐人查库）
         var startDt = start.ToDateTime(TimeOnly.MinValue);
@@ -1006,7 +1006,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 应出勤天数：从“月初”和“该员工入职日”里取较晚的一天开始算，
             // 避免月中入职的人被算成全月应出勤、导致出勤率虚低。
             var effStart = user.HireDate is { } hd && hd > start ? hd : start;
-            var expected = user.IsAttendanceExempt || effStart > end ? 0 : CountExpectedWorkdays(effStart, end, shiftByDate);
+            var expected = user.IsExemptFromAttendance() || effStart > end ? 0 : CountExpectedWorkdays(effStart, end, shiftByDate);
 
             // 取出已有的汇总，没有就新建
             if (!existingSummaries.TryGetValue(user.Id, out var summary))
@@ -1072,7 +1072,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // 迟到/早退按「状态」统计（钉钉同步只写状态、不写分钟数，按分钟数会漏算）
             summary.LateCount         = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);
             summary.EarlyLeaveCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.EarlyLeave);
-            summary.AbsentDays        = user.IsAttendanceExempt ? 0 : records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent);   // 免考勤的人不统计旷工
+            summary.AbsentDays        = user.IsExemptFromAttendance() ? 0 : records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent);   // 免考勤的人不统计旷工
             // 缺卡：状态=未打卡，或“只打了上/下班其中一次”（这样钉钉数据的缺卡也能识别；出差本就不用打卡，排除）
             summary.NotPunchedCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.NotPunched
                 || ((r.ClockInTime.HasValue ^ r.ClockOutTime.HasValue)
@@ -2275,14 +2275,14 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
 
     /// <summary>
     /// 按部门/考勤组圈出在职员工的编号列表。
-    /// excludeExempt=true 时再排掉勾了"免考勤"的人：看板的总人数/未打卡只应该反映"需要打卡的人"，
-    /// 不然管理员、文员这类不打卡的人每天都会被算进"未打卡"，下钻名单里也全是他们（2026-09-24 补漏）。
-    /// 查"某段时间的考勤记录"这种场景不排——免考勤的人如果自己打了卡，记录照样该看到。
+    /// excludeExempt=true 时再排掉免考勤的人（非"普通员工"角色，或勾了"免考勤"）：看板、报表、考勤记录列表
+    /// 都只反映"需要考勤的人"，不然正式工每天都会被算进"未打卡"，名单里也全是他们
+    /// （2026-09-24 补漏；2026-10-07 起正式工角色一律免考勤，不再靠逐个勾选）。
     /// </summary>
     private async Task<List<int>> BuildUserIdQueryAsync(int? deptId, int? groupId, HashSet<int>? deptIds = null, bool excludeExempt = false)
     {
         var q = db.Users.Where(u => u.IsActive).AsQueryable();
-        if (excludeExempt) q = q.Where(u => !u.IsAttendanceExempt);
+        if (excludeExempt) q = q.NeedingAttendance();
         if (deptId.HasValue)  q = q.Where(u => u.DepartmentId == deptId.Value);
         if (groupId.HasValue) q = q.Where(u => u.AttendanceGroupId == groupId.Value);
         // 分公司管理员范围过滤：deptIds 是"自己范围内的部门 id 全集"（含下级部门），跟上面 deptId 的

@@ -123,7 +123,7 @@ public class AttendanceBackgroundService(
         var db    = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
 
         // 免考勤的人（管理员/文员/办公室人员等不需要打卡的账号）不参与自动记旷工/未打卡
-        var users = await db.Users.Where(u => u.IsActive && !u.IsAttendanceExempt).ToListAsync();
+        var users = await db.Users.Where(u => u.IsActive).NeedingAttendance().ToListAsync();
 
         // 一次性把”今天已有的考勤记录””今天的排班”查出来放内存，循环里直接用，避免逐人查库（N+1）
         var recordByUser  = (await db.AttendanceRecords.Where(r => r.WorkDate == today).ToListAsync())

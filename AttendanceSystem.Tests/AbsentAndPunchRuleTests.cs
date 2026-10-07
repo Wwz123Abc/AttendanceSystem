@@ -163,7 +163,7 @@ public class AbsentAndPunchRuleTests : SqliteTestBase
     // ── ① 报表不统计免考勤的旷工 ─────────────────────────────────────────
 
     [Fact]
-    public async Task 模板汇总表_免考勤的人旷工天数为0_普通人照常统计()
+    public async Task 模板汇总表_免考勤的人不进报表_普通人照常统计旷工()
     {
         using (var db = CreateContext())
         {
@@ -180,7 +180,7 @@ public class AbsentAndPunchRuleTests : SqliteTestBase
         var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
         var report = await svc.GenerateTemplateReportAsync(new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30), null);
 
-        Assert.Equal(0, report.Rows.Single(r => r.EmployeeNo == "A2").AbsentDays);
+        Assert.DoesNotContain(report.Rows, r => r.EmployeeNo == "A2");   // 免考勤的人不进报表（2026-10-07 起整行都不显示）
         Assert.Equal(3, report.Rows.Single(r => r.EmployeeNo == "N3").AbsentDays);
     }
 
@@ -246,7 +246,7 @@ public class AbsentAndPunchRuleTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 应出勤天数_免考勤的人为0_普通人照常算_模板表和月度汇总一致()
+    public async Task 应出勤天数_免考勤的人不进报表_普通人照常算_模板表和月度汇总一致()
     {
         using (var db = CreateContext())
         {
@@ -257,13 +257,86 @@ public class AbsentAndPunchRuleTests : SqliteTestBase
         using var db2 = CreateContext();
         var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
         var report = await svc.GenerateTemplateReportAsync(new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30), null);
-        Assert.Equal(0, report.Rows.Single(r => r.EmployeeNo == "A4").ExpectedWorkdays);
+        Assert.DoesNotContain(report.Rows, r => r.EmployeeNo == "A4");   // 免考勤的人不进报表
         Assert.True(report.Rows.Single(r => r.EmployeeNo == "N5").ExpectedWorkdays > 0);
 
         await svc.GenerateMonthlySummaryAsync(2026, 9, null);
         using var check = CreateContext();
         var sums = await check.MonthlyAttendanceSummaries.Include(m => m.User).ToListAsync();
-        Assert.Equal(0, sums.Single(m => m.User.EmployeeNo == "A4").ExpectedWorkdays);
+        Assert.DoesNotContain(sums, m => m.User.EmployeeNo == "A4");     // 也不生成月度汇总
         Assert.Equal(report.Rows.Single(r => r.EmployeeNo == "N5").ExpectedWorkdays, sums.Single(m => m.User.EmployeeNo == "N5").ExpectedWorkdays);
+    }
+
+    // ── 2026-10-07：只有"普通员工"角色需要考勤，管理员/文员/主管/班组长都是正式工，一律免考勤 ──────────
+
+    private static readonly UserRole[] FormalRoles = [UserRole.Admin, UserRole.Clerk, UserRole.Supervisor, UserRole.TeamLeader];
+
+    private int SeedFormalAndEmployee()
+    {
+        using var db = CreateContext();
+        var employee = U("EMP", "临时工");
+        var formal = FormalRoles.Select(r => { var u = U("F" + (int)r, "正式工" + r); u.Role = r; return u; }).ToList();
+        db.Users.AddRange(formal);
+        db.Users.Add(employee);
+        db.SaveChanges();
+        return employee.Id;
+    }
+
+    [Fact]
+    public async Task 正式工角色_不记旷工_不发打卡提醒_不进看板()
+    {
+        var empId = SeedFormalAndEmployee();
+        await RunMarkAbsentAsync(Tue);
+
+        using var check = CreateContext();
+        var recs = await check.AttendanceRecords.ToListAsync();
+        Assert.Equal([empId], recs.Select(r => r.UserId).ToList());                 // 只有普通员工被记旷工
+        Assert.Equal(1, await check.Notifications.CountAsync());                    // 也只给他发了提醒
+
+        var svc = new AttendanceService(check, AppOptions, NullLogger<AttendanceService>.Instance);
+        var stats = await svc.GetTodayStatsAsync();
+        Assert.Equal(1, stats.TotalEmployees);                                      // 看板总人数只算需要考勤的人
+        Assert.Equal([empId], (await svc.GetTodayStatsDetailAsync("total")).Select(r => r.UserId).ToList());
+    }
+
+    [Fact]
+    public async Task 正式工角色_不进模板汇总表_月度汇总_打卡时间表_部门考勤记录()
+    {
+        var empId = SeedFormalAndEmployee();
+        using (var db = CreateContext())
+        {
+            // 就算正式工自己打了卡/有记录，也不在报表里体现
+            foreach (var u in db.Users.ToList())
+                db.AttendanceRecords.Add(new AttendanceRecord
+                {
+                    UserId = u.Id, WorkDate = Tue, ClockInTime = Tue.ToDateTime(new TimeOnly(8, 30)),
+                    ClockOutTime = Tue.ToDateTime(new TimeOnly(17, 30)), AttendanceStatus = AttendanceStatus.Normal, ActualWorkHours = 8
+                });
+            db.SaveChanges();
+        }
+
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var start = new DateOnly(2026, 9, 1); var end = new DateOnly(2026, 9, 30);
+
+        Assert.Equal(["EMP"], (await svc.GenerateTemplateReportAsync(start, end, null)).Rows.Select(r => r.EmployeeNo).ToList());
+        Assert.Equal([empId], (await svc.GetClockTimeSheetAsync(start, end, null)).Select(r => r.UserId).Distinct().ToList());
+        Assert.Equal([empId], (await svc.GetDeptAttendanceAsync(new AttendanceSystem.Models.DTOs.DeptAttendanceQueryDto { StartDate = start, EndDate = end })).Select(r => r.UserId).Distinct().ToList());
+
+        await svc.GenerateMonthlySummaryAsync(2026, 9, null);
+        Assert.Equal(["EMP"], (await svc.GetDeptMonthlySummariesAsync(null, null, 2026, 9)).Select(x => x.EmployeeNo).ToList());
+    }
+
+    [Fact]
+    public void 免考勤判断_普通员工看开关_其他角色一律免考勤()
+    {
+        Assert.False(U("A", "员工").IsExemptFromAttendance());
+        var flagged = U("B", "勾了免考勤的员工", exempt: true);
+        Assert.True(flagged.IsExemptFromAttendance());
+        foreach (var r in FormalRoles)
+        {
+            var u = U("C", "正式工"); u.Role = r;
+            Assert.True(u.IsExemptFromAttendance());
+        }
     }
 }

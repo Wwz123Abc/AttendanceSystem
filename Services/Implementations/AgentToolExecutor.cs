@@ -158,7 +158,8 @@ public class AgentToolExecutor(
         var today = DateOnly.FromDateTime(DateTime.Now);
         var anomalyStatuses = new[] { AttendanceStatus.Late, AttendanceStatus.EarlyLeave, AttendanceStatus.Absent, AttendanceStatus.NotPunched };
         var anomalyQ = db.AttendanceRecords.AsNoTracking()
-            .Where(r => r.WorkDate == today && anomalyStatuses.Contains(r.AttendanceStatus));
+            .Where(r => r.WorkDate == today && anomalyStatuses.Contains(r.AttendanceStatus)
+                        && r.User.Role == UserRole.Employee && !r.User.IsAttendanceExempt);   // 免考勤的正式工不算异常
         if (visibleIds is not null)
             anomalyQ = anomalyQ.Where(r => r.User.DepartmentId != null && visibleIds.Contains(r.User.DepartmentId.Value));
         var anomalyCount = await anomalyQ.CountAsync(ct);
@@ -381,7 +382,8 @@ public class AgentToolExecutor(
         if (subtree is { Count: 0 }) return "查询结果为空（请求的部门不在你的管理范围内）";
 
         var q = db.AttendanceRecords.AsNoTracking()
-            .Where(r => r.WorkDate >= start && r.WorkDate <= end && statuses.Contains(r.AttendanceStatus));
+            .Where(r => r.WorkDate >= start && r.WorkDate <= end && statuses.Contains(r.AttendanceStatus)
+                        && r.User.Role == UserRole.Employee && !r.User.IsAttendanceExempt);   // 免考勤的正式工不进异常清单
         if (visibleIds is not null)
             q = q.Where(r => r.User.DepartmentId != null && visibleIds.Contains(r.User.DepartmentId.Value));
         else if (subtree is not null)
@@ -434,7 +436,8 @@ public class AgentToolExecutor(
         if (err is not null) return err;
 
         var q = db.MonthlyAttendanceSummaries.AsNoTracking()
-            .Where(s => s.Year == year.Value && s.Month == month.Value);
+            .Where(s => s.Year == year.Value && s.Month == month.Value
+                        && s.User.Role == UserRole.Employee && !s.User.IsAttendanceExempt);   // 免考勤的正式工不进汇总统计
         if (visibleIds is not null)
             q = q.Where(s => s.User.DepartmentId != null && visibleIds.Contains(s.User.DepartmentId.Value));
 
