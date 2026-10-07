@@ -1,0 +1,25 @@
+# 仓库里统一以 LF 存储，本机检出时按各自系统转换（Windows 上通常是 CRLF）。
+* text=auto
+
+# 脚本必须是 LF（Linux 服务器上执行），Windows 脚本用 CRLF
+*.sh   text eol=lf
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+# 二进制文件：不做换行转换、不做文本对比
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.docx binary
+*.xlsx binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.jar  binary
+*.keystore binary

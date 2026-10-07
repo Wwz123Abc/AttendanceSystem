@@ -1,0 +1,23 @@
+<Project>
+
+  <!-- 主项目和测试项目共用的构建设置，集中在这里，避免两个 csproj 各写一份、慢慢不一致。 -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <!-- 在 CI 里构建时输出可复现的二进制（路径映射），本机构建不受影响 -->
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true' Or '$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <!-- 编辑器里 Ctrl+. 的代码风格建议用 .editorconfig，但不在构建时强制（EnforceCodeStyleInBuild 保持关闭），
+         现有代码不会因此多出警告；以后要收紧再打开 -->
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisMode>Default</AnalysisMode>
+    <!-- 直接引用的 NuGet 包有已知漏洞时，构建给出警告（不会让构建失败）。间接依赖的漏洞太多会淹没正常构建输出，
+         改由 CI 里的 dotnet list package 漏洞检查（带 include-transitive 参数）单独检查 -->
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>direct</NuGetAuditMode>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

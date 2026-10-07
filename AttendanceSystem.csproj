@@ -2,11 +2,9 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Nullable / ImplicitUsings / LangVersion 等通用设置在仓库根目录的 Directory.Build.props 里统一配置 -->
     <RootNamespace>AttendanceSystem</RootNamespace>
     <AssemblyName>AttendanceSystem</AssemblyName>
-    <LangVersion>latest</LangVersion>
     <!-- 嵌套的 AppBoxCore.EFCore、AttendanceSystem.Tests 都是独立项目，不应被本项目当成源码编译进来 -->
     <DefaultItemExcludes>$(DefaultItemExcludes);AppBoxCore.EFCore\**;AttendanceSystem.Tests\**</DefaultItemExcludes>
   </PropertyGroup>

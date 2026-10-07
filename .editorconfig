@@ -1,0 +1,75 @@
+# EditorConfig：统一编辑器行为（VS / VS Code / Rider 都认）。
+# 原则：只约定"不会改变现有代码含义"的基础格式；规则严重度全部是 suggestion，
+# 不会让现有构建报警告或报错——后续要收紧，在这里把 suggestion 改成 warning 即可。
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# 换行符这里不强制：仓库里统一存 LF（见 .gitattributes），Windows 本机检出可能是 CRLF，两边都允许。
+
+[*.{csproj,props,targets,slnx,json,yml,yaml,xml,config,resx}]
+indent_size = 2
+
+[*.{cshtml,html,js,css}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.sh]
+end_of_line = lf
+
+[*.{ps1,cmd,bat}]
+end_of_line = crlf
+
+# ── C# 规范 ──────────────────────────────────────────────────────────────
+[*.cs]
+# using 排序：System 开头的放前面，不分组之间加空行
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+
+# 命名：接口 I 开头；类型/方法/属性 PascalCase；私有字段 _camelCase；常量 PascalCase
+dotnet_naming_rule.interfaces_start_with_i.symbols = interfaces
+dotnet_naming_rule.interfaces_start_with_i.style = begins_with_i
+dotnet_naming_rule.interfaces_start_with_i.severity = suggestion
+dotnet_naming_symbols.interfaces.applicable_kinds = interface
+dotnet_naming_style.begins_with_i.required_prefix = I
+dotnet_naming_style.begins_with_i.capitalization = pascal_case
+
+dotnet_naming_rule.types_pascal_case.symbols = types
+dotnet_naming_rule.types_pascal_case.style = pascal_case
+dotnet_naming_rule.types_pascal_case.severity = suggestion
+dotnet_naming_symbols.types.applicable_kinds = class, struct, enum, delegate
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_camel_case
+dotnet_naming_rule.private_fields_underscore.severity = suggestion
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+# 代码风格偏好（均为 suggestion）
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_using_directive_placement = outside_namespace:suggestion
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_prefer_braces = when_multiline:suggestion
+csharp_new_line_before_open_brace = all
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_prefer_auto_properties = true:suggestion
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+
+# 迁移文件由 EF 工具生成，不检查风格
+[Migrations/**.cs]
+generated_code = true
+dotnet_analyzer_diagnostic.severity = none
