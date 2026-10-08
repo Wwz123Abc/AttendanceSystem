@@ -339,4 +339,15 @@ public class AbsentAndPunchRuleTests : SqliteTestBase
             Assert.True(u.IsExemptFromAttendance());
         }
     }
+
+    [Fact]
+    public void 用工性质_只有普通员工是临时工_其余角色都是正式工()
+    {
+        foreach (var r in Enum.GetValues<UserRole>())
+        {
+            var u = U("T", "测试"); u.Role = r;
+            Assert.Equal(r == UserRole.Employee ? "临时工" : "正式工", u.EmploymentTypeText);
+            Assert.Equal(u.EmploymentTypeText == "正式工", u.Role != UserRole.Employee && u.IsExemptFromAttendance());   // 用工性质和免考勤同一口径
+        }
+    }
 }

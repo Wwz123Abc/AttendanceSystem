@@ -124,6 +124,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
         Members = await db.Users
             .Include(u => u.AttendanceGroup)
             .Include(u => u.Department)
+            .NeedingAttendance()   // 免考勤的正式工不用排班，不在排班表里显示（也就不会被算成"漏排班"）
             .Where(u => u.IsActive && u.AttendanceGroupId != null && SelectedGroupIds.Contains(u.AttendanceGroupId.Value)
                      && (visibleIds == null || (u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value))))
             .OrderBy(u => u.AttendanceGroup!.GroupName).ThenBy(u => u.RealName)
@@ -134,7 +135,8 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
         // 部门范围过滤，不然共用组里别的分公司员工的排班也会被聚合进这张表里显示出来
         var rows = await db.ShiftAssignments
             .Where(a => a.WorkDate >= ViewStart && a.WorkDate <= ViewEnd
-                     && a.User.IsActive && a.User.AttendanceGroupId != null
+                     && a.User.IsActive && a.User.Role == AttendanceSystem.Models.Enums.UserRole.Employee && !a.User.IsAttendanceExempt
+                     && a.User.AttendanceGroupId != null
                      && SelectedGroupIds.Contains(a.User.AttendanceGroupId.Value)
                      && (visibleIds == null || (a.User.DepartmentId != null && visibleIds.Contains(a.User.DepartmentId.Value))))
             .Select(a => new { a.WorkDate, a.ShiftSchedule.ShiftName, a.ShiftSchedule.Color, a.User.RealName })
@@ -181,6 +183,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
         var members = await db.Users
             .Include(u => u.AttendanceGroup)
             .Include(u => u.Department)
+            .NeedingAttendance()   // 免考勤的正式工不进排班导出
             .Where(u => u.IsActive && u.AttendanceGroupId != null && selectedGroupIds.Contains(u.AttendanceGroupId.Value)
                      && (visibleIds == null || (u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value))))
             .OrderBy(u => u.AttendanceGroup!.GroupName).ThenBy(u => u.RealName)
@@ -449,7 +452,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
 
             // 勾了“所选组全部成员”就取选中组的全部在职员工；否则用勾选的人（可跨组混排）
             List<int> userIds = AssignAll
-                ? await db.Users.Where(u => u.IsActive && u.AttendanceGroupId != null
+                ? await db.Users.NeedingAttendance().Where(u => u.IsActive && u.AttendanceGroupId != null   // 免考勤的正式工不排班
                                          && ctxGroupIds.Contains(u.AttendanceGroupId.Value))
                                 .Select(u => u.Id).ToListAsync()
                 : AssignUserIds.Distinct().ToList();

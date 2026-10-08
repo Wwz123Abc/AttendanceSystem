@@ -199,7 +199,7 @@
                                     <td data-label="部门" class="small">@(u.Department?.DeptName ?? "—")</td>
                                     <td data-label="角色"><span class="badge bg-secondary">@u.Role.ToDisplayName()</span></td>
                                     <td class="stack-hide">
-                                        @if (u.Role is UserRole.Admin or UserRole.Clerk)
+                                        @if (u.Role != UserRole.Employee)
                                         { <span class="badge bg-primary">正式工</span> }
                                         else
                                         { <span class="badge bg-light text-muted">临时工</span> }
@@ -440,7 +440,7 @@
                                 <option value="Clerk">文员</option>
                                 <option value="Admin">管理员</option>
                             </select>
-                            <div class="form-text">本系统"管理员""文员"是正式工，其余角色均为临时工。</div>
+                            <div class="form-text">本系统"管理员""文员""主管""班组长"都是正式工（免考勤，不进看板和报表），只有"普通员工"是临时工。</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">部门 <span class="text-danger" id="fDeptIdReq">*</span></label>
