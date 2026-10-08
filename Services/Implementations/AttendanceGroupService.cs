@@ -1,12 +1,16 @@
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
 
 /// <summary>考勤组与部门联动：查部门跟随的考勤组、给考勤组配置跟随部门并批量归组。</summary>
-public class AttendanceGroupService(AttendanceDbContext db) : IAttendanceGroupService
+public class AttendanceGroupService(AttendanceDbContext db, TimeProvider? timeProvider = null) : IAttendanceGroupService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+
     public Task<int?> GetGroupIdForDepartmentAsync(int deptId)
         => db.Departments.Where(d => d.Id == deptId).Select(d => d.AttendanceGroupId).FirstOrDefaultAsync();
 
@@ -36,7 +40,7 @@ public class AttendanceGroupService(AttendanceDbContext db) : IAttendanceGroupSe
                 .Distinct()
                 .ToList();
             group.CompanyName = companyNames.Count > 0 ? string.Join("、", companyNames) : null;
-            group.UpdatedAt   = DateTime.Now;
+            group.UpdatedAt   = clock.LocalNow();
         }
 
         // 长期跟随：这些部门现有的员工立即批量归入本组（以后新入职/调入这些部门的员工，
@@ -49,7 +53,7 @@ public class AttendanceGroupService(AttendanceDbContext db) : IAttendanceGroupSe
         {
             if (u.AttendanceGroupId == groupId) continue;
             u.AttendanceGroupId = groupId;
-            u.UpdatedAt         = DateTime.Now;
+            u.UpdatedAt         = clock.LocalNow();
             moved++;
         }
 

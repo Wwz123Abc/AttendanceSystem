@@ -7,6 +7,7 @@ using AttendanceSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -67,7 +68,7 @@ public class CrossMidnightPunchTests : SqliteTestBase
         var ex = await TrySubmitOvertimeAsync(uid, new TimeOnly(sh, sm), new TimeOnly(eh, em));
         if (rejected)
         {
-            var ioe = Assert.IsType<InvalidOperationException>(ex);
+            var ioe = Assert.IsType<BusinessException>(ex);
             Assert.StartsWith("加班时间不能和上班时间重叠", ioe.Message);
             Assert.Contains("前一天", ioe.Message);
         }
@@ -318,10 +319,10 @@ public class CrossMidnightPunchTests : SqliteTestBase
         var (uid, _) = SeedWeekWorld();
         using var db = CreateContext();
         var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
-        var wrongMonth = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var wrongMonth = await Assert.ThrowsAsync<BusinessException>(() =>
             svc.AdminAdjustPunchAsync(uid, Mon, new DateTime(2026, 8, 7, 8, 30, 0), null, null, "管理员"));
         Assert.Contains("请检查日期", wrongMonth.Message);
-        var reversed = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var reversed = await Assert.ThrowsAsync<BusinessException>(() =>
             svc.AdminAdjustPunchAsync(uid, Mon, Mon.ToDateTime(new TimeOnly(17, 0)), Mon.ToDateTime(new TimeOnly(8, 0)), null, "管理员"));
         Assert.Contains("下班时间必须晚于上班时间", reversed.Message);
         // 夜班下班在第二天：允许
@@ -343,7 +344,7 @@ public class CrossMidnightPunchTests : SqliteTestBase
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         // 没有上班卡、班次跨天、06:00 早于 20:00 的上班时间 → 顺延到"明天 06:00"——不管现在几点，
         // 明天都还没到，这是本条 bug 的核心场景
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.PunchReplenishment,
             PunchDate = today, PunchType = PunchType.ClockOut, PunchTime = new TimeOnly(6, 0),
@@ -385,7 +386,7 @@ public class CrossMidnightPunchTests : SqliteTestBase
         using (var db = CreateContext())
         {
             var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateAttendanceAfterApprovalAsync(id));
+            var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.UpdateAttendanceAfterApprovalAsync(id));
             Assert.Contains("还没到", ex.Message);
         }
 
@@ -428,7 +429,7 @@ public class CrossMidnightPunchTests : SqliteTestBase
         var att = new AttendanceService(check, AppOptions, NullLogger<AttendanceService>.Instance);
         var svc = new ApprovalService(check, att, AppOptions);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.HandleApprovalAsync(supervisorId,
+        await Assert.ThrowsAsync<BusinessException>(() => svc.HandleApprovalAsync(supervisorId,
             new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true }));
 
         // 不清空的话，同一上下文再查这张单，读到的是内存里"改到一半"的实例（已通过）——

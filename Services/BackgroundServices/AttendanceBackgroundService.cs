@@ -25,9 +25,13 @@ namespace AttendanceSystem.Services.BackgroundServices;
 /// </summary>
 public class AttendanceBackgroundService(
     IServiceScopeFactory scopeFactory,
-    ILogger<AttendanceBackgroundService> logger)
+    ILogger<AttendanceBackgroundService> logger,
+    TimeProvider? timeProvider = null)
     : BackgroundService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+
     // 记录几类任务"上次执行的时间"，避免在同一时间窗内重复跑
     private DateTime _lastAbsentDate            = DateTime.MinValue;
     private DateTime _lastSummaryDate           = DateTime.MinValue;
@@ -41,7 +45,7 @@ public class AttendanceBackgroundService(
         {
             try
             {
-                var now = DateTime.Now;
+                var now = clock.LocalNow();
 
                 // 到 23:55-23:59 且今天还没标记过 → 标记旷工。窗口从原来的 23:58-23:59（2 分钟）
                 // 放宽到 5 分钟，给一次任务内部瞬时失败（比如数据库短暂抖动）留出重试机会——
@@ -166,16 +170,9 @@ public class AttendanceBackgroundService(
                     UserId           = user.Id,
                     WorkDate         = today,
                     AttendanceStatus = AttendanceStatus.Absent,
-                    UpdatedAt        = DateTime.Now
+                    UpdatedAt        = clock.LocalNow()
                 });
-                db.Notifications.Add(new Notification
-                {
-                    UserId           = user.Id,
-                    Title            = "今日旷工提醒",
-                    Content          = $"您今日（{today:MM/dd}）未打卡，已被标记为旷工，如有异议请提交补卡申请",
-                    NotificationType = NotificationTypes.PunchReminder,
-                    CreatedAt        = DateTime.Now
-                });
+                AddPunchReminder(db, user.Id, "今日旷工提醒", $"您今日（{today:MM/dd}）未打卡，已被标记为旷工，如有异议请提交补卡申请");
                 marked++;
             }
             else if (record.ClockInTime is null && record.ClockOutTime is not null)
@@ -186,15 +183,8 @@ public class AttendanceBackgroundService(
                 if (record.AttendanceStatus != AttendanceStatus.NotPunched)
                 {
                     record.AttendanceStatus = AttendanceStatus.NotPunched;
-                    record.UpdatedAt        = DateTime.Now;
-                    db.Notifications.Add(new Notification
-                    {
-                        UserId           = user.Id,
-                        Title            = "上班未打卡提醒",
-                        Content          = $"您今日（{today:MM/dd}）未打上班卡，如有异议请提交补卡申请",
-                        NotificationType = NotificationTypes.PunchReminder,
-                        CreatedAt        = DateTime.Now
-                    });
+                    record.UpdatedAt        = clock.LocalNow();
+                    AddPunchReminder(db, user.Id, "上班未打卡提醒", $"您今日（{today:MM/dd}）未打上班卡，如有异议请提交补卡申请");
                     marked++;
                 }
             }
@@ -205,17 +195,10 @@ public class AttendanceBackgroundService(
                 // 重启重复执行时）已经处理过，不再重复发（2026-09-24 审查修复）
                 if (record.AttendanceStatus != AttendanceStatus.Absent)
                 {
-                    db.Notifications.Add(new Notification
-                    {
-                        UserId           = user.Id,
-                        Title            = "今日旷工提醒",
-                        Content          = $"您今日（{today:MM/dd}）未打上班卡，已被标记为旷工，如有异议请提交补卡申请",
-                        NotificationType = NotificationTypes.PunchReminder,
-                        CreatedAt        = DateTime.Now
-                    });
+                    AddPunchReminder(db, user.Id, "今日旷工提醒", $"您今日（{today:MM/dd}）未打上班卡，已被标记为旷工，如有异议请提交补卡申请");
                 }
                 record.AttendanceStatus = AttendanceStatus.Absent;
-                record.UpdatedAt        = DateTime.Now;
+                record.UpdatedAt        = clock.LocalNow();
                 marked++;
             }
             else if (record.ClockOutTime is null)
@@ -234,18 +217,24 @@ public class AttendanceBackgroundService(
 
                 // 打了上班卡但没打下班卡 → 未打卡，并发提醒
                 record.AttendanceStatus = AttendanceStatus.NotPunched;
-                record.UpdatedAt        = DateTime.Now;
-                db.Notifications.Add(new Notification
-                {
-                    UserId           = user.Id,
-                    Title            = "下班未打卡提醒",
-                    Content          = $"您今日（{today:MM/dd}）未打下班卡，如有异议请提交补卡申请",
-                    NotificationType = NotificationTypes.PunchReminder,
-                    CreatedAt        = DateTime.Now
-                });
+                record.UpdatedAt        = clock.LocalNow();
+                AddPunchReminder(db, user.Id, "下班未打卡提醒", $"您今日（{today:MM/dd}）未打下班卡，如有异议请提交补卡申请");
             }
         }
 
+        marked += await MarkStaleNightShiftRecordsAsync(db, users, today);
+
+        await db.SaveChangesAsync();
+        logger.LogInformation("旷工标记完成，日期：{Date}，标记 {Count} 人", today, marked);
+    }
+
+    /// <summary>
+    /// 补标"夜班一直没打下班卡"的历史记录（早于 <paramref name="today"/>、跨天班次、只有上班卡），返回补标的人次。
+    /// 从 <see cref="MarkAbsentAsync"/> 里原样搬出，逻辑没有改动。
+    /// </summary>
+    private async Task<int> MarkStaleNightShiftRecordsAsync(AttendanceDbContext db, List<User> users, DateOnly today)
+    {
+        var marked = 0;
         // 昨天及更早，是不是有夜班（跨天班次）打了上班卡、一直没打下班卡的记录——检查当天因为
         // "人可能还在上班、要到第二天凌晨才下班"特意跳过了（见上面 IsCrossDay 那个 continue）。
         // 现在已经过了至少一整天，如果还是没有下班卡，说明是真的漏打了（忘记打卡/离职/设备故障），
@@ -253,7 +242,7 @@ public class AttendanceBackgroundService(
         // 也永远收不到提醒（因为后续每天的检查只看"今天"的记录，不会再回头看这条）。
         // 用 "< today" 而不是只查 "== 昨天"：服务如果连续停机/宕机跨越了两个以上的午夜，早于昨天的
         // 未闭合记录不会因为只被检查漏过一次就从此再也追不上，这里会把它们都一起补标。
-        var activeUserIds = users.Select(u => u.Id).ToHashSet();   // 复用上面已查好的"当前在职员工"名单
+        var activeUserIds = users.Select(u => u.Id).ToHashSet();   // 复用 MarkAbsentAsync 已查好的"当前在职员工"名单
         var openRecords = (await db.AttendanceRecords
             .Where(r => r.WorkDate < today && r.WorkDate >= today.AddDays(-60)   // 加下限：更早的不再每晚全表扫一遍（停机几天的追赶用 60 天足够）
                      && r.ClockInTime != null && r.ClockOutTime == null
@@ -282,22 +271,24 @@ public class AttendanceBackgroundService(
                     continue;
 
                 record.AttendanceStatus = AttendanceStatus.NotPunched;
-                record.UpdatedAt        = DateTime.Now;
-                db.Notifications.Add(new Notification
-                {
-                    UserId           = record.UserId,
-                    Title            = "下班未打卡提醒",
-                    Content          = $"您 {record.WorkDate:MM/dd} 的夜班一直未打下班卡，如有异议请提交补卡申请",
-                    NotificationType = NotificationTypes.PunchReminder,
-                    CreatedAt        = DateTime.Now
-                });
+                record.UpdatedAt        = clock.LocalNow();
+                AddPunchReminder(db, record.UserId, "下班未打卡提醒", $"您 {record.WorkDate:MM/dd} 的夜班一直未打下班卡，如有异议请提交补卡申请");
                 marked++;
             }
         }
-
-        await db.SaveChangesAsync();
-        logger.LogInformation("旷工标记完成，日期：{Date}，标记 {Count} 人", today, marked);
+        return marked;
     }
+
+    /// <summary>给员工发一条"打卡提醒"类通知（旷工/缺卡）。</summary>
+    private void AddPunchReminder(AttendanceDbContext db, int userId, string title, string content)
+        => db.Notifications.Add(new Notification
+        {
+            UserId           = userId,
+            Title            = title,
+            Content          = content,
+            NotificationType = NotificationTypes.PunchReminder,
+            CreatedAt        = clock.LocalNow()
+        });
 
     /// <summary>调用考勤服务生成某月汇总。</summary>
     private async Task GenerateSummaryAsync(int year, int month)
@@ -347,7 +338,7 @@ public class AttendanceBackgroundService(
         var db         = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
         var deptScope  = scope.ServiceProvider.GetRequiredService<IDeptScopeService>();
 
-        var now    = DateTime.Now;
+        var now    = clock.LocalNow();
         var cutoff = now.AddHours(-4);
         var openRequests = await db.ApprovalRequests
             .Where(r => (r.ApprovalStatus == ApprovalStatus.Pending || r.ApprovalStatus == ApprovalStatus.InProgress)
@@ -432,7 +423,7 @@ public class AttendanceBackgroundService(
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
-        var cutoff = DateTime.Now.AddDays(-7);
+        var cutoff = clock.LocalNow().AddDays(-7);
         var deleted = await db.Notifications
             .Where(n => n.NotificationType == NotificationTypes.ApprovalPending && n.Title == ReminderTitle && n.IsRead && n.CreatedAt < cutoff)
             .ExecuteDeleteAsync();
@@ -442,7 +433,7 @@ public class AttendanceBackgroundService(
     private async Task CleanupZKDeviceDataAsync()
     {
         const int retentionDays = 30;
-        var cutoff = DateTime.Now.AddDays(-retentionDays);
+        var cutoff = clock.LocalNow().AddDays(-retentionDays);
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();

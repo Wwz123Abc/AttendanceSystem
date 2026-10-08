@@ -34,14 +34,19 @@ public interface IAttendanceService
     Task<List<AttendanceRecordDto>> GetPersonalAttendanceAsync(PersonalAttendanceQueryDto query);
     /// <summary>按部门/考勤组查询考勤记录列表。<paramref name="deptIds"/> 非空时额外收窄到这批部门内
     /// （分公司管理员范围过滤，不受限管理员不传）。</summary>
-    Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto query, HashSet<int>? deptIds = null);
+    Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto query, HashSet<int>? deptIds = null, CancellationToken ct = default);
     /// <summary>获取某员工指定月份的汇总（含每日明细）。</summary>
     Task<MonthlySummaryDto?>       GetMonthlySummaryAsync(int userId, int year, int month);
     /// <summary>获取某员工指定月份的排班安排（“我的排班”页用，方便员工自己查看上班时间）。</summary>
     Task<List<MyScheduleDto>>      GetMyScheduleAsync(int userId, int year, int month);
+    /// <summary>按日期段查某员工的排班（薪资周期不是自然月，"我的日历"用这个）。</summary>
+    Task<List<MyScheduleDto>>      GetMyScheduleAsync(int userId, DateOnly start, DateOnly end);
+    /// <summary>某员工在 <paramref name="start"/>~<paramref name="end"/> 的发薪汇总行（跟"发薪考勤汇总表"同一套算法，
+    /// 员工页面上的总工时 = 这里的 PayableHours）；免考勤的账号没有这一行，返回 null。</summary>
+    Task<TemplateReportRowDto?>    GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default);
     /// <summary>获取部门/考勤组指定月份的汇总列表。<paramref name="scopeDeptIds"/> 非空时额外收窄到这批
     /// 部门内（分公司管理员范围过滤，不受限管理员不传）。</summary>
-    Task<List<MonthlySummaryDto>>  GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null);
+    Task<List<MonthlySummaryDto>>  GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null, CancellationToken ct = default);
     /// <summary>生成/重算指定月份的考勤汇总；onlyUserIds 不为空时只重算这批人（审批回写/手动补卡/分公司管理员
     /// 批量重算范围内员工时用，一次调用批量处理，避免调用方自己逐人循环调用导致的重复查库）。</summary>
     Task                           GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null);
@@ -51,12 +56,12 @@ public interface IAttendanceService
     Task                           EnsureMonthlySummaryFreshAsync(int userId, int year, int month);
     /// <summary>今日考勤看板统计（出勤、缺勤、迟到等）。<paramref name="deptIds"/> 非空时只统计部门在这个
     /// 集合内的员工——分公司管理员登录时用来把看板收窄到自己管理范围内，不受限管理员不传（看全公司）。</summary>
-    Task<AttendanceStatsDto>       GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null);
+    Task<AttendanceStatsDto>       GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default);
     /// <summary>
     /// 看板下钻：某统计类别（total/present/absent/late/onleave/notpunched）对应的具体人员名单。
     /// 分类口径与 <see cref="GetTodayStatsAsync"/> 完全一致，保证卡片数字和点开的名单条数对得上。
     /// </summary>
-    Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null);
+    Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default);
     /// <summary>获取某员工某天的排班。</summary>
     Task<ShiftAssignment?>         GetShiftAssignmentAsync(int userId, DateOnly date);
     /// <summary>审批通过后回写对应考勤记录（补卡/请假）。</summary>
@@ -72,11 +77,11 @@ public interface IAttendanceService
     /// deptIds 为空/不传 = 不筛选（导出全公司）；传了就只统计这些部门编号里的员工
     /// （页面上是一棵"公司/部门"合并树，勾大范围的公司节点会自动展开成它下面所有部门的编号）。
     /// </summary>
-    Task<TemplateReportResultDto>  GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds);
+    Task<TemplateReportResultDto>  GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default);
     /// <summary>
     /// 取"打卡时间表"导出用的数据：统计周期内，指定部门范围（含在职员工+期间内曾有记录的人）
     /// 每个人每天的打卡明细（上下班时间、工时、迟到等），按工号、日期排序。
     /// deptIds 为空/不传 = 不筛选（全公司），传了就只统计这些部门编号里的员工。
     /// </summary>
-    Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds);
+    Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default);
 }

@@ -6,6 +6,7 @@ using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using AttendanceSystem.Models.DTOs;
 
 namespace AttendanceSystem.Controllers;
 
@@ -26,12 +27,12 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
         [FromQuery] int year, [FromQuery] int month)
     {
         var rangeError = ValidateYearMonth(year, month);
-        if (rangeError != null) return BadRequest(new { Success = false, Message = rangeError });
+        if (rangeError != null) return BadRequest(ApiResponse.Failed(rangeError));
 
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         deptId = await deptScopeService.ResolveEffectiveDeptIdAsync(cu, deptId);
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
-        var summaries = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month, visibleIds);  // 取数据
+        var summaries = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month, visibleIds, HttpContext.RequestAborted);  // 取数据
         var bytes     = ExcelExportHelper.ExportMonthlySummary(summaries, year, month);                      // 生成 Excel
         var fileName  = $"月度考勤汇总_{year}年{month:D2}月.xlsx";
         // 文件名含中文，直接交给 File() 处理即可（它会自己按标准编码）；不能先 UrlEncode，不然下载下来是 %e5%91%98… 的乱码
@@ -46,12 +47,12 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
         // userId 是路由参数，受限管理员完全可以直接改 URL 里的 id 导出别的分公司员工的考勤明细，
         // 这里必须先校验目标员工在不在自己范围内
         var targetDeptId = await db.Users.Where(u => u.Id == userId).Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
-        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, targetDeptId))
+        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), targetDeptId))
             return Forbid();
 
         var summary = await attendanceService.GetMonthlySummaryAsync(userId, year, month);
         if (summary is null)   // 还没生成汇总，导不出
-            return NotFound(new { Success = false, Message = "未找到对应汇总数据，请先生成月度汇总" });
+            return NotFound(ApiResponse.Failed("未找到对应汇总数据，请先生成月度汇总"));
 
         var bytes    = ExcelExportHelper.ExportDailyStatusReport(summary);
         var fileName = $"{summary.RealName}_每日考勤_{year}年{month:D2}月.xlsx";
@@ -65,9 +66,9 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
         [FromQuery] int year, [FromQuery] int month)
     {
         var rangeError = ValidateYearMonth(year, month);
-        if (rangeError != null) return BadRequest(new { Success = false, Message = rangeError });
+        if (rangeError != null) return BadRequest(ApiResponse.Failed(rangeError));
 
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         // 只判 IsScoped 挡不住"没被设置范围、但角色只是文员"的账号（IsScoped 恒为 false）——
         // 这类账号本不该能一次性重算全公司的月度汇总，跟 AdminController 里同款校验用同一套口径
         if (cu.Role == UserRole.Admin && !cu.IsScoped)
@@ -87,7 +88,7 @@ public class ReportController(IAttendanceService attendanceService, IDeptScopeSe
             // 考勤记录/排班/假期表，人数一多这个接口会明显变慢）
             await attendanceService.GenerateMonthlySummaryAsync(year, month, userIds);
         }
-        return Ok(new { Success = true, Message = $"{year}年{month}月考勤汇总已生成" });
+        return Ok(ApiResponse.Succeeded($"{year}年{month}月考勤汇总已生成"));
     }
 
     /// <summary>非法的 year/month（比如 month=13）传下去会在构造 DateOnly 时直接抛异常报 500，这里提前挡住。</summary>

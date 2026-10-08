@@ -7,6 +7,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -68,12 +69,21 @@ public class AccountAndPermissionRuleTests : SqliteTestBase
     {
         using var db = CreateContext();
         var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
-        var ours = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ours = await Assert.ThrowsAsync<BusinessException>(
             () => svc.AdminAdjustPunchAsync(1, Mon, null, null, new string('x', 101), null));
         Assert.Equal(typeof(AttendanceService).Assembly, ours.TargetSite?.DeclaringType?.Assembly);
 
         var framework = Assert.Throws<InvalidOperationException>(() => new List<int>().First());   // 框架自己抛的同一个类型
         Assert.NotEqual(typeof(AttendanceService).Assembly, framework.TargetSite?.DeclaringType?.Assembly);
+    }
+
+    [Fact]
+    public void BusinessException_是业务提示_AGENT文案直接放行_原有的InvalidOperationException捕获照常接得住()
+    {
+        var biz = new BusinessException("工号已存在");
+        Assert.True(AgentErrorText.IsBusinessMessage(biz));        // 没抛出过（没有 TargetSite）也认
+        Assert.Equal("工号已存在", AgentErrorText.ForUser(biz));
+        Assert.IsAssignableFrom<InvalidOperationException>(biz);   // 老的 catch (InvalidOperationException) 不受影响
     }
 
     // ── ⑧ 自助登记：姓名为空（模型绑定给 null）时给出正确提示 ───────────
@@ -83,11 +93,35 @@ public class AccountAndPermissionRuleTests : SqliteTestBase
     {
         using var db = CreateContext();
         var svc = new EmployeeRegistrationService(db, new DeptScopeService(db));
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitAsync(new SubmitRegistrationDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitAsync(new SubmitRegistrationDto
         {
             RealName = null!, Phone = "13800000000", IdNumber = "110101199001011234"
         }));
         Assert.Equal("请填写姓名", ex.Message);
+    }
+
+    // ── 岗位选项：扫码登记页、服务端校验、后台新增员工页共用同一份，新增了"其他" ──
+
+    [Fact]
+    public void 岗位选项_包含其他_且排在最后()
+    {
+        var all = AttendanceSystem.Services.Interfaces.IEmployeeRegistrationService.AllowedPositions;
+        Assert.Equal("其他", all[^1]);
+        Assert.Contains("普工", all);
+    }
+
+    [Theory]
+    [InlineData("其他", false)]            // 通过岗位校验，后面才因为别的必填项（劳务公司）停下
+    [InlineData("随便写的岗位", true)]      // 不在选项里：岗位校验就拦下
+    public async Task 扫码登记_岗位必须是选项之一_其他可以(string position, bool rejectedByPosition)
+    {
+        using var db = CreateContext();
+        var svc = new EmployeeRegistrationService(db, new DeptScopeService(db));
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitAsync(new SubmitRegistrationDto
+        {
+            RealName = "测试", Phone = "13800000000", IdNumber = "110101199001011234", Position = position
+        }));
+        Assert.Equal(rejectedByPosition, ex.Message == "请选择正确的岗位选项");
     }
 
     // ── 角色层级：CurrentUser.CanManageAccount ─────────────────────────────

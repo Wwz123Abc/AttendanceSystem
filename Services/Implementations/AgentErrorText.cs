@@ -1,3 +1,5 @@
+using AttendanceSystem.Models.Exceptions;
+
 namespace AttendanceSystem.Services.Implementations;
 
 /// <summary>
@@ -13,8 +15,9 @@ public static class AgentErrorText
 
     /// <summary>这个异常的原文是不是"本程序自己抛出的、给用户看的业务提示"。</summary>
     public static bool IsBusinessMessage(Exception ex) =>
-        ex is InvalidOperationException or KeyNotFoundException
-        && ex.TargetSite?.DeclaringType?.Assembly == typeof(AgentErrorText).Assembly;
+        ex is BusinessException
+        || (ex is InvalidOperationException or KeyNotFoundException
+            && ex.TargetSite?.DeclaringType?.Assembly == typeof(AgentErrorText).Assembly);
 
     /// <summary>业务提示原样返回；其它异常返回"通用文案 + 错误编号/时间/类型"，完整异常按同一个编号记进日志
     /// （用户把编号发给开发人员就能查到原因，见 <see cref="AttendanceSystem.Helpers.ErrorReport"/>）。</summary>

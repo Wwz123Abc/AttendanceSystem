@@ -9,6 +9,8 @@ using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
 
@@ -23,8 +25,12 @@ public class UserService(
     IZKDeviceSyncService zkDeviceSyncService,
     IOptions<AppSettingsOptions> appOptions,
     IDeptScopeService deptScopeService,
-    ILogger<UserService> logger) : IUserService
+    ILogger<UserService> logger,
+    TimeProvider? timeProvider = null) : IUserService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+
     /// <summary>角色层级校验：操作者（<paramref name="actingUserId"/>）能不能对目标账号的现状执行
     /// 重置密码/停用/启用/拉黑/移出黑名单/删除这类高风险操作。跟 <see cref="CurrentUser.CanManageAccount"/>
     /// 用同一个公式（<see cref="CurrentUser.CanManageAccountCore"/>），从数据库现读操作者当前的角色和范围，
@@ -37,9 +43,9 @@ public class UserService(
     {
         var acting = await db.Users.AsNoTracking().Where(u => u.Id == actingUserId)
             .Select(u => new { u.Role, u.ScopedDepartmentId }).FirstOrDefaultAsync()
-            ?? throw new InvalidOperationException("操作者账号不存在");
+            ?? throw new BusinessException("操作者账号不存在");
         if (!CurrentUser.CanManageAccountCore(acting.Role, acting.ScopedDepartmentId, targetRole, targetScopedDepartmentId))
-            throw new InvalidOperationException("无权操作该账号（角色层级限制）");
+            throw new BusinessException("无权操作该账号（角色层级限制）");
     }
 
     /// <summary>校验工号+密码。成功返回用户；工号/密码错、账号已停用、或账号被临时锁定，统一返回 null
@@ -84,7 +90,7 @@ public class UserService(
                 employeeNo, matchedCandidate, passwordOk ? "成功" : "失败");
 
         // 连续输错密码次数太多，账号被临时锁定期间——不管这次密码对不对，一律按失败处理
-        if (user is not null && user.LockedUntil > DateTime.Now)
+        if (user is not null && user.LockedUntil > clock.LocalNow())
             return null;
 
         // 走到这里如果 LockedUntil 还有值，说明上一轮锁定已经过期：失败次数重新从 0 算。
@@ -104,7 +110,7 @@ public class UserService(
                 user.FailedLoginCount++;
                 if (user.FailedLoginCount >= appOptions.Value.MaxFailedLoginAttempts)
                 {
-                    user.LockedUntil = DateTime.Now.AddMinutes(appOptions.Value.LoginLockoutMinutes);
+                    user.LockedUntil = clock.LocalNow().AddMinutes(appOptions.Value.LoginLockoutMinutes);
                     logger.LogWarning("账号 {EmployeeNo} 连续登录失败 {Count} 次，临时锁定 {Minutes} 分钟",
                         employeeNo, user.FailedLoginCount, appOptions.Value.LoginLockoutMinutes);
                 }
@@ -122,7 +128,7 @@ public class UserService(
 
         user.FailedLoginCount = 0;      // 登录成功，失败计数清零
         user.LockedUntil      = null;
-        user.LastLoginAt      = DateTime.Now;   // 记录这次登录时间
+        user.LastLoginAt      = clock.LocalNow();   // 记录这次登录时间
 
         // 老格式哈希（迭代次数只有新格式的 1/60）登录成功就顺手升级成新格式，不用等管理员重置密码
         // ——用户完全无感知，密码本身不变，只是重新用更高强度的迭代次数存一遍。
@@ -141,11 +147,11 @@ public class UserService(
     private static void ValidateEmployeeNoFormat(string employeeNo)
     {
         if (string.IsNullOrWhiteSpace(employeeNo))
-            throw new InvalidOperationException("请填写工号");
+            throw new BusinessException("请填写工号");
         if (employeeNo.Trim().Length > 50)
-            throw new InvalidOperationException("工号不能超过 50 个字");
+            throw new BusinessException("工号不能超过 50 个字");
         if (!Regex.IsMatch(employeeNo.Trim(), @"^[A-Za-z0-9_-]+$"))
-            throw new InvalidOperationException("工号只能包含字母、数字、下划线和短横线");
+            throw new BusinessException("工号只能包含字母、数字、下划线和短横线");
     }
 
     /// <summary>创建员工（工号不能重复），对初始密码做哈希后保存，顺带把工号+姓名排进考勤机下发队列。
@@ -155,7 +161,7 @@ public class UserService(
         ValidateEmployeeNoFormat(user.EmployeeNo);
 
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo))
-            throw new InvalidOperationException($"工号 {user.EmployeeNo} 已存在");
+            throw new BusinessException($"工号 {user.EmployeeNo} 已存在");
 
         // 身份证号命中"已拉黑"人员（永不录用）就直接拒绝建档——黑名单是全公司共享的信息，
         // 换个工号/换个分公司重新建档也要能被拦下来；判定以身份证号为准，手机号不作为黑名单命中依据
@@ -163,12 +169,12 @@ public class UserService(
         // "确认扫码登记"两个入口都会调用这个方法，一起生效，不用各自重复实现。
         if (!string.IsNullOrWhiteSpace(user.IdNumber)
             && await db.Users.AnyAsync(u => u.IdNumber == user.IdNumber && u.IsBlacklisted))
-            throw new InvalidOperationException("该身份证号已被拉黑（永不录用），请联系总部处理");
+            throw new BusinessException("该身份证号已被拉黑（永不录用），请联系总部处理");
 
         user.PasswordHash       = HashPassword(plainPassword);   // 明文密码 → 哈希
         user.MustChangePassword = false;
-        user.CreatedAt          = DateTime.Now;
-        user.UpdatedAt          = DateTime.Now;
+        user.CreatedAt          = clock.LocalNow();
+        user.UpdatedAt          = clock.LocalNow();
 
         db.Users.Add(user);
         try
@@ -184,8 +190,8 @@ public class UserService(
             // 唯一索引冲突时，才对外报这个具体原因，否则一律用不误导人的通用提示。
             logger.LogWarning(ex, "新建员工 {EmployeeNo} 保存失败", user.EmployeeNo);
             if (ex.InnerException?.Message.Contains("EmployeeNo") == true)
-                throw new InvalidOperationException($"工号 {user.EmployeeNo} 刚被别人抢先用掉了，请重新生成工号或换一个再试");
-            throw new InvalidOperationException(AttendanceSystem.Helpers.ErrorReport.Describe(ex,
+                throw new BusinessException($"工号 {user.EmployeeNo} 刚被别人抢先用掉了，请重新生成工号或换一个再试");
+            throw new BusinessException(AttendanceSystem.Helpers.ErrorReport.Describe(ex,
                 $"新建员工 {user.EmployeeNo} 保存失败：数据库拒绝了这次写入（可能是某个字段过长、为空，或与已有数据冲突）"));
         }
 
@@ -235,7 +241,7 @@ public class UserService(
         // 新密码长度校验：页面上已经卡了"不少于 6 位"，但直接调这个方法（比如走 API）能绕开页面校验，
         // 这里补上权威兜底，不然能设出 1 位密码
         if (newPassword.Length < 6)
-            throw new InvalidOperationException("新密码不能少于 6 位");
+            throw new BusinessException("新密码不能少于 6 位");
 
         var user = await db.Users.FindAsync(userId);
         if (user is null || MatchCandidate(oldCandidates, user.PasswordHash) < 0)   // 原密码不对就拒绝
@@ -243,7 +249,7 @@ public class UserService(
 
         user.PasswordHash       = HashPassword(newPassword);
         user.MustChangePassword = false;   // 自己主动改过密码了，不用再强制跳改密码页
-        user.UpdatedAt          = DateTime.Now;
+        user.UpdatedAt          = clock.LocalNow();
         await db.SaveChangesAsync();
         return true;
     }
@@ -271,14 +277,14 @@ public class UserService(
             // 也是转换后的写法（2026-09-24）。
             password = NormalizeInput(newPassword);
             if (password.Length < 6)
-                throw new InvalidOperationException("新密码不能少于 6 位");
+                throw new BusinessException("新密码不能少于 6 位");
         }
 
         user.PasswordHash       = HashPassword(password);
         user.MustChangePassword = false;  // 不再强制改密码（2026-09-24 业务决定）；显式置 false 是为了清掉以前遗留的"需改密"标记
         user.FailedLoginCount   = 0;      // 重置密码顺带解除之前可能存在的登录锁定，不用等锁定自动过期
         user.LockedUntil        = null;
-        user.UpdatedAt          = DateTime.Now;
+        user.UpdatedAt          = clock.LocalNow();
         await db.SaveChangesAsync();
         return password;
     }
@@ -297,10 +303,10 @@ public class UserService(
         // 直属上级不能是员工本人：设成本人的话，没配审批人名单的组里第一级审批会派给他自己、自己批自己的单
         // （2026-10-07 第 18 轮审查；页面、接口、智能助手都走这个方法，这里统一拦）
         if (user.SupervisorUserId.HasValue && user.SupervisorUserId.Value == existing.Id)
-            throw new InvalidOperationException("直属上级不能是员工本人");
+            throw new BusinessException("直属上级不能是员工本人");
 
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo, user.Id))
-            throw new InvalidOperationException($"工号 {user.EmployeeNo} 已被其他员工占用");
+            throw new BusinessException($"工号 {user.EmployeeNo} 已被其他员工占用");
 
         var oldEmployeeNo = existing.EmployeeNo;   // 改工号的话，考勤机上旧工号那条记录要跟着清掉，不然会留一条没人对应的僵尸记录
 
@@ -324,7 +330,7 @@ public class UserService(
         existing.AllowRemotePunch       = user.AllowRemotePunch;
         existing.IsAttendanceExempt     = user.IsAttendanceExempt;
         // 注意：不在这里覆盖 Email。员工表单不含这个字段，若在这里赋值，每次编辑都会把数据库里已有的值冲成空。
-        existing.UpdatedAt          = DateTime.Now;
+        existing.UpdatedAt          = clock.LocalNow();
         await db.SaveChangesAsync();
         // 审批类角色（管理员/文员/主管/班组长）降成普通员工：他进不了"待我审批"页面了，名下没处理的审批单要像停用一样改派
         if (ApproverResolver.ApproverRoles.Contains(oldRole) && !ApproverResolver.ApproverRoles.Contains(existing.Role))
@@ -345,8 +351,8 @@ public class UserService(
         await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
         user.IsActive      = false;
-        user.DeactivatedAt = DateTime.Now;
-        user.UpdatedAt     = DateTime.Now;
+        user.DeactivatedAt = clock.LocalNow();
+        user.UpdatedAt     = clock.LocalNow();
         await db.SaveChangesAsync();
         await TryReassignPendingApprovalsAsync([user.Id]);
         await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
@@ -375,11 +381,11 @@ public class UserService(
         if (user is null) return false;
         await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
         if (user.IsBlacklisted)
-            throw new InvalidOperationException("该员工在黑名单中，请先「移出黑名单」再启用");
+            throw new BusinessException("该员工在黑名单中，请先「移出黑名单」再启用");
 
         user.IsActive      = true;
         user.DeactivatedAt = null;   // 重新启用，清空停用时间
-        user.UpdatedAt     = DateTime.Now;
+        user.UpdatedAt     = clock.LocalNow();
         await db.SaveChangesAsync();
         await TryPushToZKDeviceAsync(user);
         return true;
@@ -395,8 +401,8 @@ public class UserService(
 
         user.IsBlacklisted = true;
         user.IsActive      = false;   // 黑名单必然禁止登录
-        user.DeactivatedAt = DateTime.Now;
-        user.UpdatedAt     = DateTime.Now;
+        user.DeactivatedAt = clock.LocalNow();
+        user.UpdatedAt     = clock.LocalNow();
         await db.SaveChangesAsync();
         await TryReassignPendingApprovalsAsync([user.Id]);
         await TryDeleteFromZKDeviceAsync(user.EmployeeNo, user.Id);
@@ -411,7 +417,7 @@ public class UserService(
         await EnsureCanManageAsync(actingUserId, user.Role, user.ScopedDepartmentId);
 
         user.IsBlacklisted = false;
-        user.UpdatedAt     = DateTime.Now;
+        user.UpdatedAt     = clock.LocalNow();
         await db.SaveChangesAsync();
         return true;
     }
@@ -427,7 +433,7 @@ public class UserService(
         // 有考勤/打卡/申请历史的人不允许物理删除（删除会级联清空这些数据且无法恢复），只能停用。放在其它检查前面：
         // 这个人反正删不了，就别让管理员先白白去改审批人名单、改下属的上级（见 UserDeletionGuard）
         if (await UserDeletionGuard.HasHistoryDataAsync(db, userId))
-            throw new InvalidOperationException(UserDeletionGuard.BlockedMessage);
+            throw new BusinessException(UserDeletionGuard.BlockedMessage);
 
         // 先检查这个人是不是还挂在某个考勤组的"审批人"名单里——数据库不允许删除还被这样引用着的人
         var approverOfGroups = await db.AttendanceGroupApprovers
@@ -435,23 +441,23 @@ public class UserService(
             .Join(db.AttendanceGroups, a => a.AttendanceGroupId, g => g.Id, (a, g) => g.GroupName)
             .ToListAsync();
         if (approverOfGroups.Count > 0)
-            throw new InvalidOperationException(
+            throw new BusinessException(
                 $"该员工是「{string.Join("、", approverOfGroups)}」考勤组的审批人，无法直接删除，请先到「考勤组管理」把他从审批人名单里移除后再删除");
 
         // 审批节点(ApprovalStep.ApproverUserId)、公告发布人(Announcement.PublisherUserId)对 User 都是
         // Restrict 外键（故意不让删，保留审批/发布历史）——数据库层面会直接拒绝，但那样抛出来的是原始的
         // 外键约束错误，管理员看不懂也不知道该怎么处理，这里换成看得懂的提示，提前说清楚原因
         if (await db.ApprovalSteps.AnyAsync(s => s.ApproverUserId == userId))
-            throw new InvalidOperationException("该员工有审批记录（曾经是某个申请单的审批人），无法删除，只能停用");
+            throw new BusinessException("该员工有审批记录（曾经是某个申请单的审批人），无法删除，只能停用");
         if (await db.Announcements.AnyAsync(a => a.PublisherUserId == userId))
-            throw new InvalidOperationException("该员工发布过公告，无法删除，只能停用");
+            throw new BusinessException("该员工发布过公告，无法删除，只能停用");
 
         // SupervisorUserId 是 SetNull 外键：直接删的话，还认这个人当"直属上级"的下属会被静默清空上级字段，
         // 二级审批流程按 SupervisorUserId 找审批人会突然找不到人、悄悄断掉——不报错但结果是错的，
         // 比抛异常更麻烦，所以这里主动拦下来，让管理员先手动把这些下属改派给别人
         var subordinates = await db.Users.Where(u => u.SupervisorUserId == userId).Select(u => u.RealName).ToListAsync();
         if (subordinates.Count > 0)
-            throw new InvalidOperationException(
+            throw new BusinessException(
                 $"「{string.Join("、", subordinates)}」的直属上级是该员工，无法删除，请先到「员工管理」把他们的直属上级改派给别人后再删除");
 
         var employeeNo = user.EmployeeNo;
@@ -478,7 +484,7 @@ public class UserService(
         // 其它几百条一起失败（2026-09-29 审查，S1：以前批量启停完全不查角色层级）
         var acting = await db.Users.AsNoTracking().Where(u => u.Id == actingUserId)
             .Select(u => new { u.Role, u.ScopedDepartmentId }).FirstOrDefaultAsync()
-            ?? throw new InvalidOperationException("操作者账号不存在");
+            ?? throw new BusinessException("操作者账号不存在");
         users = users.Where(u => CurrentUser.CanManageAccountCore(acting.Role, acting.ScopedDepartmentId, u.Role, u.ScopedDepartmentId)).ToList();
 
         var changed = 0;
@@ -490,8 +496,8 @@ public class UserService(
             if (u.IsActive == active) continue;
 
             u.IsActive      = active;
-            u.DeactivatedAt = active ? null : DateTime.Now;
-            u.UpdatedAt     = DateTime.Now;
+            u.DeactivatedAt = active ? null : clock.LocalNow();
+            u.UpdatedAt     = clock.LocalNow();
             if (!active) deactivatedEmployeeNos.Add((u.EmployeeNo, u.Id));
             else activatedUsers.Add(u);
             changed++;
@@ -583,7 +589,7 @@ public class UserService(
         ["鼎力"]     = "DL",
         ["新能源"]   = "XNY",
         ["XNY"]      = "XNY",   // "XNY"是另一个独立部门（和"新能源"是并列的两个部门节点），命名规则顺延"新能源"，共用同一个前缀和流水号
-        // 组织架构调整（2026-09，见 docs/分公司隔离_组织架构适配.md）：原来的"成都鹰诺"/"新能源"整体
+        // 组织架构调整（2026-09）：原来的"成都鹰诺"/"新能源"整体
         // 拆成了按地区独立的分公司节点，互相隔离、各自独立建部门树，每个新节点名都要能在这里精确匹配到，
         // 同一公司族的不同地区共用同一个前缀和流水号（跟上面"新能源/XNY 共用序列"是同一个道理）
         ["成都鹰诺-深圳地区"]   = "IN",
@@ -696,7 +702,7 @@ public class UserService(
         var user = await db.Users.FindAsync(userId);
         if (user is null) return;
         user.ScopedDepartmentId = scopedDepartmentId;
-        user.UpdatedAt = DateTime.Now;
+        user.UpdatedAt = clock.LocalNow();
         await db.SaveChangesAsync();
     }
 

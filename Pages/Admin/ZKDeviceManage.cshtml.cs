@@ -6,6 +6,7 @@ using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -19,7 +20,7 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
     public string? ErrorMessage   { get; set; }
     /// <summary>只有不受限的总部超级管理员才需要在表单里手动选"归属部门"——受限管理员的设备
     /// 归属部门由服务端自动填成他自己的管理范围，不用也不能自己选。</summary>
-    public bool CurrentUserIsUnscoped => !HttpContext.GetCurrentUser()!.IsScoped;
+    public bool CurrentUserIsUnscoped => !HttpContext.GetRequiredUser().IsScoped;
 
     // 表单字段（新增/编辑共用）
     [BindProperty] public int     Id           { get; set; }
@@ -35,20 +36,20 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
     {
         try
         {
-            var cu = HttpContext.GetCurrentUser()!;
+            var cu = HttpContext.GetRequiredUser();
 
             if (string.IsNullOrWhiteSpace(SN))
-                throw new InvalidOperationException("请填写设备序列号（SN）");
+                throw new BusinessException("请填写设备序列号（SN）");
             var sn = SN.Trim();
             if (sn.Length > 50)
-                throw new InvalidOperationException("序列号不能超过 50 个字符");
+                throw new BusinessException("序列号不能超过 50 个字符");
             var name = string.IsNullOrWhiteSpace(Name) ? null : Name.Trim();
             if (name?.Length > 100)
-                throw new InvalidOperationException("设备别名不能超过 100 个字符");
+                throw new BusinessException("设备别名不能超过 100 个字符");
 
             var snTaken = await db.ZKDevices.AnyAsync(d => d.SN == sn && d.Id != Id);
             if (snTaken)
-                throw new InvalidOperationException($"序列号 {sn} 已经被别的设备使用");
+                throw new BusinessException($"序列号 {sn} 已经被别的设备使用");
 
             string? renamedFromSn = null;   // 编辑时如果改了 SN，记下旧 SN，保存后把排队的命令一起改过去
 
@@ -59,9 +60,9 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
                 // 对不受限用户不管 deptId 是不是 null 都会放行，光靠它挡不住"没选部门"，这里补一道显式校验
                 var newDeptId = cu.IsScoped ? cu.ScopedDepartmentId : DepartmentId;
                 if (!cu.IsScoped && newDeptId is null)
-                    throw new InvalidOperationException("请选择设备归属部门");
+                    throw new BusinessException("请选择设备归属部门");
                 if (!await deptScopeService.CanAccessDeptAsync(cu, newDeptId))
-                    throw new InvalidOperationException("无权将设备分配到该部门");
+                    throw new BusinessException("无权将设备分配到该部门");
 
                 db.ZKDevices.Add(new ZKDevice
                 {
@@ -80,7 +81,7 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
                 {
                     // 防止受限管理员绕过界面直接 POST 别的分公司设备的 Id 过来编辑
                     if (!await deptScopeService.CanAccessDeptAsync(cu, d.DepartmentId))
-                        throw new InvalidOperationException("无权编辑该设备");
+                        throw new BusinessException("无权编辑该设备");
 
                     // 受限管理员编辑设备时保留原有归属部门，不强制改写成自己的范围根——原来这里跟新增
                     // 共用一个 effectiveDeptId，导致受限管理员哪怕只是改个别名/启停状态，设备的归属部门
@@ -138,7 +139,7 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
 
     public async Task<IActionResult> OnPostDeleteAsync(int id)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var d = await db.ZKDevices.FindAsync(id);
         if (d != null)
         {
@@ -180,7 +181,7 @@ public class ZKDeviceManageModel(AttendanceDbContext db, IDeptScopeService deptS
 
     private async Task LoadAsync()
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
 
         var q = db.ZKDevices.Include(d => d.Department).AsQueryable();

@@ -40,7 +40,6 @@ public class TemplateReportRowDto
 
     public decimal ActualWorkdays  { get; set; }   // 出勤天数（半天假的那天算 0.5 天，跟 MonthlySummaryDto 同一口径）
     public decimal LeaveDays       { get; set; }   // 请假天数（按小时折算，半天假算 0.5 天）
-    public int     RestDays        { get; set; }   // 休息天数（排班自己配置的每周休息日，没排班按周六周日）
 
     /// <summary>这段时间里有打卡但没有排班的天数（>0 说明是"没排班"员工：正班工时没有按班次封顶，已含工作日加班，
     /// 不能和加班总时长直接相加；导出表最后一列据此加标注）。</summary>

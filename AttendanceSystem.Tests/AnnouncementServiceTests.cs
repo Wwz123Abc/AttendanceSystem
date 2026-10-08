@@ -5,6 +5,7 @@ using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Implementations;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -80,7 +81,7 @@ public class AnnouncementServiceTests : IDisposable
 
         using var db2 = CreateContext();
         var svc = new AnnouncementService(db2);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.PublishAsync(adminId, UserRole.Admin, new PublishAnnouncementDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.PublishAsync(adminId, UserRole.Admin, new PublishAnnouncementDto
         {
             Title = "标题", Content = "内容", ScopeType = AnnouncementScopeType.Role, ScopeRoles = []
         }));
@@ -96,7 +97,7 @@ public class AnnouncementServiceTests : IDisposable
 
         using var db2 = CreateContext();
         var svc = new AnnouncementService(db2);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.PublishAsync(adminId, UserRole.Admin, new PublishAnnouncementDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.PublishAsync(adminId, UserRole.Admin, new PublishAnnouncementDto
         {
             Title = "标题", Content = "内容", ScopeType = AnnouncementScopeType.Role, ScopeRoles = [UserRole.TeamLeader]
         }));

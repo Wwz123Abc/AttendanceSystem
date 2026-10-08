@@ -15,8 +15,8 @@ public class DashboardModel(IAttendanceService attendanceService, IDeptScopeServ
 
     public async Task OnGetAsync()
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
-        Stats = await attendanceService.GetTodayStatsAsync(deptIds: visibleIds);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
+        Stats = await attendanceService.GetTodayStatsAsync(deptIds: visibleIds, ct: HttpContext.RequestAborted);
     }
 
     /// <summary>
@@ -25,8 +25,8 @@ public class DashboardModel(IAttendanceService attendanceService, IDeptScopeServ
     /// </summary>
     public async Task<JsonResult> OnGetDrilldownAsync(string category)
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
-        var list = await attendanceService.GetTodayStatsDetailAsync(category, deptIds: visibleIds);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
+        var list = await attendanceService.GetTodayStatsDetailAsync(category, deptIds: visibleIds, ct: HttpContext.RequestAborted);
         return new JsonResult(new
         {
             Success = true,

@@ -20,7 +20,7 @@ public class ExcelExportColumnAlignmentTests
 {
     private static readonly string[] ExpectedTailHeaders =
     [
-        "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
+        "出勤天数", "请假天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
         "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
         "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
         "应出勤天数", "实际总工时(h)", "排班说明"
@@ -33,7 +33,6 @@ public class ExcelExportColumnAlignmentTests
         DailyIsNightShift = [false, false],
         ActualWorkdays        = 21,
         LeaveDays             = 1.5m,
-        RestDays              = 8,
         RegularWorkHours      = 158.5m,
         LateMinutes           = 5,
         EarlyLeaveCount       = 1,
@@ -76,23 +75,22 @@ public class ExcelExportColumnAlignmentTests
         // 逐一核对数据行：每一列的数值必须精确落在表头对应的那一列上
         Assert.Equal(21,    dataRow.GetCell(tailStart + 0).NumericCellValue);   // 出勤天数
         Assert.Equal(1.5,   dataRow.GetCell(tailStart + 1).NumericCellValue);   // 请假天数
-        Assert.Equal(8,     dataRow.GetCell(tailStart + 2).NumericCellValue);   // 休息天数
-        Assert.Equal(158.5, dataRow.GetCell(tailStart + 3).NumericCellValue);   // 正班工时
-        Assert.Equal(5,     dataRow.GetCell(tailStart + 4).NumericCellValue);   // 迟到时长
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 5).NumericCellValue);   // 早退次数
-        Assert.Equal(2,     dataRow.GetCell(tailStart + 6).NumericCellValue);   // 迟到次数
-        Assert.Equal(3,     dataRow.GetCell(tailStart + 7).NumericCellValue);   // 早退时长
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 8).NumericCellValue);   // 上班缺卡次数
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 9).NumericCellValue);   // 下班缺卡次数
-        Assert.Equal(1,     dataRow.GetCell(tailStart + 10).NumericCellValue);  // 旷工天数
-        Assert.Equal(8,     dataRow.GetCell(tailStart + 11).NumericCellValue);  // 出差时长
-        Assert.Equal(2,     dataRow.GetCell(tailStart + 12).NumericCellValue);  // 夜班次数
-        Assert.Equal(16,    dataRow.GetCell(tailStart + 13).NumericCellValue);  // 夜班总工时
-        Assert.Equal(10,    dataRow.GetCell(tailStart + 14).NumericCellValue);  // 加班总时长
-        Assert.Equal(4,     dataRow.GetCell(tailStart + 15).NumericCellValue);  // 工作日加班
-        Assert.Equal(3,     dataRow.GetCell(tailStart + 16).NumericCellValue);  // 休息日加班
-        Assert.Equal(22,    dataRow.GetCell(tailStart + 17).NumericCellValue);  // 应出勤天数
-        Assert.Equal(168.5, dataRow.GetCell(tailStart + 18).NumericCellValue);  // 实际总工时（正班+加班，发工资按这个）
+        Assert.Equal(158.5, dataRow.GetCell(tailStart + 2).NumericCellValue);   // 正班工时
+        Assert.Equal(5,     dataRow.GetCell(tailStart + 3).NumericCellValue);   // 迟到时长
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 4).NumericCellValue);   // 早退次数
+        Assert.Equal(2,     dataRow.GetCell(tailStart + 5).NumericCellValue);   // 迟到次数
+        Assert.Equal(3,     dataRow.GetCell(tailStart + 6).NumericCellValue);   // 早退时长
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 7).NumericCellValue);   // 上班缺卡次数
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 8).NumericCellValue);   // 下班缺卡次数
+        Assert.Equal(1,     dataRow.GetCell(tailStart + 9).NumericCellValue);  // 旷工天数
+        Assert.Equal(8,     dataRow.GetCell(tailStart + 10).NumericCellValue);  // 出差时长
+        Assert.Equal(2,     dataRow.GetCell(tailStart + 11).NumericCellValue);  // 夜班次数
+        Assert.Equal(16,    dataRow.GetCell(tailStart + 12).NumericCellValue);  // 夜班总工时
+        Assert.Equal(10,    dataRow.GetCell(tailStart + 13).NumericCellValue);  // 加班总时长
+        Assert.Equal(4,     dataRow.GetCell(tailStart + 14).NumericCellValue);  // 工作日加班
+        Assert.Equal(3,     dataRow.GetCell(tailStart + 15).NumericCellValue);  // 休息日加班
+        Assert.Equal(22,    dataRow.GetCell(tailStart + 16).NumericCellValue);  // 应出勤天数
+        Assert.Equal(168.5, dataRow.GetCell(tailStart + 17).NumericCellValue);  // 实际总工时（正班+加班，发工资按这个）
 
         // 数据行最后一个有值的单元格必须正好是最后一列，不多出、也不少一列——
         // 这一条能直接抓出"表头 N 列，但写值那边多写/少写了一列"这种整体错位的 bug
@@ -140,10 +138,10 @@ public class ExcelExportColumnAlignmentTests
         var tailStart = 6 + dates.Count;
         Assert.Equal(17.5, total.GetCell(6).NumericCellValue);                       // 9/1 当天工时合计
         Assert.Equal(42,   total.GetCell(tailStart + 0).NumericCellValue);           // 出勤天数：21 + 21
-        Assert.Equal(317,  total.GetCell(tailStart + 3).NumericCellValue);           // 正班工时：158.5 × 2
-        Assert.Equal(10,   total.GetCell(tailStart + 4).NumericCellValue);           // 迟到时长(分)
-        Assert.Equal(2,    total.GetCell(tailStart + 10).NumericCellValue);          // 旷工天数
-        Assert.Equal(44,   total.GetCell(tailStart + 17).NumericCellValue);          // 应出勤天数：22 + 22
+        Assert.Equal(317,  total.GetCell(tailStart + 2).NumericCellValue);           // 正班工时：158.5 × 2
+        Assert.Equal(10,   total.GetCell(tailStart + 3).NumericCellValue);           // 迟到时长(分)
+        Assert.Equal(2,    total.GetCell(tailStart + 9).NumericCellValue);          // 旷工天数
+        Assert.Equal(44,   total.GetCell(tailStart + 16).NumericCellValue);          // 应出勤天数：22 + 22
 
         // 用 SUBTOTAL(109,…)：HR 筛选后合计只统计可见行
         Assert.Contains("SUBTOTAL(109,", total.GetCell(tailStart).CellFormula);
@@ -230,14 +228,14 @@ public class ExcelExportColumnAlignmentTests
         // 第 3 行是分组行，按 6 组合并
         var band = sheet.GetRow(2);
         string[] names = ["基本信息", "考勤结果（每日工时，单位：小时）", "出勤与工时", "迟到 · 早退 · 缺卡 · 旷工", "出差 · 夜班 · 加班", "对照", "发薪工时（正班+加班）", "说明"];
-        int[] firsts = [0, 6, 37, 41, 48, 54, 55, 56];
+        int[] firsts = [0, 6, 37, 40, 47, 53, 54, 55];
         for (var i = 0; i < names.Length; i++) Assert.Equal(names[i], band.GetCell(firsts[i]).StringCellValue);
         var merged = Enumerable.Range(0, sheet.NumMergedRegions).Select(i => sheet.GetMergedRegion(i)).ToList();
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 0 && m.LastColumn == 5);
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 6 && m.LastColumn == 36);
-        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 37 && m.LastColumn == 40);
-        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 41 && m.LastColumn == 47);
-        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 48 && m.LastColumn == 53);
+        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 37 && m.LastColumn == 39);
+        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 40 && m.LastColumn == 46);
+        Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 47 && m.LastColumn == 52);
         // 不再有纵向合并（合并会让筛选行上的那格变成空白）
         Assert.DoesNotContain(merged, m => m.FirstRow == 2 && m.LastRow == 3);
         Assert.Equal(6 + 31 + ExpectedTailHeaders.Length, band.LastCellNum);   // 分组行总列数没变
@@ -269,14 +267,14 @@ public class ExcelExportColumnAlignmentTests
         var data = sheet.GetRow(4);
         var tailStart = 6 + 2;
 
-        Assert.Equal("0.0;-0.0;\"-\"", data.GetCell(tailStart + 3).CellStyle.GetDataFormatString());    // 正班工时(h)
-        Assert.Equal("0.0;-0.0;\"-\"", data.GetCell(tailStart + 11).CellStyle.GetDataFormatString());   // 出差时长(h)
-        Assert.Equal("#,##0", data.GetCell(tailStart + 4).CellStyle.GetDataFormatString());              // 迟到时长(分)
+        Assert.Equal("0.0;-0.0;\"-\"", data.GetCell(tailStart + 2).CellStyle.GetDataFormatString());    // 正班工时(h)
+        Assert.Equal("0.0;-0.0;\"-\"", data.GetCell(tailStart + 10).CellStyle.GetDataFormatString());   // 出差时长(h)
+        Assert.Equal("#,##0", data.GetCell(tailStart + 3).CellStyle.GetDataFormatString());              // 迟到时长(分)
         Assert.Equal("General", data.GetCell(tailStart + 0).CellStyle.GetDataFormatString());            // 出勤天数：常规
         Assert.Equal("FFBFBFBF", FontHex(data.GetCell(6)));         // 当天工时 0：浅灰字
         Assert.Equal("FF262626", FontHex(data.GetCell(7)));         // 有工时：深灰字
-        Assert.Equal("FFC55A11", FontHex(data.GetCell(tailStart + 4)));    // 迟到：深橙
-        Assert.Equal("FFC00000", FontHex(data.GetCell(tailStart + 10)));   // 旷工：深红
+        Assert.Equal("FFC55A11", FontHex(data.GetCell(tailStart + 3)));    // 迟到：深橙
+        Assert.Equal("FFC00000", FontHex(data.GetCell(tailStart + 9)));   // 旷工：深红
     }
 
     [Fact]
@@ -328,8 +326,8 @@ public class ExcelExportColumnAlignmentTests
         Assert.Contains(merged, m => m.FirstRow == 6 && m.LastRow == 6 && m.FirstColumn == 0 && m.LastColumn == 5);
         Assert.Equal("FFD6DCE4", FillHex(total.GetCell(0)));
         Assert.True(total.GetCell(6).CellStyle.ShrinkToFit);                // 每日合计：放不下自动缩小
-        Assert.Equal("#,##0.0;-#,##0.0;\"-\"", total.GetCell(8 + 3).CellStyle.GetDataFormatString());   // 工时类合计
-        Assert.Equal("#,##0;-#,##0;\"-\"", total.GetCell(8 + 4).CellStyle.GetDataFormatString());       // 分钟类合计
+        Assert.Equal("#,##0.0;-#,##0.0;\"-\"", total.GetCell(8 + 2).CellStyle.GetDataFormatString());   // 工时类合计
+        Assert.Equal("#,##0;-#,##0;\"-\"", total.GetCell(8 + 3).CellStyle.GetDataFormatString());       // 分钟类合计
         Assert.Contains("SUBTOTAL(109,", total.GetCell(8).CellFormula);
     }
 

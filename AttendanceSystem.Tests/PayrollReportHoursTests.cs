@@ -69,4 +69,39 @@ public class PayrollReportHoursTests : SqliteTestBase
         Assert.Equal(12m, row.TotalOvertimeHours);
         Assert.Equal(20m, row.PayableHours);
     }
+
+    [Fact]
+    public async Task 员工页面的总工时_和发薪汇总表里这个人的实际总工时完全一致()
+    {
+        var (uid, _) = SeedWeekWorld();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.AddRange(Rec(uid, Fri, 8, 4), Rec(uid, Sat, 8, 13.5m), Rec(uid, Mon, 8.4m, 0));
+            db.SaveChanges();
+        }
+
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var report = await svc.GenerateTemplateReportAsync(Fri, Mon, null);
+        var mine = await svc.GetMyPayrollRowAsync(uid, Fri, Mon);
+
+        Assert.NotNull(mine);
+        Assert.Equal(report.Rows.Single(r => r.EmployeeNo == "L1").PayableHours, mine!.PayableHours);
+        Assert.Equal(33.5m, mine.PayableHours);
+    }
+
+    [Fact]
+    public async Task 免考勤账号没有发薪汇总行()
+    {
+        int uid;
+        using (var db = CreateContext())
+        {
+            var u = U("X1", "管理员甲");
+            u.Role = AttendanceSystem.Models.Enums.UserRole.Admin;
+            db.Users.Add(u); db.SaveChanges(); uid = u.Id;
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        Assert.Null(await svc.GetMyPayrollRowAsync(uid, Fri, Mon));
+    }
 }

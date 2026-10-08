@@ -14,6 +14,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using AttendanceSystem.Models.DTOs;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -70,7 +71,7 @@ public class DashboardAndSummaryTests : SqliteTestBase
 
         using var db2 = CreateContext();
         var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<BusinessException>(
             () => svc.AdminAdjustPunchAsync(uid, today, null, DateTime.Now.AddHours(3), null, "管理员"));
         Assert.Contains("还没到", ex.Message);
 

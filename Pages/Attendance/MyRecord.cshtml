@@ -2,7 +2,9 @@
 @model AttendanceSystem.Pages.Attendance.MyRecordModel
 @{
     ViewData["Title"] = "我的记录";
-    var s = Model.Summary;
+    var p = Model.Payroll;
+    var today = DateOnly.FromDateTime(DateTime.Today);
+    var (curY, curM) = AttendanceSystem.Helpers.PayrollCycle.EndMonthOf(today);
 }
 
 <div class="page-header">
@@ -13,20 +15,20 @@
 <div class="card mb-4">
     <div class="card-body py-3">
         <form method="get" class="d-flex align-items-center gap-3 flex-wrap">
-            <label class="fw-semibold mb-0">年份</label>
+            <label class="fw-semibold mb-0">薪资周期</label>
             <select name="year" class="form-select form-select-sm" style="width:100px">
-                @for (int y = DateTime.Today.Year; y >= DateTime.Today.Year - 2; y--)
+                @for (int y = curY; y >= curY - 2; y--)
                 {
                     <option value="@y" selected="@(y == Model.Year)">@y 年</option>
                 }
             </select>
-            <label class="fw-semibold mb-0">月份</label>
             <select name="month" class="form-select form-select-sm" style="width:90px">
                 @for (int m = 1; m <= 12; m++)
                 {
                     <option value="@m" selected="@(m == Model.Month)">@m 月</option>
                 }
             </select>
+            <span class="text-muted small">每月 26 日 ~ 次月 25 日算一个周期，选的是周期的<b>结束月份</b></span>
             <button type="submit" class="btn btn-primary btn-sm">
                 <i class="bi bi-search me-1"></i>查询
             </button>
@@ -34,47 +36,54 @@
     </div>
 </div>
 
-<!-- 月度汇总 -->
-@if (s != null)
-{
+<!-- 周期汇总：数字和"发薪考勤汇总表"同一套算法 -->
+<div class="text-muted small mb-2">
+    当前周期：@Model.CycleStart.ToString("yyyy-MM-dd") ~ @Model.CycleEnd.ToString("yyyy-MM-dd")（@Model.Month 月薪资周期）
+</div>
+@{
+    var actualDays = p?.ActualWorkdays ?? 0m;
+    var lateCount  = p?.LateCount ?? 0;
+    var absentDays = p?.AbsentDays ?? 0;
+    var payHours   = p?.PayableHours ?? 0m;
+    var leaveDays  = p?.LeaveDays ?? 0m;
+}
     <div class="row g-3 mb-4">
         <div class="col-6 col-md-2">
             <div class="card text-center py-3 stat-card border-start-success">
-                <div class="fw-bold text-success fs-4">@s.ActualWorkdays.ToString("0.#")</div>
+                <div class="fw-bold text-success fs-4">@actualDays.ToString("0.#")</div>
                 <div class="text-muted small">实到天数</div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-3 stat-card border-start-warning">
-                <div class="fw-bold text-warning fs-4">@s.LateCount</div>
+                <div class="fw-bold text-warning fs-4">@lateCount</div>
                 <div class="text-muted small">迟到次数</div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-3 stat-card border-start-danger">
-                <div class="fw-bold text-danger fs-4">@s.AbsentDays</div>
+                <div class="fw-bold text-danger fs-4">@absentDays</div>
                 <div class="text-muted small">缺勤天数</div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-3 stat-card border-start-info">
-                <div class="fw-bold text-info fs-4">@s.TotalWorkHours.ToString("F1")</div>
-                <div class="text-muted small">总工时(h)</div>
+                <div class="fw-bold text-info fs-4">@payHours.ToString("F1")</div>
+                <div class="text-muted small">总工时(h)<br /><span style="font-size:11px">正班+加班，与发薪汇总表一致</span></div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-3">
-                <div class="fw-bold fs-4">@s.LeaveDays.ToString("F1")</div>
+                <div class="fw-bold fs-4">@leaveDays.ToString("F1")</div>
                 <div class="text-muted small">请假天数</div>
             </div>
         </div>
     </div>
-}
 
 <!-- 明细表格 -->
 <div class="card">
     <div class="card-header">
-        @Model.Year 年 @Model.Month 月 考勤明细（共 @Model.Records.Count 条）
+        @Model.Month 月薪资周期（@Model.CycleStart.ToString("M月d日") ~ @Model.CycleEnd.ToString("M月d日")）考勤明细（共 @Model.Records.Count 条）
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">

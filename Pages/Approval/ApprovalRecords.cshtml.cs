@@ -69,7 +69,7 @@ public class ApprovalRecordsModel(
 
     public async Task OnGetAsync(DateOnly? start, DateOnly? end, string? type, string? status, int? deptId, string? keyword, int p = 1)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var (query, deptIds, effDept) = await BuildQueryAsync(cu, start, end, type, status, deptId, keyword);
         query.PageIndex = Math.Max(1, p);
         query.PageSize  = PageSize;
@@ -84,7 +84,7 @@ public class ApprovalRecordsModel(
     /// <summary>按当前筛选条件，把 2 个月内匹配到的全部申请导出成 Excel（不分页，最多 <see cref="MaxExportRows"/> 条）。</summary>
     public async Task<IActionResult> OnGetExportAsync(DateOnly? start, DateOnly? end, string? type, string? status, int? deptId, string? keyword)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var (query, deptIds, _) = await BuildQueryAsync(cu, start, end, type, status, deptId, keyword);
         query.PageIndex = 1;
         query.PageSize  = MaxExportRows;

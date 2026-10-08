@@ -4,18 +4,23 @@ using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
 
 /// <summary>系统公告服务：发布（含算受众名单、写已读记录、写站内通知）、撤下、查询。</summary>
-public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
+public class AnnouncementService(AttendanceDbContext db, TimeProvider? timeProvider = null) : IAnnouncementService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+
     public async Task<Announcement> PublishAsync(int publisherUserId, UserRole publisherRole, PublishAnnouncementDto dto)
     {
-        if (string.IsNullOrWhiteSpace(dto.Title)) throw new InvalidOperationException("请填写公告标题");
-        if (dto.Title.Trim().Length > 200) throw new InvalidOperationException("标题不能超过 200 个字");
-        if (string.IsNullOrWhiteSpace(dto.Content)) throw new InvalidOperationException("请填写公告内容");
-        if (dto.Content.Trim().Length > 2000) throw new InvalidOperationException("内容不能超过 2000 个字");
+        if (string.IsNullOrWhiteSpace(dto.Title)) throw new BusinessException("请填写公告标题");
+        if (dto.Title.Trim().Length > InputLimits.AnnouncementTitleMaxLength) throw new BusinessException("标题不能超过 200 个字");
+        if (string.IsNullOrWhiteSpace(dto.Content)) throw new BusinessException("请填写公告内容");
+        if (dto.Content.Trim().Length > InputLimits.AnnouncementContentMaxLength) throw new BusinessException("内容不能超过 2000 个字");
 
         // 班组长/主管只能发给自己的直属下属：范围在服务端强制锁死，不采信页面传来的 ScopeType/ScopeId，
         // 避免有人改改前端请求就能越权发给别的部门/考勤组
@@ -25,15 +30,15 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         var scopeRoles  = isManager && scopeType == AnnouncementScopeType.Role ? dto.ScopeRoles : null;
 
         if (isManager && scopeType is AnnouncementScopeType.Department or AnnouncementScopeType.AttendanceGroup && scopeId is null)
-            throw new InvalidOperationException("请选择具体的部门/考勤组");
+            throw new BusinessException("请选择具体的部门/考勤组");
         if (isManager && scopeType == AnnouncementScopeType.Role && (scopeRoles is null || scopeRoles.Count == 0))
-            throw new InvalidOperationException("请至少选择一个角色");
+            throw new BusinessException("请至少选择一个角色");
 
         var audienceIds = await ResolveAudienceAsync(publisherUserId, scopeType, scopeId, scopeRoles);
         if (audienceIds.Count == 0)
-            throw new InvalidOperationException("这个范围里没有任何在职员工，无法发布");
+            throw new BusinessException("这个范围里没有任何在职员工，无法发布");
 
-        var now = DateTime.Now;
+        var now = clock.LocalNow();
         var announcement = new Announcement
         {
             Title           = dto.Title.Trim(),
@@ -80,7 +85,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
         if (!allowed) return false;
 
         a.IsActive  = false;
-        a.UpdatedAt = DateTime.Now;
+        a.UpdatedAt = clock.LocalNow();
         await db.SaveChangesAsync();
 
         // 撤下的同时把发布时给每个受众发的站内通知一并标已读，不然铃铛里还留着这条、
@@ -90,7 +95,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
             .Where(n => n.NotificationType == NotificationTypes.Announcement && n.RelatedId == announcementId && !n.IsRead)
             .ExecuteUpdateAsync(n => n
                 .SetProperty(x => x.IsRead, true)
-                .SetProperty(x => x.ReadAt, DateTime.Now));
+                .SetProperty(x => x.ReadAt, clock.LocalNow()));
         return true;
     }
 
@@ -156,7 +161,7 @@ public class AnnouncementService(AttendanceDbContext db) : IAnnouncementService
     {
         var r = await db.AnnouncementReads.FirstOrDefaultAsync(x => x.UserId == userId && x.AnnouncementId == announcementId);
         if (r is null || r.ReadAt.HasValue) return;   // 不在受众名单里、或者已经读过了，都不用处理
-        r.ReadAt = DateTime.Now;
+        r.ReadAt = clock.LocalNow();
         await db.SaveChangesAsync();
     }
 

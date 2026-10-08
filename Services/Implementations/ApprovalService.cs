@@ -7,6 +7,8 @@ using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
 
@@ -14,9 +16,12 @@ namespace AttendanceSystem.Services.Implementations;
 /// 审批服务：审批单的提交、多级流转、撤销、查询。
 /// 审批通过后会联动考勤服务回写考勤记录，并在各环节发站内通知。
 /// </summary>
-public class ApprovalService(AttendanceDbContext db, IAttendanceService attendanceService, IOptions<AppSettingsOptions> appOptions)
+public class ApprovalService(AttendanceDbContext db, IAttendanceService attendanceService, IOptions<AppSettingsOptions> appOptions, TimeProvider? timeProvider = null)
     : IApprovalService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+
     /// <summary>一张请假/出差申请最长能跨多少天。没有上限的话，能提交"结束时间=9999 年"的假单：提交时逐日循环算时长、
     /// 审批通过后逐日回写考勤记录（单事务几百万条插入），逐日累加到 9999 年还会抛日期越界异常
     /// （2026-09-24 审查修复）。超过的请拆成多张。</summary>
@@ -41,13 +46,13 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     public static void ValidateAttachmentUrls(IReadOnlyCollection<string>? urls, int applicantUserId, string? uploadPath)
     {
         if (urls is null || urls.Count == 0) return;
-        if (urls.Count > 20) throw new InvalidOperationException("附件数量过多");
+        if (urls.Count > 20) throw new BusinessException("附件数量过多");
         var prefix = "/" + (uploadPath ?? "uploads").Trim('/', '\\') + "/approvals/" + applicantUserId + "/";
         var ok = new System.Text.RegularExpressions.Regex(@"^[0-9a-f]{32}\.(jpg|jpeg|png|gif|pdf|doc|docx|xls|xlsx)$");
         foreach (var u in urls)
         {
             if (string.IsNullOrEmpty(u) || !u.StartsWith(prefix, StringComparison.Ordinal) || !ok.IsMatch(u[prefix.Length..]))
-                throw new InvalidOperationException("附件地址不合法，请重新上传附件");
+                throw new BusinessException("附件地址不合法，请重新上传附件");
         }
     }
 
@@ -56,18 +61,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         var user = await db.Users.FindAsync(applicantUserId)
             ?? throw new KeyNotFoundException("用户不存在");
 
-        // 服务端校验：页面上虽然已经有相应的输入限制，但直接调接口能绕开页面校验——
-        // 起止时间颠倒/缺关键字段这种非法申请，之前能照常建单、审批通过，只是回写考勤时
-        // 因为区间是"负的"循环一次都不会跑，单子显示"已通过"但考勤记录完全没变化，
-        // 相当于一次静默失败，很难排查。这里在建单之前先按类型把该有的字段和先后顺序卡一遍。
-        // 申请原因/出差目的地长度上限——跟页面上的限制保持一致，这里是权威兜底（直接调接口能绕开页面）
-        if (string.IsNullOrWhiteSpace(dto.Reason))
-            throw new InvalidOperationException("请填写申请原因");
-        if (dto.Reason.Trim().Length > 1000)
-            throw new InvalidOperationException("申请理由不能超过 1000 个字");
-        ValidateAttachmentUrls(dto.AttachmentUrls, applicantUserId, appOptions.Value.UploadPath);
-        if (!string.IsNullOrWhiteSpace(dto.BusinessTripDestination) && dto.BusinessTripDestination.Trim().Length > 200)
-            throw new InvalidOperationException("出差目的地不能超过 200 个字");
+        ValidateSubmitBasics(dto, applicantUserId);
 
         // 同一人同一类型、时间段重叠、且还有效（待审批/审批中/已通过）的申请单不能重复提交——
         // 防止前端网络重试/按钮没锁住导致同一份申请被连点提交好几次，等多张重复单都批下来，
@@ -78,150 +72,21 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         switch (dto.ApprovalType)
         {
             case ApprovalType.PunchReplenishment:
-                if (dto.PunchDate is null || dto.PunchType is null || dto.PunchTime is null)
-                    throw new InvalidOperationException("请填写完整的补卡日期、类型和时间");
-                if (dto.PunchDate.Value > DateOnly.FromDateTime(DateTime.Today))
-                    throw new InvalidOperationException("补卡日期不能晚于今天");
-                // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点——以前只检查了日期不晚于今天，
-                // 没检查具体时间点：员工早上就能提交"今天 17:30 下班卡"，只要审批人批得快，中午提前走人
-                // 也会按 17:30 结算工时（2026-09-29 审查发现 M5）。
-                // 补下班卡还要按审批回写同一套顺延规则（UpdateAttendanceAfterApprovalAsync/ResolvePunchReplenishmentClockOut）
-                // 先把最终会落到哪个时刻算出来再比较——不然夜班下班卡顺延到第二天后，仍然能提交出一个
-                // "现在还没到"的时间点（2026-09-29 第 12 轮审查发现，M5 只堵了一半）。这里直接查库、不走
-                // attendanceService.GetShiftAssignmentAsync，因为测试用的 FakeAttendanceService 没实现那个方法。
-                var punchAt = dto.PunchDate.Value.ToDateTime(dto.PunchTime.Value);
-                if (dto.PunchType == PunchType.ClockOut)
-                {
-                    var existingClockIn = await db.AttendanceRecords
-                        .Where(r => r.UserId == applicantUserId && r.WorkDate == dto.PunchDate.Value)
-                        .Select(r => r.ClockInTime)
-                        .FirstOrDefaultAsync();
-                    var shiftForPunch = await db.ShiftAssignments
-                        .Where(a => a.UserId == applicantUserId && a.WorkDate == dto.PunchDate.Value)
-                        .Select(a => a.ShiftSchedule)
-                        .FirstOrDefaultAsync();
-                    punchAt = AttendanceService.ResolvePunchReplenishmentClockOut(
-                        dto.PunchDate.Value, dto.PunchTime.Value, existingClockIn, shiftForPunch);
-                }
-                if (punchAt > DateTime.Now)
-                    throw new InvalidOperationException($"补卡时间 {punchAt:MM-dd HH:mm} 还没到，请填写真实已经发生的打卡时间（夜班下班卡会算到第二天）");
-                if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
-                        && a.ApprovalType == ApprovalType.PunchReplenishment && activeStatuses.Contains(a.ApprovalStatus)
-                        && a.PunchDate == dto.PunchDate && a.PunchType == dto.PunchType))
-                    throw new InvalidOperationException("这天的补卡申请已经提交过了，不能重复提交");
+                await ValidatePunchReplenishmentAsync(dto, applicantUserId, activeStatuses);
                 break;
             case ApprovalType.Leave:
-                if (dto.LeaveStartTime is null || dto.LeaveEndTime is null)
-                    throw new InvalidOperationException("请填写请假的起止时间");
-                if (dto.LeaveStartTime < DateTime.Now.AddHours(-24))
-                    throw new InvalidOperationException("请假开始时间最早只能选到现在往前推24小时以内");
-                if (dto.LeaveStartTime > DateTime.Now.AddMonths(MaxAdvanceRequestMonths))
-                    throw new InvalidOperationException($"请假开始时间最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
-                if (dto.LeaveEndTime <= dto.LeaveStartTime)
-                    throw new InvalidOperationException("请假结束时间必须晚于开始时间");
-                if ((dto.LeaveEndTime.Value - dto.LeaveStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
-                    throw new InvalidOperationException($"请假时间跨度不能超过 {MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交");
-                if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
-                        && a.ApprovalType == ApprovalType.Leave && activeStatuses.Contains(a.ApprovalStatus)
-                        && a.LeaveStartTime < dto.LeaveEndTime && dto.LeaveStartTime < a.LeaveEndTime))
-                    throw new InvalidOperationException("这段时间的请假申请已经提交过了，不能重复提交");
+                await ValidateLeaveRequestAsync(dto, applicantUserId, activeStatuses);
                 break;
             case ApprovalType.Overtime:
-                if (dto.OvertimeStartTime is null || dto.OvertimeEndTime is null)
-                    throw new InvalidOperationException("请填写加班的起止时间");
-                if (DateOnly.FromDateTime(dto.OvertimeStartTime.Value) != DateOnly.FromDateTime(DateTime.Today))
-                    throw new InvalidOperationException("加班申请必须是当天的加班，请在当天24点前提交当日申请");
-                if (dto.OvertimeEndTime <= dto.OvertimeStartTime)
-                    throw new InvalidOperationException("加班结束时间必须晚于开始时间");
-                if ((dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours > MaxOvertimeHours)
-                    throw new InvalidOperationException($"单次加班时长不能超过 {MaxOvertimeHours} 小时，请检查起止时间");
-                // 工作日的加班时间段不能和当天班次的上下班时间重叠：正班时间本来就按打卡算正班工时，再填成加班会把同一段
-                // 时间算两遍（2026-09 上一期有 122 张这样的单子、约 1000 小时重叠——员工把整个工作日时间都填成了加班）。
-                // 休息日（没有"正班"）不受限，整天加班照常；当天没排班的也不判断。（2026-09-28 用户确认）
-                var otDate  = DateOnly.FromDateTime(dto.OvertimeStartTime.Value);
-                var otPrev  = otDate.AddDays(-1);
-                var otAssigns = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
-                    .Where(a => a.UserId == applicantUserId && (a.WorkDate == otDate || a.WorkDate == otPrev))
-                    .ToListAsync();
-                // 当天的班次，加上"昨天的跨天班次（夜班）延续到今天凌晨的那一段"——夜班员工在凌晨填的加班，
-                // 如果压在昨晚夜班的正班时间里，一样是重复计算
-                foreach (var (shiftDate, shiftAssign) in new[] { (otDate, otAssigns.FirstOrDefault(a => a.WorkDate == otDate)), (otPrev, otAssigns.FirstOrDefault(a => a.WorkDate == otPrev)) })
-                {
-                    var s0 = shiftAssign?.ShiftSchedule;
-                    if (s0 is null || (shiftDate == otPrev && !s0.IsCrossDay)) continue;   // 昨天的班只有跨天班次才会延续到今天
-                    if (AttendanceService.IsShiftWeeklyRestDay(shiftDate, s0)) continue;
-                    var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(shiftDate, s0);   // 班次的上下班时间（跨天班次下班顺延到第二天）
-                    if (dto.OvertimeStartTime.Value < shiftEnd && dto.OvertimeEndTime.Value > shiftStart)
-                        throw new InvalidOperationException(
-                            $"加班时间不能和上班时间重叠，请只填下班后（或上班前）的加班时段（您{(shiftDate == otDate ? "当天" : "前一天")}的班次是 {s0.WorkStartTime:HH\\:mm}–{s0.WorkEndTime:HH\\:mm}）");
-                }
-                if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
-                        && a.ApprovalType == ApprovalType.Overtime && activeStatuses.Contains(a.ApprovalStatus)
-                        && a.OvertimeStartTime < dto.OvertimeEndTime && dto.OvertimeStartTime < a.OvertimeEndTime))
-                    throw new InvalidOperationException("这段时间的加班申请已经提交过了，不能重复提交");
+                await ValidateOvertimeRequestAsync(dto, applicantUserId, activeStatuses);
                 break;
             case ApprovalType.BusinessTrip:
-                if (dto.BusinessTripStartTime is null || dto.BusinessTripEndTime is null)
-                    throw new InvalidOperationException("请填写出差的起止时间");
-                // 下限放宽到"今天0点"（而不是精确到此刻）：方便忘记提前申请的人，回来补提今天已经
-                // 开始的出差；不再往前追溯到昨天，避免撞上已经打完一整天卡的记录——出差审批通过后
-                // 会把当天工时无条件覆盖成标准工时（"自动记为全勤，无需打卡"），真往前放开到昨天，
-                // 覆盖掉已有真实打卡工时的概率会明显变大（2026-09-30 用户确认只放宽到当天，不做这层兜底）。
-                if (dto.BusinessTripStartTime < DateOnly.FromDateTime(DateTime.Today).ToDateTime(TimeOnly.MinValue))
-                    throw new InvalidOperationException("出差开始时间不能早于今天0点");
-                if (dto.BusinessTripStartTime > DateTime.Now.AddMonths(MaxAdvanceRequestMonths))
-                    throw new InvalidOperationException($"出差开始时间最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
-                if (dto.BusinessTripEndTime < dto.BusinessTripStartTime)
-                    throw new InvalidOperationException("出差结束时间不能早于开始时间");
-                if ((dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
-                    throw new InvalidOperationException($"出差时间跨度不能超过 {MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交");
-                if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
-                        && a.ApprovalType == ApprovalType.BusinessTrip && activeStatuses.Contains(a.ApprovalStatus)
-                        && a.BusinessTripStartTime < dto.BusinessTripEndTime && dto.BusinessTripStartTime < a.BusinessTripEndTime))
-                    throw new InvalidOperationException("这段时间的出差申请已经提交过了，不能重复提交");
+                await ValidateBusinessTripRequestAsync(dto, applicantUserId, activeStatuses);
                 break;
         }
 
-        // 请假时长：逐日按 ComputeLeaveHoursForDay 累加（跟审批通过后 UpdateAttendanceAfterApprovalAsync
-        // 逐日回写用的是同一个函数），而不是直接拿整段起止时间套工时公式——直接套公式的话，跨天请假会把
-        // 期间的整晚睡眠时间也当成"在岗时长"一起扣两道餐时，算出来的总时长比逐日累加的结果还离谱地偏大
-        // （比如一张 3 天的假单，套公式=44.5 小时，逐日累加只有约 24 小时），两处口径还对不上。
-        decimal? leaveDuration = null;
-        if (dto.LeaveStartTime.HasValue && dto.LeaveEndTime.HasValue)
-        {
-            var leaveSd = DateOnly.FromDateTime(dto.LeaveStartTime.Value);
-            var leaveEd = DateOnly.FromDateTime(dto.LeaveEndTime.Value);
-            var leaveShiftsInRange = (await db.ShiftAssignments
-                    .Include(a => a.ShiftSchedule)
-                    .Where(a => a.UserId == applicantUserId && a.WorkDate >= leaveSd && a.WorkDate <= leaveEd)
-                    .ToListAsync())
-                .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
-            var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
-            // 跟审批通过后的逐日回写（UpdateAttendanceAfterApprovalAsync）同一口径：按班次上下班时间取交集，
-            // 事假/病假/年假/调休遇到休息日不计（婚假/产假/丧假按自然日算）
-            var skipNonWorkdays = !AttendanceService.LeaveCountsNaturalDays(dto.LeaveType);
-
-            decimal total = 0;
-            for (var d = leaveSd; d <= leaveEd; d = d.AddDays(1))
-            {
-                leaveShiftsInRange.TryGetValue(d, out var leaveShift);
-                if (skipNonWorkdays && AttendanceService.IsShiftWeeklyRestDay(d, leaveShift)) continue;
-                var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift);
-            }
-            leaveDuration = total;
-        }
-        // 加班时长：跟正班工时同一套公式（AttendanceService.ComputeWorkHours）——申请的时间段压到公司统一
-        // "不算钱"时段（午间/晚餐/宵夜/早餐）的那部分不算钱，最后按半小时向下取整。
-        // 以前直接拿"结束-开始"的总长度，休息日全天加班（08:30-22:00）会记成 13.5 小时，把饭点也算成了加班
-        // （2026-09-28 用户确认）。审批通过后回写考勤用的是同一个函数，所以这里显示的时长就是最后记的时长
-        decimal? overtimeDuration = null;
-        if (dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue)
-        {
-            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value);
-            if (overtimeDuration < 0.5m)
-                throw new InvalidOperationException("加班时长不足 0.5 小时（按半小时为最小单位计算），请检查起止时间");
-        }
+        var leaveDuration = await ComputeLeaveDurationAsync(dto, applicantUserId);
+        var overtimeDuration = ComputeOvertimeDuration(dto);
         decimal? businessTripDuration = dto.BusinessTripStartTime.HasValue && dto.BusinessTripEndTime.HasValue
             ? (decimal)(dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays : null;
 
@@ -256,8 +121,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 // 附件列表转成 JSON 文本存进一个字段
                 AttachmentUrls     = dto.AttachmentUrls.Count > 0
                     ? JsonSerializer.Serialize(dto.AttachmentUrls) : null,
-                SubmittedAt        = DateTime.Now,
-                UpdatedAt          = DateTime.Now
+                SubmittedAt        = clock.LocalNow(),
+                UpdatedAt          = clock.LocalNow()
             };
 
             db.ApprovalRequests.Add(request);
@@ -285,6 +150,220 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         }
         await NotifyApproversAsync(request!);             // 通知第一个审批人
         return request!;
+    }
+
+    /// <summary>基础字段校验：申请原因、附件地址、出差目的地的长度和格式。直接调接口能绕开页面校验，这里是权威兜底。</summary>
+    private void ValidateSubmitBasics(SubmitApprovalDto dto, int applicantUserId)
+    {
+        // 服务端校验：页面上虽然已经有相应的输入限制，但直接调接口能绕开页面校验——
+        // 起止时间颠倒/缺关键字段这种非法申请，之前能照常建单、审批通过，只是回写考勤时
+        // 因为区间是"负的"循环一次都不会跑，单子显示"已通过"但考勤记录完全没变化，
+        // 相当于一次静默失败，很难排查。这里在建单之前先按类型把该有的字段和先后顺序卡一遍。
+        // 申请原因/出差目的地长度上限——跟页面上的限制保持一致，这里是权威兜底（直接调接口能绕开页面）
+        if (string.IsNullOrWhiteSpace(dto.Reason))
+            throw new BusinessException("请填写申请原因");
+        if (dto.Reason.Trim().Length > InputLimits.ApprovalReasonMaxLength)
+            throw new BusinessException("申请理由不能超过 1000 个字");
+        ValidateAttachmentUrls(dto.AttachmentUrls, applicantUserId, appOptions.Value.UploadPath);
+        if (!string.IsNullOrWhiteSpace(dto.BusinessTripDestination) && dto.BusinessTripDestination.Trim().Length > InputLimits.BusinessTripDestinationMaxLength)
+            throw new BusinessException("出差目的地不能超过 200 个字");
+    }
+
+    /// <summary>补卡申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>
+    private async Task ValidatePunchReplenishmentAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
+    {
+        if (dto.PunchDate is null || dto.PunchType is null || dto.PunchTime is null)
+            throw new BusinessException("请填写完整的补卡日期、类型和时间");
+        if (dto.PunchDate.Value > DateOnly.FromDateTime(clock.LocalToday()))
+            throw new BusinessException("补卡日期不能晚于今天");
+        // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点——以前只检查了日期不晚于今天，
+        // 没检查具体时间点：员工早上就能提交"今天 17:30 下班卡"，只要审批人批得快，中午提前走人
+        // 也会按 17:30 结算工时（2026-09-29 审查发现 M5）。
+        // 补下班卡还要按审批回写同一套顺延规则（UpdateAttendanceAfterApprovalAsync/ResolvePunchReplenishmentClockOut）
+        // 先把最终会落到哪个时刻算出来再比较——不然夜班下班卡顺延到第二天后，仍然能提交出一个
+        // "现在还没到"的时间点（2026-09-29 第 12 轮审查发现，M5 只堵了一半）。这里直接查库、不走
+        // attendanceService.GetShiftAssignmentAsync，因为测试用的 FakeAttendanceService 没实现那个方法。
+        var punchAt = dto.PunchDate.Value.ToDateTime(dto.PunchTime.Value);
+        if (dto.PunchType == PunchType.ClockOut)
+        {
+            var existingClockIn = await db.AttendanceRecords
+                .Where(r => r.UserId == applicantUserId && r.WorkDate == dto.PunchDate.Value)
+                .Select(r => r.ClockInTime)
+                .FirstOrDefaultAsync();
+            var shiftForPunch = await db.ShiftAssignments
+                .Where(a => a.UserId == applicantUserId && a.WorkDate == dto.PunchDate.Value)
+                .Select(a => a.ShiftSchedule)
+                .FirstOrDefaultAsync();
+            punchAt = AttendanceService.ResolvePunchReplenishmentClockOut(
+                dto.PunchDate.Value, dto.PunchTime.Value, existingClockIn, shiftForPunch);
+        }
+        if (punchAt > clock.LocalNow())
+            throw new BusinessException($"补卡时间 {punchAt:MM-dd HH:mm} 还没到，请填写真实已经发生的打卡时间（夜班下班卡会算到第二天）");
+        if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
+                && a.ApprovalType == ApprovalType.PunchReplenishment && activeStatuses.Contains(a.ApprovalStatus)
+                && a.PunchDate == dto.PunchDate && a.PunchType == dto.PunchType))
+            throw new BusinessException("这天的补卡申请已经提交过了，不能重复提交");
+    }
+
+    /// <summary>请假申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>
+    private async Task ValidateLeaveRequestAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
+    {
+        if (dto.LeaveStartTime is null || dto.LeaveEndTime is null)
+            throw new BusinessException("请填写请假的起止时间");
+        if (dto.LeaveStartTime < clock.LocalNow().AddHours(-24))
+            throw new BusinessException("请假开始时间最早只能选到现在往前推24小时以内");
+        if (dto.LeaveStartTime > clock.LocalNow().AddMonths(MaxAdvanceRequestMonths))
+            throw new BusinessException($"请假开始时间最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
+        if (dto.LeaveEndTime <= dto.LeaveStartTime)
+            throw new BusinessException("请假结束时间必须晚于开始时间");
+        if ((dto.LeaveEndTime.Value - dto.LeaveStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
+            throw new BusinessException($"请假时间跨度不能超过 {MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交");
+        if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
+                && a.ApprovalType == ApprovalType.Leave && activeStatuses.Contains(a.ApprovalStatus)
+                && a.LeaveStartTime < dto.LeaveEndTime && dto.LeaveStartTime < a.LeaveEndTime))
+            throw new BusinessException("这段时间的请假申请已经提交过了，不能重复提交");
+        await EnsureLeaveHasWorkdayAsync(dto, applicantUserId);
+    }
+
+    /// <summary>
+    /// 休息日不用请假：事假/病假/年假/调休的请假时间如果整段都落在休息日（按这个人自己排班的每周休息日，
+    /// 没排班按周六周日），直接拦下——这种单子批下来也记不上任何请假，回写考勤时每天都会被跳过，
+    /// 只会让员工和审批人白忙一场（2026-10 用户要求）。区间里只要有一天是上班日就放行（休息日那几天照旧不算）。
+    /// 婚假/产假/丧假按自然日算，休息日也算请假，不拦。判断口径跟审批通过后的逐日回写（ApplyApprovedLeaveAsync）一致。
+    /// </summary>
+    private async Task EnsureLeaveHasWorkdayAsync(SubmitApprovalDto dto, int applicantUserId)
+    {
+        if (AttendanceService.LeaveCountsNaturalDays(dto.LeaveType)) return;
+        var start = dto.LeaveStartTime!.Value;
+        var end   = dto.LeaveEndTime!.Value;
+        var sd = DateOnly.FromDateTime(start);
+        var ed = DateOnly.FromDateTime(end);
+        var shifts = (await db.ShiftAssignments
+                .Include(a => a.ShiftSchedule)
+                .Where(a => a.UserId == applicantUserId && a.WorkDate >= sd && a.WorkDate <= ed)
+                .ToListAsync())
+            .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
+        for (var d = sd; d <= ed; d = d.AddDays(1))
+        {
+            shifts.TryGetValue(d, out var shift);
+            if (!AttendanceService.HasLeaveOverlapForDay(d, start, end, shift)) continue;   // 这一天和请假时段没有真实交集
+            if (!AttendanceService.IsShiftWeeklyRestDay(d, shift)) return;                    // 有一天是上班日，放行
+        }
+        throw new BusinessException(
+            $"您选的请假时间（{start:MM-dd HH:mm} ~ {end:MM-dd HH:mm}）全部是休息日，休息日不需要请假，请改选上班日；" +
+            "如果是婚假、产假、丧假这类按自然日计算的假别，请选对应的假别");
+    }
+
+    /// <summary>加班申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>
+    private async Task ValidateOvertimeRequestAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
+    {
+        if (dto.OvertimeStartTime is null || dto.OvertimeEndTime is null)
+            throw new BusinessException("请填写加班的起止时间");
+        if (DateOnly.FromDateTime(dto.OvertimeStartTime.Value) != DateOnly.FromDateTime(clock.LocalToday()))
+            throw new BusinessException("加班申请必须是当天的加班，请在当天24点前提交当日申请");
+        if (dto.OvertimeEndTime <= dto.OvertimeStartTime)
+            throw new BusinessException("加班结束时间必须晚于开始时间");
+        if ((dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours > MaxOvertimeHours)
+            throw new BusinessException($"单次加班时长不能超过 {MaxOvertimeHours} 小时，请检查起止时间");
+        // 工作日的加班时间段不能和当天班次的上下班时间重叠：正班时间本来就按打卡算正班工时，再填成加班会把同一段
+        // 时间算两遍（2026-09 上一期有 122 张这样的单子、约 1000 小时重叠——员工把整个工作日时间都填成了加班）。
+        // 休息日（没有"正班"）不受限，整天加班照常；当天没排班的也不判断。（2026-09-28 用户确认）
+        var otDate  = DateOnly.FromDateTime(dto.OvertimeStartTime.Value);
+        var otPrev  = otDate.AddDays(-1);
+        var otAssigns = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+            .Where(a => a.UserId == applicantUserId && (a.WorkDate == otDate || a.WorkDate == otPrev))
+            .ToListAsync();
+        // 当天的班次，加上"昨天的跨天班次（夜班）延续到今天凌晨的那一段"——夜班员工在凌晨填的加班，
+        // 如果压在昨晚夜班的正班时间里，一样是重复计算
+        foreach (var (shiftDate, shiftAssign) in new[] { (otDate, otAssigns.FirstOrDefault(a => a.WorkDate == otDate)), (otPrev, otAssigns.FirstOrDefault(a => a.WorkDate == otPrev)) })
+        {
+            var s0 = shiftAssign?.ShiftSchedule;
+            if (s0 is null || (shiftDate == otPrev && !s0.IsCrossDay)) continue;   // 昨天的班只有跨天班次才会延续到今天
+            if (AttendanceService.IsShiftWeeklyRestDay(shiftDate, s0)) continue;
+            var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(shiftDate, s0);   // 班次的上下班时间（跨天班次下班顺延到第二天）
+            if (dto.OvertimeStartTime.Value < shiftEnd && dto.OvertimeEndTime.Value > shiftStart)
+                throw new BusinessException(
+                    $"加班时间不能和上班时间重叠，请只填下班后（或上班前）的加班时段（您{(shiftDate == otDate ? "当天" : "前一天")}的班次是 {s0.WorkStartTime:HH\\:mm}–{s0.WorkEndTime:HH\\:mm}）");
+        }
+        if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
+                && a.ApprovalType == ApprovalType.Overtime && activeStatuses.Contains(a.ApprovalStatus)
+                && a.OvertimeStartTime < dto.OvertimeEndTime && dto.OvertimeStartTime < a.OvertimeEndTime))
+            throw new BusinessException("这段时间的加班申请已经提交过了，不能重复提交");
+    }
+
+    /// <summary>出差申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>
+    private async Task ValidateBusinessTripRequestAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
+    {
+        if (dto.BusinessTripStartTime is null || dto.BusinessTripEndTime is null)
+            throw new BusinessException("请填写出差的起止时间");
+        // 下限放宽到"今天0点"（而不是精确到此刻）：方便忘记提前申请的人，回来补提今天已经
+        // 开始的出差；不再往前追溯到昨天，避免撞上已经打完一整天卡的记录——出差审批通过后
+        // 会把当天工时无条件覆盖成标准工时（"自动记为全勤，无需打卡"），真往前放开到昨天，
+        // 覆盖掉已有真实打卡工时的概率会明显变大（2026-09-30 用户确认只放宽到当天，不做这层兜底）。
+        if (dto.BusinessTripStartTime < DateOnly.FromDateTime(clock.LocalToday()).ToDateTime(TimeOnly.MinValue))
+            throw new BusinessException("出差开始时间不能早于今天0点");
+        if (dto.BusinessTripStartTime > clock.LocalNow().AddMonths(MaxAdvanceRequestMonths))
+            throw new BusinessException($"出差开始时间最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
+        if (dto.BusinessTripEndTime < dto.BusinessTripStartTime)
+            throw new BusinessException("出差结束时间不能早于开始时间");
+        if ((dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays > MaxLeaveOrTripSpanDays)
+            throw new BusinessException($"出差时间跨度不能超过 {MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交");
+        if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
+                && a.ApprovalType == ApprovalType.BusinessTrip && activeStatuses.Contains(a.ApprovalStatus)
+                && a.BusinessTripStartTime < dto.BusinessTripEndTime && dto.BusinessTripStartTime < a.BusinessTripEndTime))
+            throw new BusinessException("这段时间的出差申请已经提交过了，不能重复提交");
+    }
+
+    /// <summary>请假时长：逐日按班次累加，口径跟审批通过后的回写一致；没填请假时间返回 null。</summary>
+    private async Task<decimal?> ComputeLeaveDurationAsync(SubmitApprovalDto dto, int applicantUserId)
+    {
+        // 请假时长：逐日按 ComputeLeaveHoursForDay 累加（跟审批通过后 UpdateAttendanceAfterApprovalAsync
+        // 逐日回写用的是同一个函数），而不是直接拿整段起止时间套工时公式——直接套公式的话，跨天请假会把
+        // 期间的整晚睡眠时间也当成"在岗时长"一起扣两道餐时，算出来的总时长比逐日累加的结果还离谱地偏大
+        // （比如一张 3 天的假单，套公式=44.5 小时，逐日累加只有约 24 小时），两处口径还对不上。
+        decimal? leaveDuration = null;
+        if (dto.LeaveStartTime.HasValue && dto.LeaveEndTime.HasValue)
+        {
+            var leaveSd = DateOnly.FromDateTime(dto.LeaveStartTime.Value);
+            var leaveEd = DateOnly.FromDateTime(dto.LeaveEndTime.Value);
+            var leaveShiftsInRange = (await db.ShiftAssignments
+                    .Include(a => a.ShiftSchedule)
+                    .Where(a => a.UserId == applicantUserId && a.WorkDate >= leaveSd && a.WorkDate <= leaveEd)
+                    .ToListAsync())
+                .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
+            var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+            // 跟审批通过后的逐日回写（UpdateAttendanceAfterApprovalAsync）同一口径：按班次上下班时间取交集，
+            // 事假/病假/年假/调休遇到休息日不计（婚假/产假/丧假按自然日算）
+            var skipNonWorkdays = !AttendanceService.LeaveCountsNaturalDays(dto.LeaveType);
+
+            decimal total = 0;
+            for (var d = leaveSd; d <= leaveEd; d = d.AddDays(1))
+            {
+                leaveShiftsInRange.TryGetValue(d, out var leaveShift);
+                if (skipNonWorkdays && AttendanceService.IsShiftWeeklyRestDay(d, leaveShift)) continue;
+                var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
+                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift);
+            }
+            leaveDuration = total;
+        }
+        return leaveDuration;
+    }
+
+    /// <summary>加班时长：跟正班工时同一套公式，不足半小时直接拒绝；没填加班时间返回 null。</summary>
+    private static decimal? ComputeOvertimeDuration(SubmitApprovalDto dto)
+    {
+        // 加班时长：跟正班工时同一套公式（AttendanceService.ComputeWorkHours）——申请的时间段压到公司统一
+        // "不算钱"时段（午间/晚餐/宵夜/早餐）的那部分不算钱，最后按半小时向下取整。
+        // 以前直接拿"结束-开始"的总长度，休息日全天加班（08:30-22:00）会记成 13.5 小时，把饭点也算成了加班
+        // （2026-09-28 用户确认）。审批通过后回写考勤用的是同一个函数，所以这里显示的时长就是最后记的时长
+        decimal? overtimeDuration = null;
+        if (dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue)
+        {
+            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value);
+            if (overtimeDuration < 0.5m)
+                throw new BusinessException("加班时长不足 0.5 小时（按半小时为最小单位计算），请检查起止时间");
+        }
+        return overtimeDuration;
     }
 
     /// <summary>
@@ -337,7 +416,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(x => x.ApprovalStatus, dto.IsApproved ? ApprovalStatus.Approved : ApprovalStatus.Rejected)
                     .SetProperty(x => x.Comment, dto.Comment)
-                    .SetProperty(x => x.HandledAt, DateTime.Now));
+                    .SetProperty(x => x.HandledAt, clock.LocalNow()));
             if (claimed == 0) { await transaction.RollbackAsync(); return (false, (ApprovalRequest?)null, (ApprovalStep?)null); }
 
             var req = step.ApprovalRequest;
@@ -376,7 +455,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                          && (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress))
                 .ExecuteUpdateAsync(a => a
                     .SetProperty(x => x.ApprovalStatus, newRequestStatus)
-                    .SetProperty(x => x.UpdatedAt, DateTime.Now));
+                    .SetProperty(x => x.UpdatedAt, clock.LocalNow()));
             if (requestClaimed == 0) { await transaction.RollbackAsync(); return (false, (ApprovalRequest?)null, (ApprovalStep?)null); }
             req.ApprovalStatus = newRequestStatus;   // 同步内存对象，后面回写考勤/通知要用
 
@@ -408,7 +487,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                         && (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress))
             .ExecuteUpdateAsync(a => a
                 .SetProperty(x => x.ApprovalStatus, ApprovalStatus.Cancelled)
-                .SetProperty(x => x.UpdatedAt, DateTime.Now));
+                .SetProperty(x => x.UpdatedAt, clock.LocalNow()));
         if (claimed == 0) return false;
 
         // 还没处理的审批节点要一并作废，不然撤销形同虚设：审批人那边这个节点还显示"待审批"，
@@ -589,7 +668,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 不是最后一张的单被删掉（并发提交时一张回滚、删了当天提交过申请的员工……），之后算出的号就一直落在
         // 已存在的号上，3 次重试全撞，当天这类申请全部提交失败（2026-09-24 第 11 轮审查）。
         // 流水号固定 4 位，按字符串倒序取第一条就是最大号；RequestNo 有唯一索引，StartsWith 会走索引。
-        var head   = prefix + DateTime.Now.ToString("yyyyMMdd");
+        var head   = prefix + clock.LocalNow().ToString("yyyyMMdd");
         var lastNo = await db.ApprovalRequests
             .Where(a => a.RequestNo.StartsWith(head))
             .OrderByDescending(a => a.RequestNo)
@@ -627,7 +706,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             // 班组长/主管本人如果恰好也在自己所在考勤组的审批人名单里，不能自己批自己提交的申请。
             if (selectedApproverUserId is null || selectedApproverUserId == applicant.Id
                 || !groupApproverIds.Contains(selectedApproverUserId.Value))
-                throw new InvalidOperationException("请选择有效的审批人");
+                throw new BusinessException("请选择有效的审批人");
             approverId = selectedApproverUserId;
         }
         else
@@ -642,7 +721,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 永远停在"待审批"，没有任何人能处理（2026-09-21 代码审查发现）。改成显式抛异常，
         // 调用方 SubmitApprovalAsync 会连带把已落库的申请单一起删掉，不会留下这种"审不掉"的脏单。
         if (!approverId.HasValue)
-            throw new InvalidOperationException("没有找到可用的审批人，请联系管理员配置审批人或直属上级");
+            throw new BusinessException("没有找到可用的审批人，请联系管理员配置审批人或直属上级");
 
         db.ApprovalSteps.Add(new ApprovalStep
         {
@@ -650,7 +729,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             ApproverUserId    = approverId.Value,
             StepOrder         = 1,
             ApprovalStatus    = ApprovalStatus.Pending,
-            CreatedAt         = DateTime.Now
+            CreatedAt         = clock.LocalNow()
         });
 
         // 二级审批：一级节点通过后再自动追加一个申请人"直属上级"的节点。
@@ -667,7 +746,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     ApproverUserId    = level2ApproverId.Value,
                     StepOrder         = 2,
                     ApprovalStatus    = ApprovalStatus.Pending,
-                    CreatedAt         = DateTime.Now
+                    CreatedAt         = clock.LocalNow()
                 });
         }
 
@@ -756,7 +835,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             Content          = content,
             NotificationType = type,
             RelatedId        = relatedId,
-            CreatedAt        = DateTime.Now
+            CreatedAt        = clock.LocalNow()
         });
         await db.SaveChangesAsync();
     }

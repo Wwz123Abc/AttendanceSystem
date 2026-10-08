@@ -8,6 +8,7 @@ using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.DTOs;
 
 namespace AttendanceSystem.Controllers;
 
@@ -25,12 +26,12 @@ public class AccountController(IUserService userService, IOptions<AppSettingsOpt
     public async Task<IActionResult> Login([FromBody] LoginRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.EmployeeNo) || string.IsNullOrWhiteSpace(req.Password))
-            return BadRequest(new { Success = false, Message = "工号和密码不能为空" });
+            return BadRequest(ApiResponse.Failed("工号和密码不能为空"));
 
         // 交给用户服务校验工号+密码：工号/密码错误、账号已停用，统一返回 null（不区分提示，避免账号被枚举）
         var user = await userService.ValidateLoginAsync(req.EmployeeNo, req.Password);
         if (user is null)
-            return Ok(new { Success = false, Message = "工号或密码错误，请重新输入" });
+            return Ok(ApiResponse.Failed("工号或密码错误，请重新输入"));
 
         // 登录成功：把用户身份写进 Cookie（之后每次访问靠它认人）
         var claims    = AuthClaimsFactory.BuildUserClaims(user);
@@ -57,7 +58,7 @@ public class AccountController(IUserService userService, IOptions<AppSettingsOpt
     public async Task<IActionResult> Logout()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        return Ok(new { Success = true, RedirectUrl = "/Login" });
+        return Ok(ApiResponse.Succeeded(null, ("redirectUrl", "/Login")));
     }
 
     /// <summary>修改密码（需登录）。</summary>
@@ -66,6 +67,6 @@ public class AccountController(IUserService userService, IOptions<AppSettingsOpt
     {
         if (CurrentUserId == 0) return Unauthorized();   // 没登录直接拒绝
         var ok = await userService.ChangePasswordAsync(CurrentUserId, req.OldPassword, req.NewPassword);
-        return Ok(new { Success = ok, Message = ok ? "密码修改成功" : "原密码错误" });
+        return Ok(ApiResponse.FromResult(ok, "密码修改成功", "原密码错误"));
     }
 }

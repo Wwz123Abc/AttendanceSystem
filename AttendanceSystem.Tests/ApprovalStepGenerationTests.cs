@@ -13,7 +13,7 @@ namespace AttendanceSystem.Tests;
 /// <summary>
 /// 回归测试：二级审批考勤组，如果没配"审批人名单"，一级节点会退回"直属上级"；这种组下再自动追加
 /// 二级节点时，以前直接拿同一个"直属上级 ?? 兜底"表达式再算一遍，跟一级是同一个人，等于要同一个人
-/// 对同一张单连点两次"通过"（2026-09-21 代码审查发现，见 docs/项目审查与问题总表.md B10）。
+/// 对同一张单连点两次"通过"（2026-09-21 代码审查发现）。
 /// </summary>
 public class ApprovalStepGenerationTests : IDisposable
 {

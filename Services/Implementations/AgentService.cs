@@ -5,6 +5,8 @@ using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
 
@@ -14,8 +16,12 @@ public class AgentService(
     IAgentEngine engine,
     IAgentToolExecutor toolExecutor,
     IOptions<AgentOptions> options,
-    ILogger<AgentService> logger) : IAgentService
+    ILogger<AgentService> logger,
+    TimeProvider? timeProvider = null) : IAgentService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+
     private readonly AgentOptions _opt = options.Value;
 
     // 系统提示词：身份 + 边界。刻意不放任何真实业务数据/人名；
@@ -52,9 +58,9 @@ public class AgentService(
     /// 系统提示词 + 当前日期。模型本身不知道"今天"是哪天（历史训练数据没有实时时钟），
     /// 每轮都把服务器当前日期/星期塞进去，避免每次问"今天/本周"相关问题都要先反问用户日期。
     /// </summary>
-    private static string BuildSystemPrompt()
+    private string BuildSystemPrompt()
     {
-        var now = DateTime.Now;
+        var now = clock.LocalNow();
         return SystemPrompt + $"\n当前日期：{now:yyyy-MM-dd}（星期{WeekdayNames[(int)now.DayOfWeek]}）。涉及\"今天/本周/本月\"等相对日期的提问，直接按这个日期换算，不要反问管理员今天是几号。";
     }
 
@@ -97,7 +103,7 @@ public class AgentService(
     /// <inheritdoc/>
     public async Task<int> GetTodayTokenUsageAsync(int userId)
     {
-        var todayStart = DateTime.Now.Date;
+        var todayStart = clock.LocalNow().Date;
         return await db.AgentMessages
             .Where(m => m.CreatedAt >= todayStart && m.Conversation!.UserId == userId)
             .SumAsync(m => (m.PromptTokens ?? 0) + (m.CompletionTokens ?? 0));
@@ -110,8 +116,8 @@ public class AgentService(
             UserId    = userId,
             Title     = null,
             IsActive  = true,
-            CreatedAt = DateTime.Now,
-            UpdatedAt = DateTime.Now
+            CreatedAt = clock.LocalNow(),
+            UpdatedAt = clock.LocalNow()
         };
         db.AgentConversations.Add(conv);
         await db.SaveChangesAsync();
@@ -125,7 +131,7 @@ public class AgentService(
         if (conv is null) return false;   // 不存在或不是本人的会话，一律当"没有"处理（不泄露存在性）
 
         conv.IsActive  = false;
-        conv.UpdatedAt = DateTime.Now;
+        conv.UpdatedAt = clock.LocalNow();
         await db.SaveChangesAsync();
         return true;
     }
@@ -154,20 +160,20 @@ public class AgentService(
     public async Task<string> SendAsync(int userId, int conversationId, string text, CancellationToken ct)
     {
         if (!_opt.Enabled)
-            throw new InvalidOperationException("智能助手功能未启用，请联系系统管理员在配置中开启");
+            throw new BusinessException("智能助手功能未启用，请联系系统管理员在配置中开启");
 
         if (string.IsNullOrWhiteSpace(text))
-            throw new InvalidOperationException("请输入内容");
+            throw new BusinessException("请输入内容");
         if (text.Length > 4000)
-            throw new InvalidOperationException("单次提问不能超过 4000 字");
+            throw new BusinessException("单次提问不能超过 4000 字");
 
         // 归属校验
         var conv = await db.AgentConversations
             .FirstOrDefaultAsync(c => c.Id == conversationId && c.UserId == userId && c.IsActive, ct);
         if (conv is null)
-            throw new InvalidOperationException("会话不存在或已被删除");
+            throw new BusinessException("会话不存在或已被删除");
 
-        var now = DateTime.Now;
+        var now = clock.LocalNow();
 
         // 第一次提问时用提问开头生成会话标题
         if (string.IsNullOrWhiteSpace(conv.Title))
@@ -259,9 +265,9 @@ public class AgentService(
             PromptTokens      = promptTokens,
             CompletionTokens  = completionTokens,
             ToolTraceText     = toolTrace.Count > 0 ? string.Join(" → ", toolTrace) : null,
-            CreatedAt         = DateTime.Now
+            CreatedAt         = clock.LocalNow()
         });
-        conv.UpdatedAt = DateTime.Now;
+        conv.UpdatedAt = clock.LocalNow();
         await db.SaveChangesAsync(ct);
 
         // 5) 审计：Token 用量进日志（不含对话内容，避免把管理员提问原文刷进日志）
@@ -275,15 +281,15 @@ public class AgentService(
     /// <inheritdoc/>
     public async Task<string> SendStreamingAsync(int userId, int conversationId, string text, Func<string, Task> onDelta, CancellationToken ct)
     {
-        if (!_opt.Enabled) throw new InvalidOperationException("智能助手功能未启用，请联系系统管理员在配置中开启");
-        if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("请输入内容");
-        if (text.Length > 4000) throw new InvalidOperationException("单次提问不能超过 4000 字");
+        if (!_opt.Enabled) throw new BusinessException("智能助手功能未启用，请联系系统管理员在配置中开启");
+        if (string.IsNullOrWhiteSpace(text)) throw new BusinessException("请输入内容");
+        if (text.Length > 4000) throw new BusinessException("单次提问不能超过 4000 字");
 
         var conv = await db.AgentConversations
             .FirstOrDefaultAsync(c => c.Id == conversationId && c.UserId == userId && c.IsActive, ct);
-        if (conv is null) throw new InvalidOperationException("会话不存在或已被删除");
+        if (conv is null) throw new BusinessException("会话不存在或已被删除");
 
-        var now = DateTime.Now;
+        var now = clock.LocalNow();
         if (string.IsNullOrWhiteSpace(conv.Title))
         {
             conv.Title = text.Trim().Length <= 20 ? text.Trim() : text.Trim()[..20] + "…";
@@ -356,9 +362,9 @@ public class AgentService(
             ConversationId = conversationId, Role = "assistant", Content = replyText,
             ModelName = modelName, PromptTokens = promptTokens, CompletionTokens = completionTokens,
             ToolTraceText = toolTrace.Count > 0 ? string.Join(" → ", toolTrace) : null,
-            CreatedAt = DateTime.Now
+            CreatedAt = clock.LocalNow()
         });
-        conv.UpdatedAt = DateTime.Now;
+        conv.UpdatedAt = clock.LocalNow();
         await db.SaveChangesAsync(ct);
 
         logger.LogInformation(

@@ -16,6 +16,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -65,7 +66,7 @@ public class UserDeletionGuardTests : SqliteTestBase
 
         using var db2 = CreateContext();
         var (svc, adminId) = NewUserService(db2);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.DeleteUserAsync(uid, adminId));
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.DeleteUserAsync(uid, adminId));
         Assert.Contains("停用", ex.Message);
 
         using var check = CreateContext();

@@ -7,6 +7,7 @@ using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using AttendanceSystem.Models.DTOs;
 
 namespace AttendanceSystem.Controllers;
 
@@ -24,7 +25,7 @@ public class AdminController(
     IDeptScopeService deptScopeService,
     AttendanceDbContext db) : ControllerBase
 {
-    private CurrentUser Cu => HttpContext.GetCurrentUser()!;
+    private CurrentUser Cu => HttpContext.GetRequiredUser();
 
     // ── 员工管理 ──────────────────────────────────────────────────────────────
 
@@ -65,7 +66,7 @@ public class AdminController(
         if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId))
             return Forbid();
         var contactError = ContactValidationHelper.ValidateContactFormat(req.Phone, req.IdNumber);
-        if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
+        if (contactError is not null) return BadRequest(ApiResponse.Failed(contactError));
         var deviceIds = req.DeviceIds ?? [];
         if (!await ValidateDeviceScopeAsync(deviceIds))
             return Forbid();
@@ -92,7 +93,7 @@ public class AdminController(
         var created = await userService.CreateUserAsync(user, initialPwd);
         await userService.SetUserDevicesAsync(created.Id, deviceIds);
         await ApplyScopeAfterSaveAsync(created.Id, req.ScopedDepartmentId, isCreate: true);
-        return Ok(new { Success = true, Message = "员工创建成功", UserId = created.Id, InitialPassword = initialPwd });
+        return Ok(ApiResponse.Succeeded("员工创建成功", ("userId", created.Id), ("initialPassword", initialPwd)));
     }
 
     /// <summary>修改员工。<paramref name="req"/>.DeviceIds 为 null 表示这次不改动设备分配；
@@ -105,7 +106,7 @@ public class AdminController(
         if (!await ValidateUserScopeAsync(req.DepartmentId, req.SupervisorUserId, req.Role, req.AttendanceGroupId, targetCurrentRole))
             return Forbid();
         var contactError = ContactValidationHelper.ValidateContactFormat(req.Phone, req.IdNumber);
-        if (contactError is not null) return BadRequest(new { Success = false, Message = contactError });
+        if (contactError is not null) return BadRequest(ApiResponse.Failed(contactError));
         if (req.DeviceIds is not null && !await ValidateDeviceScopeAsync(req.DeviceIds))
             return Forbid();
 
@@ -142,7 +143,7 @@ public class AdminController(
                 await userService.SetUserDevicesAsync(id, req.DeviceIds);
             await ApplyScopeAfterSaveAsync(id, req.ScopedDepartmentId, isCreate: false);
         }
-        return Ok(new { Success = ok, Message = ok ? "更新成功" : "用户不存在" });
+        return Ok(ApiResponse.FromResult(ok, "更新成功", "用户不存在"));
     }
 
     /// <summary>停用员工（DELETE 在这里表示“停用”，不是真删）。</summary>
@@ -151,7 +152,7 @@ public class AdminController(
     {
         if (!await CanAccessUserAsync(id)) return Forbid();
         var ok = await userService.DeactivateUserAsync(id, Cu.UserId);
-        return Ok(new { Success = ok, Message = ok ? "已停用" : "用户不存在" });
+        return Ok(ApiResponse.FromResult(ok, "已停用", "用户不存在"));
     }
 
     /// <summary>重置某员工密码，返回新密码明文。</summary>
@@ -160,7 +161,7 @@ public class AdminController(
     {
         if (!await CanAccessUserAsync(id)) return Forbid();
         var newPwd = await userService.ResetPasswordAsync(id, Cu.UserId);
-        return Ok(new { Success = true, Message = "密码已重置", NewPassword = newPwd });
+        return Ok(ApiResponse.Succeeded("密码已重置", ("newPassword", newPwd)));
     }
 
     /// <summary>目标员工是否在当前登录者的管理范围内（按目标员工的 DepartmentId 判断）。</summary>
@@ -258,7 +259,7 @@ public class AdminController(
                 d.AttendanceGroupId, d.IsActive, d.SortIndex
             })
             .ToListAsync();
-        return Ok(new { Success = true, Data = depts });
+        return Ok(ApiResponse.WithData(depts));
     }
 
     /// <summary>新增部门。</summary>
@@ -288,7 +289,7 @@ public class AdminController(
         };
         db.Departments.Add(newDept);
         await db.SaveChangesAsync();
-        return Ok(new { Success = true, DeptId = newDept.Id });
+        return Ok(ApiResponse.Succeeded(null, ("deptId", newDept.Id)));
     }
 
     /// <summary>修改部门。</summary>
@@ -312,9 +313,9 @@ public class AdminController(
         // 部门管理页面已经拦了"上级不能选自己或自己的下级"，这个接口漏了同一道检查——一旦成环，
         // 这一支部门会从部门树和分公司管理范围里"消失"（2026-09-30 复核发现）
         if (req.ParentId == id)
-            return BadRequest(new { Success = false, Message = "上级部门不能是自己" });
+            return BadRequest(ApiResponse.Failed("上级部门不能是自己"));
         if (req.ParentId.HasValue && (await deptScopeService.GetSubtreeIdsAsync(id)).Contains(req.ParentId.Value))
-            return BadRequest(new { Success = false, Message = "上级部门不能选择自己的下级部门（会形成循环）" });
+            return BadRequest(ApiResponse.Failed("上级部门不能选择自己的下级部门（会形成循环）"));
 
         dept.DeptName    = req.DeptName;
         dept.DeptCode    = req.DeptCode;
@@ -323,7 +324,7 @@ public class AdminController(
         dept.Description = req.Description;
         dept.UpdatedAt   = DateTime.Now;
         await db.SaveChangesAsync();
-        return Ok(new { Success = true });
+        return Ok(ApiResponse.Succeeded());
     }
 
     // ── 考勤组管理 ────────────────────────────────────────────────────────────
@@ -348,7 +349,7 @@ public class AdminController(
         var groups = visibleIds is null
             ? all
             : all.Where(g => g.DepartmentIds.Count == 0 || g.DepartmentIds.Any(visibleIds.Contains)).ToList();
-        return Ok(new { Success = true, Data = groups });
+        return Ok(ApiResponse.WithData(groups));
     }
 
     /// <summary>新增考勤组。只有总部超级管理员能用这个接口——它是直接绑整个 AttendanceGroup 实体
@@ -365,7 +366,7 @@ public class AdminController(
         group.CreatedAt = group.UpdatedAt = DateTime.Now;
         db.AttendanceGroups.Add(group);
         await db.SaveChangesAsync();
-        return Ok(new { Success = true, GroupId = group.Id });
+        return Ok(ApiResponse.Succeeded(null, ("groupId", group.Id)));
     }
 
     /// <summary>某个考勤组是否在当前登录者的管理范围内（口径跟 GroupManage 页一致）。给"查看/使用"这种
@@ -424,7 +425,7 @@ public class AdminController(
                 .Select(g => g.Id).ToHashSet();
             shifts = shifts.Where(s => allowedGroupIds.Contains(s.AttendanceGroupId)).ToList();
         }
-        return Ok(new { Success = true, Data = shifts });
+        return Ok(ApiResponse.WithData(shifts));
     }
 
     /// <summary>班次字段范围校验：跟 ShiftManage 页面保存时的数值范围一致（页面有完整校验，这两个 API 以前原样落库，
@@ -457,13 +458,13 @@ public class AdminController(
         if (!await IsGroupWritableAsync(req.AttendanceGroupId)) return Forbid();
         if (ValidateShiftFields(req.ShiftName, req.LateToleranceMinutes, req.EarlyLeaveToleranceMinutes, req.OvertimeThresholdMinutes,
                 req.EarliestClockInMinutes, req.StandardWorkHours, req.Color, req.RestDaysOfWeek, req.MidCheckWindows) is { } createErr)
-            return BadRequest(new { Success = false, Message = createErr });
+            return BadRequest(ApiResponse.Failed(createErr));
         // 非跨天班次，下班时间必须晚于上班时间——不然会配出一个 08:00~08:00 甚至反过来的班次，
         // 后面算迟到/早退/工时全部会跟着算错，但当时不会报任何错，很难排查
         if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
-            return BadRequest(new { Success = false, Message = "非跨天班次的下班时间必须晚于上班时间" });
+            return BadRequest(ApiResponse.Failed("非跨天班次的下班时间必须晚于上班时间"));
         if (req.IsCrossDay && req.WorkEndTime > req.WorkStartTime)
-            return BadRequest(new { Success = false, Message = "跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）" });
+            return BadRequest(ApiResponse.Failed("跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）"));
         var shift = new ShiftSchedule
         {
             AttendanceGroupId          = req.AttendanceGroupId,
@@ -486,7 +487,7 @@ public class AdminController(
         };
         db.ShiftSchedules.Add(shift);
         await db.SaveChangesAsync();
-        return Ok(new { Success = true, ShiftId = shift.Id });
+        return Ok(ApiResponse.Succeeded(null, ("shiftId", shift.Id)));
     }
 
     /// <summary>修改班次。同 CreateShift，用 DTO 避免 ShiftSchedule.AttendanceGroup 导航属性
@@ -500,11 +501,11 @@ public class AdminController(
         if (!await IsGroupWritableAsync(shift.AttendanceGroupId)) return Forbid();
         if (ValidateShiftFields(req.ShiftName, req.LateToleranceMinutes, req.EarlyLeaveToleranceMinutes, req.OvertimeThresholdMinutes,
                 req.EarliestClockInMinutes ?? 0, req.StandardWorkHours, req.Color, req.RestDaysOfWeek, req.MidCheckWindows) is { } updateErr)
-            return BadRequest(new { Success = false, Message = updateErr });
+            return BadRequest(ApiResponse.Failed(updateErr));
         if (!req.IsCrossDay && req.WorkEndTime <= req.WorkStartTime)
-            return BadRequest(new { Success = false, Message = "非跨天班次的下班时间必须晚于上班时间" });
+            return BadRequest(ApiResponse.Failed("非跨天班次的下班时间必须晚于上班时间"));
         if (req.IsCrossDay && req.WorkEndTime > req.WorkStartTime)
-            return BadRequest(new { Success = false, Message = "跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）" });
+            return BadRequest(ApiResponse.Failed("跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）"));
 
         shift.ShiftName                  = req.ShiftName;
         shift.ShiftType                  = req.ShiftType;
@@ -526,7 +527,7 @@ public class AdminController(
         if (req.MidCheckWindows is not null) shift.MidCheckWindows = req.MidCheckWindows == "" ? null : req.MidCheckWindows;
         shift.UpdatedAt                  = DateTime.Now;
         await db.SaveChangesAsync();
-        return Ok(new { Success = true });
+        return Ok(ApiResponse.Succeeded());
     }
 
 }

@@ -7,6 +7,7 @@ using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Employee;
 
@@ -57,14 +58,14 @@ public class SelfRegisterModel(
         try
         {
             if (IdCardPhoto is null || IdCardPhoto.Length == 0)
-                throw new InvalidOperationException("请上传身份证照片");
+                throw new BusinessException("请上传身份证照片");
             // 手机号会被直接拼进身份证照片的存储目录名（见 SaveIdCardPhotoAsync），这一步在
             // SubmitAsync 做完整格式校验之前就先跑了；这个页面未登录也能提交，如果这里只兜底判个"非空"，
             // 填个 "../../xxx" 之类的值就能越出预期目录建文件夹/写文件（匿名可达的路径穿越写面）。
             // 所以这里要在真正用 Phone 建目录之前，把 SubmitAsync 里那套手机号格式校验提前搬过来一份，
             // 校验通过后 Phone 只可能是纯 11 位数字，天然不含任何路径分隔符/穿越字符。
             if (string.IsNullOrWhiteSpace(Phone) || !System.Text.RegularExpressions.Regex.IsMatch(Phone.Trim(), @"^1[3-9]\d{9}$"))
-                throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
+                throw new BusinessException("请输入正确格式的手机号（11 位中国大陆手机号）");
             var photoUrl = await SaveIdCardPhotoAsync();
             savedPhotoPath = photoUrl is null ? null : Path.Combine(PrivateFileStorage.GetRoot(env), photoUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
             await registrationService.SubmitAsync(new SubmitRegistrationDto
@@ -112,11 +113,11 @@ public class SelfRegisterModel(
     {
         if (IdCardPhoto is null || IdCardPhoto.Length == 0) return null;
 
-        if (IdCardPhoto.Length > 10 * 1024 * 1024)
-            throw new InvalidOperationException("身份证照片不能超过 10MB");
+        if (IdCardPhoto.Length > InputLimits.MaxImageUploadBytes)
+            throw new BusinessException("身份证照片不能超过 10MB");
         var ext = Path.GetExtension(IdCardPhoto.FileName).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
-            throw new InvalidOperationException("身份证照片只支持 jpg / png / webp 格式");
+            throw new BusinessException("身份证照片只支持 jpg / png / webp 格式");
 
         // 只看扩展名不够——匿名提交的这个接口可以随便把任意文件改成 .jpg 后缀上传。这里额外看一眼
         // 文件头（魔数），确认内容真的是对应的图片格式，跟考勤机上传照片（ZKDeviceController）
@@ -125,7 +126,7 @@ public class SelfRegisterModel(
         await using (var headerStream = IdCardPhoto.OpenReadStream())
             await headerStream.ReadExactlyAsync(header.AsMemory(0, (int)Math.Min(12, IdCardPhoto.Length)));
         if (!ImageValidationHelper.IsValidImageHeader(ext, header))
-            throw new InvalidOperationException("身份证照片文件内容与格式不符，请重新选择图片文件");
+            throw new BusinessException("身份证照片文件内容与格式不符，请重新选择图片文件");
 
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
         var dir        = Path.Combine(PrivateFileStorage.GetRoot(env), uploadPath, "idcards", "registrations", Phone.Trim());

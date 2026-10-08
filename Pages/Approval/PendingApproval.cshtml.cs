@@ -4,6 +4,7 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Pages.Approval;
 
@@ -34,7 +35,7 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
             bool isManager = User.IsInRole(nameof(AttendanceSystem.Models.Enums.UserRole.Admin))
                           || User.IsInRole(nameof(AttendanceSystem.Models.Enums.UserRole.Clerk));
             var managerVisibleDeptIds = isManager
-                ? await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!)
+                ? await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser())
                 : null;
             CurrentDetail = await approvalService.GetApprovalDetailAsync(detailId.Value, CurrentUserId, isManager, managerVisibleDeptIds);
         }
@@ -167,7 +168,7 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
         // 不能直接 Comment.Trim()，否则没填意见就点“通过”必然报空引用异常
         Comment ??= string.Empty;
         if (required && string.IsNullOrWhiteSpace(Comment)) return "驳回时请填写审批意见";
-        if (Comment.Trim().Length > 1000) return "审批意见不能超过 1000 个字";
+        if (Comment.Trim().Length > InputLimits.ApprovalCommentMaxLength) return "审批意见不能超过 1000 个字";
         return null;
     }
 

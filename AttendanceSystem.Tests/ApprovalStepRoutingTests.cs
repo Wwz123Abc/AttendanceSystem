@@ -5,6 +5,7 @@ using AttendanceSystem.Services.Implementations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Xunit;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -76,8 +77,8 @@ public class ApprovalStepRoutingTests : SqliteTestBase
         using var db = CreateContext();
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(w.applicant, PunchDto(w.supervisor)));   // 直属上级不在名单里
-        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(w.applicant, PunchDto(null)));            // 不选
+        await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(w.applicant, PunchDto(w.supervisor)));   // 直属上级不在名单里
+        await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(w.applicant, PunchDto(null)));            // 不选
 
         using var check = CreateContext();
         Assert.Empty(await check.ApprovalRequests.ToListAsync());   // 申请单被连带删掉，不留审不掉的脏单

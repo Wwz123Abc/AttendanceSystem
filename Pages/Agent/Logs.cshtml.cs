@@ -28,7 +28,7 @@ public class LogsModel(AttendanceDbContext db) : PageModel
 
     public async Task OnGetAsync()
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         IsHq = cu.Role == UserRole.Admin && !cu.IsScoped;
 
         var q = db.AgentActionLogs.AsNoTracking();

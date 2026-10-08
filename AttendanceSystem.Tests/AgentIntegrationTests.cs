@@ -8,6 +8,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -512,7 +513,7 @@ public class AgentIntegrationTests : IDisposable
         using var db = CreateContext();
         var users = new UserService(db, new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions,
             new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance)), AppOptions, new DeptScopeService(db), NullLogger<UserService>.Instance);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => users.DeactivateUserAsync(w.HqAdmin, w.BranchAdmin));
+        await Assert.ThrowsAsync<BusinessException>(() => users.DeactivateUserAsync(w.HqAdmin, w.BranchAdmin));
         var n = await users.SetActiveBatchAsync([w.HqAdmin, w.UserA], false, w.BranchAdmin);
         Assert.Equal(1, n);   // 只处理了管得到的 UserA，总部超管被静默跳过、不报错打断整批
         var hq = await db.Users.AsNoTracking().SingleAsync(u => u.Id == w.HqAdmin);
@@ -762,7 +763,7 @@ public class AgentIntegrationTests : IDisposable
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         // 只加 5 分钟：不会跨到第二天（不然会先撞上"补卡日期不能晚于今天"，跟这条测试想验证的规则是两回事）
         var future = DateTime.Now.AddMinutes(5);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(w.UserA, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(w.UserA, new SubmitApprovalDto
         {
             ApprovalType = AttendanceSystem.Models.Enums.ApprovalType.PunchReplenishment,
             PunchDate = DateOnly.FromDateTime(future), PunchType = AttendanceSystem.Models.Enums.PunchType.ClockOut,
@@ -815,7 +816,7 @@ public class AgentIntegrationTests : IDisposable
         // 本程序自己抛的 InvalidOperationException：服务层专门给用户看的提示，保留
         using var ctx = CreateContext();
         var svc = new AttendanceService(ctx, AppOptions, NullLogger<AttendanceService>.Instance);
-        var ours = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ours = await Assert.ThrowsAsync<BusinessException>(
             () => svc.AdminAdjustPunchAsync(1, Wed, null, null, new string('x', 101), null));
         Assert.Equal(ours.Message, AgentErrorText.ForUser(ours));
 

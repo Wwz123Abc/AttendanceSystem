@@ -25,16 +25,18 @@ public class FakeAttendanceService : IAttendanceService
     public Task<string?> GetClockInRejectionAsync(int userId, DateTime now) => throw new NotImplementedException();
     public Task<AttendanceRecordDto?> GetTodayAttendanceAsync(int userId, DateTime? now = null) => throw new NotImplementedException();
     public Task<List<AttendanceRecordDto>> GetPersonalAttendanceAsync(PersonalAttendanceQueryDto query) => throw new NotImplementedException();
-    public Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto query, HashSet<int>? deptIds = null) => throw new NotImplementedException();
+    public Task<List<AttendanceRecordDto>> GetDeptAttendanceAsync(DeptAttendanceQueryDto query, HashSet<int>? deptIds = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<MonthlySummaryDto?> GetMonthlySummaryAsync(int userId, int year, int month) => throw new NotImplementedException();
     public Task<List<MyScheduleDto>> GetMyScheduleAsync(int userId, int year, int month) => throw new NotImplementedException();
-    public Task<List<MonthlySummaryDto>> GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null) => throw new NotImplementedException();
+    public Task<List<MonthlySummaryDto>> GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null) => throw new NotImplementedException();
     public Task EnsureMonthlySummaryFreshAsync(int userId, int year, int month) => throw new NotImplementedException();
-    public Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null) => throw new NotImplementedException();
-    public Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null) => throw new NotImplementedException();
+    public Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ShiftAssignment?> GetShiftAssignmentAsync(int userId, DateOnly date) => throw new NotImplementedException();
     public Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName) => throw new NotImplementedException();
-    public Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds) => throw new NotImplementedException();
-    public Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds) => throw new NotImplementedException();
+    public Task<List<MyScheduleDto>> GetMyScheduleAsync(int userId, DateOnly start, DateOnly end) => throw new NotImplementedException();
+    public Task<TemplateReportRowDto?> GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default) => throw new NotImplementedException();
 }

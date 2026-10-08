@@ -5,6 +5,7 @@ using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
 
@@ -17,8 +18,12 @@ public class ZKDeviceSyncService(
     AttendanceDbContext db,
     ILogger<ZKDeviceSyncService> logger,
     IOptions<AppSettingsOptions> appOptions,
-    IAttendanceService attendanceService) : IZKDeviceSyncService
+    IAttendanceService attendanceService,
+    TimeProvider? timeProvider = null) : IZKDeviceSyncService
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
+
     private const int MaxAttempts = 5;
 
     /// <summary>上班打卡之后至少要隔这么多分钟，后续打卡才有资格被当成"下班"候选——
@@ -117,56 +122,7 @@ public class ZKDeviceSyncService(
         {
             if (!userByPin.TryGetValue(r.Pin, out var uid)) continue;
 
-            var calendarDate = DateOnly.FromDateTime(r.Time);
-            var workDate     = calendarDate;
-
-            // 夜班（跨天班次）下班卡打卡时日历已经翻到第二天：优先续上"昨天已打上班卡、还没打下班卡"的记录，
-            // 但只在昨天排的确实是跨天班次时才续，避免把普通白班忘打下班卡的旧记录误接到今天的打卡上
-            // （逻辑和 AttendanceService.PunchAsync 的夜班续接处理保持一致）。
-            var yesterday = calendarDate.AddDays(-1);
-            // 续接要有时间窗（AttendanceService.NightShiftCarryOverHours）：超过昨天班次应下班时间太久才来的打卡，
-            // 是新一天的上班卡，不能再接到昨天那条没打下班卡的记录上——不然夜班漏打一次下班卡，第二天晚上的上班卡
-            // 会被当成昨天的下班卡，第二天整天没记录被记旷工，之后每天连环错位（2026-09-24 第 11 轮审查）
-            if (recordMap.TryGetValue((uid, yesterday), out var yesterdayRecord)
-                && yesterdayRecord.ClockInTime != null && yesterdayRecord.ClockOutTime == null
-                && shiftByUserDate.TryGetValue((uid, yesterday), out var yesterdayShift)
-                && yesterdayShift is { IsCrossDay: true }
-                && AttendanceService.IsWithinNightCarryOver(yesterday, yesterdayShift, r.Time))
-            {
-                workDate = yesterday;
-            }
-            // 白班/没排班的人加班过了零点才下班：零点后的这次打卡是昨天那条没下班卡的记录的下班卡，不是今天的上班卡
-            // （不接的话：昨天缺下班卡、工时清零、23:55 被标未打卡；今天早上真正的上班卡还会被当成午间卡）
-            else if (recordMap.TryGetValue((uid, yesterday), out var ydRec)
-                     && ydRec.ClockInTime is { } ydIn && ydRec.ClockOutTime == null
-                     && !(recordMap.TryGetValue((uid, calendarDate), out var tdRec) && tdRec.ClockInTime != null)
-                     && AttendanceService.IsPostMidnightClockOutOfDayShift(r.Time, ydIn,
-                            shiftByUserDate.GetValueOrDefault((uid, yesterday)), shiftByUserDate.GetValueOrDefault((uid, calendarDate))))
-            {
-                workDate = yesterday;
-            }
-            // 刚打完下班卡、几分钟内又刷了一次（重复刷脸）：仍归昨天，后面会按"取更晚"更新下班时间，
-            // 不然第二次会落到今天成为一条凭空的上班卡（休息日还会多出 1 天出勤 + 1 次缺卡）。
-            // 不能只认"昨天是跨天班次"：白班/没排班的人加班过零点才下班，下班卡本身已经打在零点之后，
-            // 同样要续到昨天，不然会把今天真正的迟到分钟数盖掉、工时多算（2026-09-30 复核发现）
-            else if (recordMap.TryGetValue((uid, yesterday), out var yRec)
-                     && yRec.ClockOutTime is { } yOut && r.Time >= yOut && r.Time - yOut <= TimeSpan.FromMinutes(30)
-                     && (DateOnly.FromDateTime(yOut) > yesterday
-                         || (shiftByUserDate.TryGetValue((uid, yesterday), out var yShift) && yShift is { IsCrossDay: true })))
-            {
-                workDate = yesterday;
-            }
-            // 昨晚排的是跨天夜班、但一次卡都没打（不是"打了上班卡还没下班"那种续接场景，上面几条分支管的是那种）：
-            // 现在还在续接宽限期内、且还没到今天自己班次可以打卡的时刻，是很晚才想起来打的上班卡，应该算成
-            // 昨天那班的（记很晚的迟到），不能落到"今天"再被下面"打得太早"那条规则拿明天晚上的班次去比对、
-            // 误判掉（2026-09-29 反馈）；今天如果自己也排了班，优先归今天，不抢今天正常的上班卡（2026-09-30 复核反馈）
-            else if (shiftByUserDate.TryGetValue((uid, yesterday), out var missedShift) && missedShift is { IsCrossDay: true }
-                     && AttendanceService.IsVeryLateClockInForYesterdayShift(yesterday, missedShift,
-                            recordMap.TryGetValue((uid, yesterday), out var missedRec) ? missedRec.ClockInTime : null, r.Time,
-                            shiftByUserDate.GetValueOrDefault((uid, calendarDate))))
-            {
-                workDate = yesterday;
-            }
+            var workDate = ResolveWorkDate(uid, r.Time, recordMap, shiftByUserDate);
 
             // 跨天班次的第一次打卡离应上班时间太早（比如 20:30 上班的晚班，中午/早上打的）：不当上班卡，也不为它建记录——
             // 不然真正晚上来上班的那次会被当成午间卡，整天上班卡丢失。考勤机没法给员工弹提示，只记日志；
@@ -228,121 +184,17 @@ public class ZKDeviceSyncService(
                 PunchType  = type,
                 DeviceInfo = $"ZKDevice:{sn}",
                 IsValid    = true,
-                CreatedAt  = DateTime.Now
+                CreatedAt  = clock.LocalNow()
             });
 
-            if (type == PunchType.ClockIn && (record.ClockInTime is null || r.Time < record.ClockInTime))
-            {
-                record.ClockInTime = r.Time;
-                var status = AttendanceService.CalcClockInStatus(workDate, r.Time, shift, isRestDay, out var lateMin);
-                // 旷工可以被真的打了上班卡这件事纠正回来（不管是不是迟到，只要打了卡就不算旷工了），
-                // 但出差/节假日这两个由审批流程/定时任务设置的状态，不能被这里的上班打卡同步顺手覆盖掉。
-                // 之前只在"迟到"时才更新状态，导致旷工的人如果准点打卡（不迟到）反而不会被纠正回来，
-                // 状态会一直卡在"旷工"，这次一并修正。请假不再排除在外——半天假当天迟到分钟数也该
-                // 照算（2026-09-17 支持半天请假），但状态本身仍不会被这里改回正常/迟到（见下面单独的
-                // AttendanceStatus 判断，OnLeave 不在允许覆盖的白名单里）。
-                if (record.AttendanceStatus is not (AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
-                    record.LateMinutes = lateMin;
-                if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.Late
-                    or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched or AttendanceStatus.Absent)
-                    record.AttendanceStatus = status;
-            }
-            else if (type == PunchType.ClockOut && (record.ClockOutTime is null || r.Time > record.ClockOutTime))
-            {
-                // 员工上班期间可能会因为各种原因（午间打卡、中途路过设备等）随手多刷几次脸，
-                // 这些"随手打卡"按"取最晚"规则会暂时被当成下班时间——这里没问题，反正之后真正
-                // 下班再打一次就会被覆盖成正确值。但早退状态如果只加不减，会导致中途一次随手打卡
-                // 被判成"早退"之后，哪怕后面真的按时/晚走了，这个错误的"早退"标记也摘不掉。
-                // 所以这里改成每次更新下班时间都重新完整评估一次状态，而不是只加不减；
-                // 只在当天状态还是"正常/早退/未打卡"这种由打卡本身决定的状态时才重新评估——
-                // "未打卡"也要能被覆盖：这次既然真的收到了下班打卡，就不再是"未打卡"了，
-                // 不然后台定时任务标过一次"未打卡"之后，哪怕后面设备补传了正常的下班卡，
-                // 状态也会永远卡在"未打卡"改不回来。请假/出差/节假日/旷工/迟到这些由审批流程、
-                // 定时任务或上班打卡设置的状态，优先级更高，不能被这里的下班打卡同步顺手覆盖掉。
-                record.ClockOutTime = r.Time;
-                var status = AttendanceService.CalcClockOutStatus(workDate, r.Time, shift, isRestDay, out var earlyMin);
-                // 出差/节假日当天不写回早退分钟数，理由同上面 ClockIn 分支的 LateMinutes；
-                // 请假不再排除在外（半天假当天早退分钟数也该照算）
-                if (record.AttendanceStatus is not (AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
-                    record.EarlyLeaveMinutes = earlyMin;
-                if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
-                    record.AttendanceStatus = status;
-                // 设备离线/下班卡晚到：23:55 的后台任务已经把这天标成"旷工"，之后才补传上来一张下班卡，而这天没有上班卡。
-                // 有打卡为证，人是到岗了，不该停在"旷工"——跟后台任务对"只有下班卡"的处理保持一致，记"未打卡（缺上班卡）"。
-                // 旷工只允许被上班卡纠正回正常/迟到，所以上面的白名单里不含 Absent，这里单独处理这一种情况。
-                else if (record.ClockInTime is null && record.AttendanceStatus == AttendanceStatus.Absent)
-                    record.AttendanceStatus = AttendanceStatus.NotPunched;
-            }
+            ApplyDevicePunch(record, type, r.Time, workDate, shift, isRestDay);
 
             record.Remark    = "熵基考勤机同步";
-            record.UpdatedAt = DateTime.Now;
+            record.UpdatedAt = clock.LocalNow();
         }
 
-        // 4) 工时结算：每个这一批动过的 (人, 日期) 只结算一次（不放进上面的循环里，是因为同一人当天
-        // 可能有好几条打卡，放循环里会每条都重新查一遍全天打卡记录、重复算好几遍，浪费数据库查询）。
-        foreach (var (uid, workDate) in touchedKeys)
-        {
-            var record = recordMap[(uid, workDate)];
-            // 时间倒挂（下班≤上班，通常是设备时钟异常/补录乱序）不猜"最终有效时间"去强行重算，
-            // 只记进 ApprovalNote 提醒人工核实，跟 AttendanceService.RecalcWorkHoursAfterManualPunchAsync
-            // 同一处理方式（2026-09-21 代码审查发现：以前这种记录直接跳过，工时停在占位值 0，
-            // 且不出现在任何异常统计里，管理员完全看不出来）
-            if (record.ClockInTime.HasValue && record.ClockOutTime is { } coRaw && coRaw <= record.ClockInTime.Value
-                && (record.ApprovalNote is null || !record.ApprovalNote.Contains(AttendanceService.ClockTimeInvertedNote)))
-            {
-                AttendanceService.AppendApprovalNote(record, AttendanceService.ClockTimeInvertedNote);
-            }
-            // 只有上班卡、还没有下班卡（人还在岗，午间打了卡）：下面的工时结算不会走到，但午间必打卡的命中情况
-            // 要先写回记录，不然"我的记录"里"午间打卡"一栏要等到下班打了卡才出现
-            if (record.ClockInTime.HasValue && record.ClockOutTime is null
-                && shiftByUserDate.TryGetValue((uid, workDate), out var midShift) && midShift is not null)
-            {
-                var midWindows = midShift.ParseMidCheckWindows();
-                if (midWindows.Count > 0)
-                    record.MidCheckResults = (await ResolveMidCheckResultsAsync(uid, workDate, midShift, midWindows, ct)).FormatMidCheckResults();
-            }
-            if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) continue;
-
-            // 当天是出差/节假日状态（比如批准出差前设备已经同步过打卡），工时已经由审批
-            // 流程/定时任务定好了，不能被这里的考勤机同步顺手重算覆盖掉。请假不再跳过——半天假当天
-            // 如果有真实打卡，走到下面按标准工时封顶结算（2026-09-17 支持半天请假）。
-            if (record.AttendanceStatus is AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday)
-                continue;
-
-            shiftByUserDate.TryGetValue((uid, workDate), out var shift);
-
-            // 漏打"午间必打卡"窗口要顺延有效上班时间，跟本地打卡（ResolveEffectiveClockInAsync）
-            // 走的是同一套算法，不然同样"漏打午间卡"这件事，考勤机同步和本地打卡算出来的工时会对不上；
-            // 命中情况也要写回 record.MidCheckResults，不然"我的记录"页看不到午间打卡的命中详情。
-            var missedWindowEnds = new List<DateTime>();
-            DateTime? secondHalfAbsentBoundary = null;
-            var windows = shift?.ParseMidCheckWindows() ?? [];
-            if (shift is not null && windows.Count > 0)
-            {
-                var midCheckResults = await ResolveMidCheckResultsAsync(uid, workDate, shift, windows, ct);
-                record.MidCheckResults = midCheckResults.FormatMidCheckResults();
-                missedWindowEnds = AttendanceService.ResolveMissedNonLastWindowEnds(workDate, shift, midCheckResults);
-                secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, midCheckResults);
-            }
-
-            // 休息日不计正班工时（有加班的话只算加班）——跟本地打卡（ComputeDailyWorkHoursAsync）同一套规则
-            if (AttendanceService.IsNonCompRestDay(workDate, shift))
-            {
-                record.ActualWorkHours = 0;
-            }
-            else
-            {
-                var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
-                var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift, secondHalfAbsentBoundary);
-                var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut);
-                // 半天假当天设备同步到打卡：按"标准工时 − 已批准的请假小时数"封顶，跟本地打卡/
-                // 补卡重算是同一套口径（2026-09-17 支持半天请假）
-                record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
-                    ? AttendanceService.ApplyLeaveHoursCap(computedHours, record.LeaveHours,
-                        AttendanceService.ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
-                    : computedHours;
-            }
-        }
+        // 4) 工时结算（见 SettleWorkHoursAsync）
+        await SettleWorkHoursAsync(touchedKeys, recordMap, shiftByUserDate, ct);
 
         await db.SaveChangesAsync(ct);
 
@@ -352,6 +204,194 @@ public class ZKDeviceSyncService(
         // 涉及好几天都在同一个月时被重复刷新好几遍。
         foreach (var (uid, year, month) in touchedKeys.Select(k => (k.UserId, k.WorkDate.Year, k.WorkDate.Month)).Distinct())
             await attendanceService.GenerateMonthlySummaryAsync(year, month, [uid]);
+    }
+
+    /// <summary>
+    /// 这张卡应该归到哪一天的考勤记录：默认是打卡当天的日历日期；夜班下班卡、加班过零点才下班的下班卡、
+    /// 刚打完下班卡又刷一次、很晚才补打昨晚夜班的上班卡，都归昨天。口径跟 <see cref="AttendanceService"/> 的本地打卡一致，
+    /// 从 <see cref="ProcessAttLogCoreAsync"/> 里原样搬出，逻辑没有改动。
+    /// </summary>
+    private static DateOnly ResolveWorkDate(
+        int uid, DateTime punchTime,
+        Dictionary<(int, DateOnly), AttendanceRecord> recordMap,
+        Dictionary<(int, DateOnly), ShiftSchedule> shiftByUserDate)
+    {
+        var calendarDate = DateOnly.FromDateTime(punchTime);
+        var workDate     = calendarDate;
+
+        // 夜班（跨天班次）下班卡打卡时日历已经翻到第二天：优先续上"昨天已打上班卡、还没打下班卡"的记录，
+        // 但只在昨天排的确实是跨天班次时才续，避免把普通白班忘打下班卡的旧记录误接到今天的打卡上
+        // （逻辑和 AttendanceService.PunchAsync 的夜班续接处理保持一致）。
+        var yesterday = calendarDate.AddDays(-1);
+        // 续接要有时间窗（AttendanceService.NightShiftCarryOverHours）：超过昨天班次应下班时间太久才来的打卡，
+        // 是新一天的上班卡，不能再接到昨天那条没打下班卡的记录上——不然夜班漏打一次下班卡，第二天晚上的上班卡
+        // 会被当成昨天的下班卡，第二天整天没记录被记旷工，之后每天连环错位（2026-09-24 第 11 轮审查）
+        if (recordMap.TryGetValue((uid, yesterday), out var yesterdayRecord)
+            && yesterdayRecord.ClockInTime != null && yesterdayRecord.ClockOutTime == null
+            && shiftByUserDate.TryGetValue((uid, yesterday), out var yesterdayShift)
+            && yesterdayShift is { IsCrossDay: true }
+            && AttendanceService.IsWithinNightCarryOver(yesterday, yesterdayShift, punchTime))
+        {
+            workDate = yesterday;
+        }
+        // 白班/没排班的人加班过了零点才下班：零点后的这次打卡是昨天那条没下班卡的记录的下班卡，不是今天的上班卡
+        // （不接的话：昨天缺下班卡、工时清零、23:55 被标未打卡；今天早上真正的上班卡还会被当成午间卡）
+        else if (recordMap.TryGetValue((uid, yesterday), out var ydRec)
+                 && ydRec.ClockInTime is { } ydIn && ydRec.ClockOutTime == null
+                 && !(recordMap.TryGetValue((uid, calendarDate), out var tdRec) && tdRec.ClockInTime != null)
+                 && AttendanceService.IsPostMidnightClockOutOfDayShift(punchTime, ydIn,
+                        shiftByUserDate.GetValueOrDefault((uid, yesterday)), shiftByUserDate.GetValueOrDefault((uid, calendarDate))))
+        {
+            workDate = yesterday;
+        }
+        // 刚打完下班卡、几分钟内又刷了一次（重复刷脸）：仍归昨天，后面会按"取更晚"更新下班时间，
+        // 不然第二次会落到今天成为一条凭空的上班卡（休息日还会多出 1 天出勤 + 1 次缺卡）。
+        // 不能只认"昨天是跨天班次"：白班/没排班的人加班过零点才下班，下班卡本身已经打在零点之后，
+        // 同样要续到昨天，不然会把今天真正的迟到分钟数盖掉、工时多算（2026-09-30 复核发现）
+        else if (recordMap.TryGetValue((uid, yesterday), out var yRec)
+                 && yRec.ClockOutTime is { } yOut && punchTime >= yOut && punchTime - yOut <= TimeSpan.FromMinutes(30)
+                 && (DateOnly.FromDateTime(yOut) > yesterday
+                     || (shiftByUserDate.TryGetValue((uid, yesterday), out var yShift) && yShift is { IsCrossDay: true })))
+        {
+            workDate = yesterday;
+        }
+        // 昨晚排的是跨天夜班、但一次卡都没打（不是"打了上班卡还没下班"那种续接场景，上面几条分支管的是那种）：
+        // 现在还在续接宽限期内、且还没到今天自己班次可以打卡的时刻，是很晚才想起来打的上班卡，应该算成
+        // 昨天那班的（记很晚的迟到），不能落到"今天"再被下面"打得太早"那条规则拿明天晚上的班次去比对、
+        // 误判掉（2026-09-29 反馈）；今天如果自己也排了班，优先归今天，不抢今天正常的上班卡（2026-09-30 复核反馈）
+        else if (shiftByUserDate.TryGetValue((uid, yesterday), out var missedShift) && missedShift is { IsCrossDay: true }
+                 && AttendanceService.IsVeryLateClockInForYesterdayShift(yesterday, missedShift,
+                        recordMap.TryGetValue((uid, yesterday), out var missedRec) ? missedRec.ClockInTime : null, punchTime,
+                        shiftByUserDate.GetValueOrDefault((uid, calendarDate))))
+        {
+            workDate = yesterday;
+        }
+        return workDate;
+    }
+
+    /// <summary>把一张设备打卡写进考勤日记录：上班卡取当天最早、下班卡取更晚，并按规则更新迟到/早退和状态。</summary>
+    private static void ApplyDevicePunch(
+        AttendanceRecord record, PunchType type, DateTime punchTime, DateOnly workDate, ShiftSchedule? shift, bool isRestDay)
+    {
+        if (type == PunchType.ClockIn && (record.ClockInTime is null || punchTime < record.ClockInTime))
+        {
+            record.ClockInTime = punchTime;
+            var status = AttendanceService.CalcClockInStatus(workDate, punchTime, shift, isRestDay, out var lateMin);
+            // 旷工可以被真的打了上班卡这件事纠正回来（不管是不是迟到，只要打了卡就不算旷工了），
+            // 但出差/节假日这两个由审批流程/定时任务设置的状态，不能被这里的上班打卡同步顺手覆盖掉。
+            // 之前只在"迟到"时才更新状态，导致旷工的人如果准点打卡（不迟到）反而不会被纠正回来，
+            // 状态会一直卡在"旷工"，这次一并修正。请假不再排除在外——半天假当天迟到分钟数也该
+            // 照算（2026-09-17 支持半天请假），但状态本身仍不会被这里改回正常/迟到（见下面单独的
+            // AttendanceStatus 判断，OnLeave 不在允许覆盖的白名单里）。
+            if (record.AttendanceStatus is not (AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
+                record.LateMinutes = lateMin;
+            if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.Late
+                or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched or AttendanceStatus.Absent)
+                record.AttendanceStatus = status;
+        }
+        else if (type == PunchType.ClockOut && (record.ClockOutTime is null || punchTime > record.ClockOutTime))
+        {
+            // 员工上班期间可能会因为各种原因（午间打卡、中途路过设备等）随手多刷几次脸，
+            // 这些"随手打卡"按"取最晚"规则会暂时被当成下班时间——这里没问题，反正之后真正
+            // 下班再打一次就会被覆盖成正确值。但早退状态如果只加不减，会导致中途一次随手打卡
+            // 被判成"早退"之后，哪怕后面真的按时/晚走了，这个错误的"早退"标记也摘不掉。
+            // 所以这里改成每次更新下班时间都重新完整评估一次状态，而不是只加不减；
+            // 只在当天状态还是"正常/早退/未打卡"这种由打卡本身决定的状态时才重新评估——
+            // "未打卡"也要能被覆盖：这次既然真的收到了下班打卡，就不再是"未打卡"了，
+            // 不然后台定时任务标过一次"未打卡"之后，哪怕后面设备补传了正常的下班卡，
+            // 状态也会永远卡在"未打卡"改不回来。请假/出差/节假日/旷工/迟到这些由审批流程、
+            // 定时任务或上班打卡设置的状态，优先级更高，不能被这里的下班打卡同步顺手覆盖掉。
+            record.ClockOutTime = punchTime;
+            var status = AttendanceService.CalcClockOutStatus(workDate, punchTime, shift, isRestDay, out var earlyMin);
+            // 出差/节假日当天不写回早退分钟数，理由同上面 ClockIn 分支的 LateMinutes；
+            // 请假不再排除在外（半天假当天早退分钟数也该照算）
+            if (record.AttendanceStatus is not (AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip))
+                record.EarlyLeaveMinutes = earlyMin;
+            if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched)
+                record.AttendanceStatus = status;
+            // 设备离线/下班卡晚到：23:55 的后台任务已经把这天标成"旷工"，之后才补传上来一张下班卡，而这天没有上班卡。
+            // 有打卡为证，人是到岗了，不该停在"旷工"——跟后台任务对"只有下班卡"的处理保持一致，记"未打卡（缺上班卡）"。
+            // 旷工只允许被上班卡纠正回正常/迟到，所以上面的白名单里不含 Absent，这里单独处理这一种情况。
+            else if (record.ClockInTime is null && record.AttendanceStatus == AttendanceStatus.Absent)
+                record.AttendanceStatus = AttendanceStatus.NotPunched;
+        }
+    }
+
+    /// <summary>
+    /// 工时结算：每个这一批动过的 (人, 日期) 只结算一次，详细口径见方法体里的注释。
+    /// 从 <see cref="ProcessAttLogCoreAsync"/> 里原样搬出，逻辑没有改动。
+    /// </summary>
+    private async Task SettleWorkHoursAsync(
+        HashSet<(int UserId, DateOnly WorkDate)> touchedKeys,
+        Dictionary<(int, DateOnly), AttendanceRecord> recordMap,
+        Dictionary<(int, DateOnly), ShiftSchedule> shiftByUserDate,
+        CancellationToken ct)
+    {
+    // 4) 工时结算：每个这一批动过的 (人, 日期) 只结算一次（不放进上面的循环里，是因为同一人当天
+    // 可能有好几条打卡，放循环里会每条都重新查一遍全天打卡记录、重复算好几遍，浪费数据库查询）。
+    foreach (var (uid, workDate) in touchedKeys)
+    {
+        var record = recordMap[(uid, workDate)];
+        // 时间倒挂（下班≤上班，通常是设备时钟异常/补录乱序）不猜"最终有效时间"去强行重算，
+        // 只记进 ApprovalNote 提醒人工核实，跟 AttendanceService.RecalcWorkHoursAfterManualPunchAsync
+        // 同一处理方式（2026-09-21 代码审查发现：以前这种记录直接跳过，工时停在占位值 0，
+        // 且不出现在任何异常统计里，管理员完全看不出来）
+        if (record.ClockInTime.HasValue && record.ClockOutTime is { } coRaw && coRaw <= record.ClockInTime.Value
+            && (record.ApprovalNote is null || !record.ApprovalNote.Contains(AttendanceService.ClockTimeInvertedNote)))
+        {
+            AttendanceService.AppendApprovalNote(record, AttendanceService.ClockTimeInvertedNote);
+        }
+        // 只有上班卡、还没有下班卡（人还在岗，午间打了卡）：下面的工时结算不会走到，但午间必打卡的命中情况
+        // 要先写回记录，不然"我的记录"里"午间打卡"一栏要等到下班打了卡才出现
+        if (record.ClockInTime.HasValue && record.ClockOutTime is null
+            && shiftByUserDate.TryGetValue((uid, workDate), out var midShift) && midShift is not null)
+        {
+            var midWindows = midShift.ParseMidCheckWindows();
+            if (midWindows.Count > 0)
+                record.MidCheckResults = (await ResolveMidCheckResultsAsync(uid, workDate, midShift, midWindows, ct)).FormatMidCheckResults();
+        }
+        if (record.ClockInTime is not { } ci || record.ClockOutTime is not { } co || co <= ci) continue;
+
+        // 当天是出差/节假日状态（比如批准出差前设备已经同步过打卡），工时已经由审批
+        // 流程/定时任务定好了，不能被这里的考勤机同步顺手重算覆盖掉。请假不再跳过——半天假当天
+        // 如果有真实打卡，走到下面按标准工时封顶结算（2026-09-17 支持半天请假）。
+        if (record.AttendanceStatus is AttendanceStatus.BusinessTrip or AttendanceStatus.Holiday)
+            continue;
+
+        shiftByUserDate.TryGetValue((uid, workDate), out var shift);
+
+        // 漏打"午间必打卡"窗口要顺延有效上班时间，跟本地打卡（ResolveEffectiveClockInAsync）
+        // 走的是同一套算法，不然同样"漏打午间卡"这件事，考勤机同步和本地打卡算出来的工时会对不上；
+        // 命中情况也要写回 record.MidCheckResults，不然"我的记录"页看不到午间打卡的命中详情。
+        var missedWindowEnds = new List<DateTime>();
+        DateTime? secondHalfAbsentBoundary = null;
+        var windows = shift?.ParseMidCheckWindows() ?? [];
+        if (shift is not null && windows.Count > 0)
+        {
+            var midCheckResults = await ResolveMidCheckResultsAsync(uid, workDate, shift, windows, ct);
+            record.MidCheckResults = midCheckResults.FormatMidCheckResults();
+            missedWindowEnds = AttendanceService.ResolveMissedNonLastWindowEnds(workDate, shift, midCheckResults);
+            secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, midCheckResults);
+        }
+
+        // 休息日不计正班工时（有加班的话只算加班）——跟本地打卡（ComputeDailyWorkHoursAsync）同一套规则
+        if (AttendanceService.IsNonCompRestDay(workDate, shift))
+        {
+            record.ActualWorkHours = 0;
+        }
+        else
+        {
+            var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
+            var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift, secondHalfAbsentBoundary);
+            var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut);
+            // 半天假当天设备同步到打卡：按"标准工时 − 已批准的请假小时数"封顶，跟本地打卡/
+            // 补卡重算是同一套口径（2026-09-17 支持半天请假）
+            record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
+                ? AttendanceService.ApplyLeaveHoursCap(computedHours, record.LeaveHours,
+                    AttendanceService.ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
+                : computedHours;
+        }
+    }
     }
 
     /// <summary>

@@ -66,7 +66,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         if (End < Start) (Start, End) = (End, Start);            // 万一日期选反了，自动交换纠正，不直接报错卡住整页
         if (End.DayNumber - Start.DayNumber > 366) End = Start.AddDays(366);  // 防止选了个离谱的超长区间，撑爆页面
 
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         SelectedDeptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(cu, deptIds) ?? [];
         Keyword         = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
         PageIndex       = p < 1 ? 1 : p;
@@ -75,7 +75,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         Month = End.Month;
 
         var result = await attendanceService.GenerateTemplateReportAsync(
-            Start, End, SelectedDeptIds.Count > 0 ? SelectedDeptIds : null);
+            Start, End, SelectedDeptIds.Count > 0 ? SelectedDeptIds : null, HttpContext.RequestAborted);
         Dates = result.Dates;
 
         var filtered = Keyword is null
@@ -97,7 +97,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     /// </summary>
     private async Task LoadDeptTreeAsync()
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var depts = await db.Departments.Where(d => d.IsActive)
             .OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
         if (visibleIds is not null)
@@ -149,8 +149,8 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         if (end < start) return BadRequest("结束日期不能早于开始日期");
         if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
 
-        deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetCurrentUser()!, deptIds);
-        var result = await attendanceService.GenerateTemplateReportAsync(start.Value, end.Value, deptIds);
+        deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetRequiredUser(), deptIds);
+        var result = await attendanceService.GenerateTemplateReportAsync(start.Value, end.Value, deptIds, HttpContext.RequestAborted);
         var bytes  = ExcelExportHelper.ExportTemplateReport(result);
         return File(bytes, XlsxContentType, $"发薪考勤汇总表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
@@ -165,8 +165,8 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         if (end < start) return BadRequest("结束日期不能早于开始日期");
         if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
 
-        deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetCurrentUser()!, deptIds);
-        var records = await attendanceService.GetClockTimeSheetAsync(start.Value, end.Value, deptIds);
+        deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetRequiredUser(), deptIds);
+        var records = await attendanceService.GetClockTimeSheetAsync(start.Value, end.Value, deptIds, HttpContext.RequestAborted);
         var bytes   = ExcelExportHelper.ExportClockTimeSheet(records, start.Value, end.Value);
         return File(bytes, XlsxContentType, $"打卡时间表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
@@ -181,7 +181,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         // 都重算一遍（哪怕只是导出一个人的明细），会越权覆盖别的分公司、甚至总部手工调整过的汇总数据；
         // 现在只重算这一个人自己的（GenerateMonthlySummaryAsync 的 onlyUserId 参数本来就是为这种场景设计的）
         var targetDeptId = await db.Users.Where(u => u.Id == userId).Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
-        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, targetDeptId))
+        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), targetDeptId))
             return NotFound();
 
         await attendanceService.GenerateMonthlySummaryAsync(year, month, [userId]);

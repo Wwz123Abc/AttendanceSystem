@@ -38,7 +38,7 @@ public class EmployeeInfoModel(
 
     public async Task OnGetAsync(int? id, string? keyword, int? deptId)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         deptId = await deptScopeService.ResolveEffectiveDeptIdAsync(cu, deptId);
 
         Keyword = keyword;
@@ -67,7 +67,7 @@ public class EmployeeInfoModel(
     /// <summary>按当前筛选条件（部门/关键字），把匹配到的全部员工基础资料导出成 Excel。</summary>
     public async Task<IActionResult> OnGetExportAsync(string? keyword, int? deptId)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         deptId = await deptScopeService.ResolveEffectiveDeptIdAsync(cu, deptId);
         var (users, _) = await userService.GetUsersAsync(deptId: deptId, keyword: keyword, pageIndex: 1, pageSize: 100_000);
         var bytes = ExcelExportHelper.ExportEmployeeList(users);

@@ -8,6 +8,7 @@ using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -83,7 +84,7 @@ public class GroupManageModel(
     /// <summary>打开页面：列出所有考勤组、每组在职人数/审批人/所属部门/打卡地点，及可选的审批人、部门树。</summary>
     public async Task OnGetAsync()
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
 
         var groups = await db.AttendanceGroups.Include(g => g.Departments)
@@ -194,40 +195,12 @@ public class GroupManageModel(
     /// <summary>点“保存”：新增或修改考勤组。</summary>
     public async Task<IActionResult> OnPostSaveAsync()
     {
-        if (string.IsNullOrWhiteSpace(GroupName)) { ErrorMessage = "考勤组名称不能为空"; return RedirectToPage(); }
-        if (GroupName.Trim().Length > 100) { ErrorMessage = "考勤组名称不能超过 100 个字"; return RedirectToPage(); }
-        if (ApproverUserIds.Count == 0) { ErrorMessage = "请至少选择一位审批人"; return RedirectToPage(); }
-        if (!Enum.TryParse<Models.Enums.ApprovalLevelType>(ApprovalLevel, out var approvalLevel) || !Enum.IsDefined(approvalLevel))
-            approvalLevel = Models.Enums.ApprovalLevelType.Level1;   // 数字串越界（如 "99"）也回落成默认值，不能落库成未定义枚举
-        foreach (var loc in Locations)
-        {
-            if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;   // 没填全经纬度的行本来就会被跳过，不用校验
-            if (loc.Latitude.Value is < -90 or > 90) { ErrorMessage = "打卡地点纬度不正确（应在 -90 到 90 之间）"; return RedirectToPage(); }
-            if (loc.Longitude.Value is < -180 or > 180) { ErrorMessage = "打卡地点经度不正确（应在 -180 到 180 之间）"; return RedirectToPage(); }
-            if (loc.Radius is < 0 or > 5000) { ErrorMessage = "打卡范围半径请填 0-5000 米之间"; return RedirectToPage(); }
-            if (loc.Name?.Trim().Length > 200) { ErrorMessage = "打卡地点名称不能超过 200 个字"; return RedirectToPage(); }
-        }
+        var formError = ValidateGroupForm(out var approvalLevel);
+        if (formError is not null) { ErrorMessage = formError; return RedirectToPage(); }
 
-        var cu = HttpContext.GetCurrentUser()!;
-        if (EditId != 0 && !await IsGroupWritableAsync(cu, EditId))
-        { ErrorMessage = "无权编辑该考勤组"; return RedirectToPage(); }
-
-        // 受限管理员：勾选的审批人、跟随部门都必须在自己范围内——不能跨分公司指定审批人，
-        // 也不能把自己范围外的部门拉进来跟随这个组
-        if (cu.IsScoped)
-        {
-            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
-            var approverDeptIds = await db.Users.Where(u => ApproverUserIds.Contains(u.Id))
-                .Select(u => u.DepartmentId).ToListAsync();
-            if (approverDeptIds.Any(id => !id.HasValue || !visibleIds!.Contains(id.Value)))
-            { ErrorMessage = "审批人必须是同一分公司范围内的人"; return RedirectToPage(); }
-            if (SelectedDeptIds.Any(id => !visibleIds!.Contains(id)))
-            { ErrorMessage = "只能勾选自己管理范围内的部门"; return RedirectToPage(); }
-            // 不关联任何部门的考勤组会被当成"全公司通用组"：所有分公司都能看到、拿去给员工挂组，建组的人自己之后
-            // 却改不了（通用组只有总部能写）。所以分公司管理员必须至少勾选一个本分公司的部门（2026-09-24 第 11 轮审查）
-            if (SelectedDeptIds.Count == 0)
-            { ErrorMessage = "请至少勾选一个本分公司的部门（不关联部门的通用考勤组只有总部能建）"; return RedirectToPage(); }
-        }
+        var cu = HttpContext.GetRequiredUser();
+        var scopeError = await ValidateGroupScopeAsync(cu);
+        if (scopeError is not null) { ErrorMessage = scopeError; return RedirectToPage(); }
 
         try
         {
@@ -270,35 +243,7 @@ public class GroupManageModel(
 
             if (g is not null)
             {
-                // 同步打卡地点：先清空这个组原来配的，再按这次填写的重新加入（跳过没填全经纬度的行）
-                var oldLocations = await db.AttendanceGroupLocations
-                    .Where(l => l.AttendanceGroupId == g.Id).ToListAsync();
-                db.AttendanceGroupLocations.RemoveRange(oldLocations);
-                foreach (var loc in Locations)
-                {
-                    if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;
-                    db.AttendanceGroupLocations.Add(new AttendanceGroupLocation
-                    {
-                        AttendanceGroupId = g.Id,
-                        LocationName      = string.IsNullOrWhiteSpace(loc.Name) ? null : loc.Name.Trim(),
-                        Latitude          = loc.Latitude.Value,
-                        Longitude         = loc.Longitude.Value,
-                        RadiusMeters      = loc.Radius <= 0 ? 500 : loc.Radius
-                    });
-                }
-
-                // 同步审批人名单：先清空这个组原来配的，再按这次勾选的重新加入
-                var oldApprovers = await db.AttendanceGroupApprovers
-                    .Where(a => a.AttendanceGroupId == g.Id).ToListAsync();
-                db.AttendanceGroupApprovers.RemoveRange(oldApprovers);
-                foreach (var uid in ApproverUserIds.Distinct())
-                    db.AttendanceGroupApprovers.Add(new AttendanceGroupApprover
-                    {
-                        AttendanceGroupId = g.Id,
-                        UserId            = uid
-                    });
-
-                await db.SaveChangesAsync();
+                await SyncGroupLocationsAndApproversAsync(g);
 
                 // 同步跟随部门：解除没勾的、关联新勾的，并立即把这些部门现有员工批量归组
                 var moved = await groupService.SetGroupDepartmentsAsync(g.Id, SelectedDeptIds);
@@ -314,10 +259,89 @@ public class GroupManageModel(
         return RedirectToPage();
     }
 
+    /// <summary>考勤组表单校验：名称、审批人、打卡地点经纬度/半径/名称；返回错误提示（没问题返回 null）和解析好的审批级别。</summary>
+    private string? ValidateGroupForm(out Models.Enums.ApprovalLevelType approvalLevel)
+    {
+        approvalLevel = Models.Enums.ApprovalLevelType.Level1;
+        if (string.IsNullOrWhiteSpace(GroupName)) return "考勤组名称不能为空";
+        if (GroupName.Trim().Length > 100) return "考勤组名称不能超过 100 个字";
+        if (ApproverUserIds.Count == 0) return "请至少选择一位审批人";
+        if (!Enum.TryParse<Models.Enums.ApprovalLevelType>(ApprovalLevel, out approvalLevel) || !Enum.IsDefined(approvalLevel))
+            approvalLevel = Models.Enums.ApprovalLevelType.Level1;   // 数字串越界（如 "99"）也回落成默认值，不能落库成未定义枚举
+        foreach (var loc in Locations)
+        {
+            if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;   // 没填全经纬度的行本来就会被跳过，不用校验
+            if (loc.Latitude.Value is < -90 or > 90) return "打卡地点纬度不正确（应在 -90 到 90 之间）";
+            if (loc.Longitude.Value is < -180 or > 180) return "打卡地点经度不正确（应在 -180 到 180 之间）";
+            if (loc.Radius is < 0 or > 5000) return "打卡范围半径请填 0-5000 米之间";
+            if (loc.Name?.Trim().Length > 200) return "打卡地点名称不能超过 200 个字";
+        }
+        return null;
+    }
+
+    /// <summary>考勤组保存前的权限/范围检查（编辑权限、受限管理员只能指定范围内的审批人和部门）；返回错误提示，没问题返回 null。</summary>
+    private async Task<string?> ValidateGroupScopeAsync(CurrentUser cu)
+    {
+        if (EditId != 0 && !await IsGroupWritableAsync(cu, EditId))
+        return "无权编辑该考勤组";
+
+        // 受限管理员：勾选的审批人、跟随部门都必须在自己范围内——不能跨分公司指定审批人，
+        // 也不能把自己范围外的部门拉进来跟随这个组
+        if (cu.IsScoped)
+        {
+            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+            var approverDeptIds = await db.Users.Where(u => ApproverUserIds.Contains(u.Id))
+                .Select(u => u.DepartmentId).ToListAsync();
+            if (approverDeptIds.Any(id => !id.HasValue || !visibleIds!.Contains(id.Value)))
+            return "审批人必须是同一分公司范围内的人";
+            if (SelectedDeptIds.Any(id => !visibleIds!.Contains(id)))
+            return "只能勾选自己管理范围内的部门";
+            // 不关联任何部门的考勤组会被当成"全公司通用组"：所有分公司都能看到、拿去给员工挂组，建组的人自己之后
+            // 却改不了（通用组只有总部能写）。所以分公司管理员必须至少勾选一个本分公司的部门（2026-09-24 第 11 轮审查）
+            if (SelectedDeptIds.Count == 0)
+            return "请至少勾选一个本分公司的部门（不关联部门的通用考勤组只有总部能建）";
+        }
+        return null;
+    }
+
+    /// <summary>同步考勤组的打卡地点和审批人名单：先清空原来配的，再按这次填写/勾选的重新加入，并保存。</summary>
+    private async Task SyncGroupLocationsAndApproversAsync(AttendanceGroup g)
+    {
+        // 同步打卡地点：先清空这个组原来配的，再按这次填写的重新加入（跳过没填全经纬度的行）
+        var oldLocations = await db.AttendanceGroupLocations
+            .Where(l => l.AttendanceGroupId == g.Id).ToListAsync();
+        db.AttendanceGroupLocations.RemoveRange(oldLocations);
+        foreach (var loc in Locations)
+        {
+            if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;
+            db.AttendanceGroupLocations.Add(new AttendanceGroupLocation
+            {
+                AttendanceGroupId = g.Id,
+                LocationName      = string.IsNullOrWhiteSpace(loc.Name) ? null : loc.Name.Trim(),
+                Latitude          = loc.Latitude.Value,
+                Longitude         = loc.Longitude.Value,
+                RadiusMeters      = loc.Radius <= 0 ? 500 : loc.Radius
+            });
+        }
+
+        // 同步审批人名单：先清空这个组原来配的，再按这次勾选的重新加入
+        var oldApprovers = await db.AttendanceGroupApprovers
+            .Where(a => a.AttendanceGroupId == g.Id).ToListAsync();
+        db.AttendanceGroupApprovers.RemoveRange(oldApprovers);
+        foreach (var uid in ApproverUserIds.Distinct())
+            db.AttendanceGroupApprovers.Add(new AttendanceGroupApprover
+            {
+                AttendanceGroupId = g.Id,
+                UserId            = uid
+            });
+
+        await db.SaveChangesAsync();
+    }
+
     /// <summary>点“启用/停用”：切换某考勤组的启停状态。</summary>
     public async Task<IActionResult> OnPostToggleAsync(int id)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (!await IsGroupWritableAsync(cu, id)) return RedirectToPage();
         var g = await db.AttendanceGroups.FindAsync(id);
         if (g is not null) { g.IsActive = !g.IsActive; g.UpdatedAt = DateTime.Now; await db.SaveChangesAsync(); }
@@ -333,9 +357,9 @@ public class GroupManageModel(
     {
         try
         {
-            var cu = HttpContext.GetCurrentUser()!;
+            var cu = HttpContext.GetRequiredUser();
             if (!await IsGroupWritableAsync(cu, id))
-                throw new InvalidOperationException("无权删除该考勤组");
+                throw new BusinessException("无权删除该考勤组");
 
             var g = await db.AttendanceGroups.FindAsync(id);
             if (g is null) { ErrorMessage = "该考勤组不存在"; }
@@ -348,7 +372,7 @@ public class GroupManageModel(
                 var pastAssignments = await db.ShiftAssignments
                     .CountAsync(a => a.ShiftSchedule.AttendanceGroupId == id && a.WorkDate < today);
                 if (pastAssignments > 0)
-                    throw new InvalidOperationException(
+                    throw new BusinessException(
                         $"该考勤组已有 {pastAssignments} 条历史排班，直接删除会连带清掉这些排班，导致已生成的历史月份工时/夜班统计发生变化且无法恢复。请改用「停用」");
 
                 var userCount = await db.Users.CountAsync(u => u.AttendanceGroupId == id);

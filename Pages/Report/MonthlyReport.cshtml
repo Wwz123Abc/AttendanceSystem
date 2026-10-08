@@ -21,7 +21,7 @@
     string NI(int v)     => v == 0 ? "" : v.ToString();
     string ND(decimal v) => v == 0 ? "" : v.ToString("0.##");
 
-    var totalCols = 6 + Model.Dates.Count + 20;   // 固定列 + 每日格子 + 尾部统计列(18，含请假天数/夜班总工时/正班工时/应出勤天数) + 操作列(1)，空数据行合并单元格用
+    var totalCols = 6 + Model.Dates.Count + 19;   // 固定列 + 每日格子 + 尾部统计列(18，含请假天数/夜班总工时/正班工时/应出勤天数) + 操作列(1)，空数据行合并单元格用
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -129,7 +129,6 @@
                         <th colspan="@Model.Dates.Count" class="text-center">考勤结果</th>
                         <th rowspan="2">出勤天数</th>
                         <th rowspan="2">请假天数</th>
-                        <th rowspan="2">休息天数</th>
                         <th rowspan="2">正班工时(h)</th>
                         <th rowspan="2">迟到时长(分)</th>
                         <th rowspan="2">早退次数</th>
@@ -179,7 +178,6 @@
                             }
                             <td class="text-center">@row.ActualWorkdays.ToString("0.##")</td>
                             <td class="text-center">@ND(row.LeaveDays)</td>
-                            <td class="text-center">@NI(row.RestDays)</td>
                             <td class="text-center">@row.RegularWorkHours.ToString("0.##")</td>
                             <td class="text-center @(row.LateMinutes > 0 ? "text-warning" : "")">@NI(row.LateMinutes)</td>
                             <td class="text-center @(row.EarlyLeaveCount > 0 ? "text-warning" : "")">@NI(row.EarlyLeaveCount)</td>
@@ -243,16 +241,5 @@
 </div>
 
 @section Scripts {
-    <script>
-        // 勾选/取消"公司/部门"合并树里的某一项时，连带把它所有下级节点（部门/子部门）也一起勾上/取消，
-        // 勾公司节点就相当于把它下面所有部门都选中，范围可以很大；只勾具体部门，范围就很小。
-        function onReportDeptCheckboxChange(checkbox) {
-            const checked = checkbox.checked;
-            const nodeId  = checkbox.dataset.id;
-            document.querySelectorAll(`#reportDeptTree .dept-checkbox[data-parent="${nodeId}"]`).forEach(child => {
-                child.checked = checked;
-                onReportDeptCheckboxChange(child);   // 递归处理下一级
-            });
-        }
-    </script>
+    <script src="~/js/pages/monthly-report.js" asp-append-version="true"></script>
 }

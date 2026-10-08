@@ -5,6 +5,7 @@ using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Controllers;
 
@@ -20,7 +21,7 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     public async Task<IActionResult> Submit([FromBody] SubmitApprovalDto dto)
     {
         var request = await approvalService.SubmitApprovalAsync(CurrentUserId, dto);
-        return Ok(new { Success = true, Message = "申请已提交", RequestNo = request.RequestNo });
+        return Ok(ApiResponse.Succeeded("申请已提交", ("requestNo", request.RequestNo)));
     }
 
     /// <summary>审批人处理（通过 / 驳回），需审批权限。</summary>
@@ -29,12 +30,12 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     public async Task<IActionResult> Handle([FromBody] HandleApprovalDto dto)
     {
         if (!dto.IsApproved && string.IsNullOrWhiteSpace(dto.Comment))   // 驳回必须写原因
-            return BadRequest(new { Success = false, Message = "驳回时必须填写驳回原因" });
+            return BadRequest(ApiResponse.Failed("驳回时必须填写驳回原因"));
         // 审批意见库里是 varchar(1000)，网页端已经限制了，接口这边也要拦，不然超长会写库失败、整个审批返回 500
-        if (dto.Comment is not null && dto.Comment.Trim().Length > 1000)
-            return BadRequest(new { Success = false, Message = "审批意见不能超过 1000 个字" });
+        if (dto.Comment is not null && dto.Comment.Trim().Length > InputLimits.ApprovalCommentMaxLength)
+            return BadRequest(ApiResponse.Failed("审批意见不能超过 1000 个字"));
         var ok = await approvalService.HandleApprovalAsync(CurrentUserId, dto);
-        return Ok(new { Success = ok, Message = ok ? "处理成功" : "未找到待处理的审批记录" });
+        return Ok(ApiResponse.FromResult(ok, "处理成功", "未找到待处理的审批记录"));
     }
 
     /// <summary>员工撤销自己的申请。</summary>
@@ -42,7 +43,7 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     public async Task<IActionResult> Cancel(int id)
     {
         var ok = await approvalService.CancelApprovalAsync(CurrentUserId, id);
-        return Ok(new { Success = ok, Message = ok ? "已撤销" : "仅待审批或审批中的申请可以撤销" });
+        return Ok(ApiResponse.FromResult(ok, "已撤销", "仅待审批或审批中的申请可以撤销"));
     }
 
     /// <summary>我提交的申请列表。</summary>
@@ -50,7 +51,7 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     public async Task<IActionResult> GetMine([FromQuery] ApprovalStatus? status)
     {
         var list = await approvalService.GetMyApprovalsAsync(CurrentUserId, status);
-        return Ok(new { Success = true, Data = list, Total = list.Count });
+        return Ok(ApiResponse.WithData(list, list.Count));
     }
 
     /// <summary>待我审批列表，需审批权限。</summary>
@@ -59,7 +60,7 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     public async Task<IActionResult> GetPendingForMe()
     {
         var list = await approvalService.GetPendingForApproverAsync(CurrentUserId);
-        return Ok(new { Success = true, Data = list, Total = list.Count });
+        return Ok(ApiResponse.WithData(list, list.Count));
     }
 
     /// <summary>申请详情（仅本人 / 该单审批人 / 管理员文员可见）。</summary>
@@ -71,12 +72,12 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
         // 只有走"管理员/文员"这条路径时才需要按范围收窄——本人/审批人这两条路径跟部门范围无关，
         // 不受限管理员传 null 表示不收窄（看全公司）
         var managerVisibleDeptIds = isManager
-            ? await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!)
+            ? await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser())
             : null;
         var detail = await approvalService.GetApprovalDetailAsync(id, CurrentUserId, isManager, managerVisibleDeptIds);
         return detail is null
-            ? NotFound(new { Success = false, Message = "申请不存在或无权查看" })
-            : Ok(new { Success = true, Data = detail });
+            ? NotFound(ApiResponse.Failed("申请不存在或无权查看"))
+            : Ok(ApiResponse.WithData(detail));
     }
 
     /// <summary>审批记录分页查询（管理员查全部）。</summary>
@@ -84,8 +85,8 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> Query([FromQuery] ApprovalQueryDto query)
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var (items, total) = await approvalService.QueryApprovalsAsync(query, visibleIds);
-        return Ok(new { Success = true, Data = items, Total = total });
+        return Ok(ApiResponse.WithData(items, total));
     }
 }

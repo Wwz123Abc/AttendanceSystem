@@ -35,7 +35,7 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
         // Kestrel/nginx 通常会先把 ".." 归一化掉，这里不依赖它们，含 "."/".." 段的一律拒绝（纵深防御，2026-10-06 复核）
         if (segments.Any(s => s is "." or "..")) return NotFound();
         var category = segments.Length > 0 ? segments[0] : "";
-        var cu        = HttpContext.GetCurrentUser()!;
+        var cu        = HttpContext.GetRequiredUser();
         var isManager = cu.Role is UserRole.Admin or UserRole.Clerk;
 
         var allowed = category switch
@@ -82,7 +82,7 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
     /// 按对应员工/登记的部门做范围校验——只是"管理员/文员"身份不够，还要管得到那个部门。</summary>
     private async Task<bool> CanAccessIdCardsAsync(string[] segments)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (segments.Length < 2) return false;
 
         if (segments[1] == "registrations")
@@ -113,7 +113,7 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
     /// 文件名开头的 SN 就是拍下这张照片的那台设备——按设备归属部门做范围校验。</summary>
     private async Task<bool> CanAccessZkDeviceAsync(string[] segments)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (segments.Length < 3) return false;
 
         var fileName = segments[2];
@@ -133,7 +133,7 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
     /// 其他人要看，必须是管理员/文员，且管得到这个人所在的部门。</summary>
     private async Task<bool> CanAccessFacesAsync(string[] segments, bool isManager)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (segments.Length < 2) return false;
 
         int ownerId;
@@ -158,7 +158,7 @@ public class PrivateFilesController(IWebHostEnvironment env, AttendanceDbContext
     /// 申请人本人、管得到申请人部门的管理员/文员、或这张申请单实际的审批人（含班组长/主管），才能看。</summary>
     private async Task<bool> CanAccessApprovalAsync(string[] segments, bool isManager)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (segments.Length < 2 || !int.TryParse(segments[1], out var applicantId)) return false;
         if (applicantId == cu.UserId) return true;
 

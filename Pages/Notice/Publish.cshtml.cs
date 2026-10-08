@@ -6,6 +6,7 @@ using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Notice;
 
@@ -46,7 +47,7 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
             // 范围裁剪现在下沉到服务层（GetDepartmentOptionsAsync/GetAttendanceGroupOptionsAsync 自己按
             // visibleDeptIds 过滤），这里只管传参，不用自己再重复一遍过滤逻辑（2026-09-21 代码审查发现：
             // 以前裁剪只写在这一个调用点，服务方法本身仍返回全集团，以后新增调用方很容易忘了裁剪）
-            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+            var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
             DeptOptions  = await announcementService.GetDepartmentOptionsAsync(visibleIds);
             GroupOptions = await announcementService.GetAttendanceGroupOptionsAsync(visibleIds);
         }
@@ -68,17 +69,17 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
             // "全公司"，"按部门/按考勤组"选的那个 id 也必须真的落在自己范围内
             if (IsManager)
             {
-                var cu = HttpContext.GetCurrentUser()!;
+                var cu = HttpContext.GetRequiredUser();
                 if (cu.IsScoped)
                 {
                     if (scopeType == AnnouncementScopeType.All)
-                        throw new InvalidOperationException("无权发布全公司范围的公告");
+                        throw new BusinessException("无权发布全公司范围的公告");
                     if (scopeType == AnnouncementScopeType.Role)
-                        throw new InvalidOperationException("无权按角色发布公告（跨部门，只有总部能发）");
+                        throw new BusinessException("无权按角色发布公告（跨部门，只有总部能发）");
                     if (scopeType == AnnouncementScopeType.Department)
                     {
                         if (!await deptScopeService.CanAccessDeptAsync(cu, ScopeId))
-                            throw new InvalidOperationException("无权向该部门发布公告");
+                            throw new BusinessException("无权向该部门发布公告");
                     }
                     else if (scopeType == AnnouncementScopeType.AttendanceGroup && ScopeId.HasValue)
                     {
@@ -91,7 +92,7 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
                         // All 口径的撤下/查已读又挡住了自己，变成"能广播、却撤不回、也查不到谁看了"
                         // （2026-09-17 代码审查发现）
                         var allowed = groupDeptIds.Count == 0 || groupDeptIds.All(id => visibleIds!.Contains(id));
-                        if (!allowed) throw new InvalidOperationException("无权向该考勤组发布公告");
+                        if (!allowed) throw new BusinessException("无权向该考勤组发布公告");
                     }
                 }
             }
@@ -124,7 +125,7 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
     /// <summary>点"撤下"时执行（软删除，历史记录和已读数据都保留）。</summary>
     public async Task<IActionResult> OnPostWithdrawAsync(int id)
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var ok = await announcementService.WithdrawAsync(CurrentUserId, IsManager, id, visibleIds);
         if (ok) SuccessMessage = "已撤下该公告";
         else    ErrorMessage   = "操作失败，请重试";
@@ -136,7 +137,7 @@ public class PublishModel(IAnnouncementService announcementService, IDeptScopeSe
     /// <summary>"查看已读详情"弹窗：AJAX 拉某条公告的已读明细（谁读了谁没读）。</summary>
     public async Task<JsonResult> OnGetReadDetailAsync(int id)
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var detail = await announcementService.GetReadDetailAsync(CurrentUserId, IsManager, id, visibleIds);
         return new JsonResult(detail ?? new List<AnnouncementReadDetailDto>());
     }

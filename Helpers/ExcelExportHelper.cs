@@ -189,7 +189,7 @@ public static class ExcelExportHelper
         // ★ 以后在最后加列，要同步扩大下面 groups 里最后一组（对照）的范围。
         string[] tailHeaders =
         [
-            "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
+            "出勤天数", "请假天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
             "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
             "应出勤天数", "实际总工时(h)", "排班说明"
@@ -199,10 +199,28 @@ public static class ExcelExportHelper
         var tailStart  = fixedCols + dayCount;
         var lastDayCol = tailStart - 1;
         // 分组的最后一列：右边线用深一点的颜色当分组分隔线（合同公司、每日最后一天、正班工时、旷工天数、休息日加班）
-        var edgeCols = new HashSet<int> { fixedCols - 1, lastDayCol, tailStart + 3, tailStart + 10, tailStart + 16 };
+        var edgeCols = new HashSet<int> { fixedCols - 1, lastDayCol, tailStart + 2, tailStart + 9, tailStart + 15 };
         // 带单位的工时列（(h)）用 1 位小数、0 显示"-"；分钟列（(分)）用千分位
-        var hourCols   = new HashSet<int> { tailStart + 3, tailStart + 11, tailStart + 13, tailStart + 14, tailStart + 15, tailStart + 16, tailStart + 18 };
-        var minuteCols = new HashSet<int> { tailStart + 4, tailStart + 7 };
+        var hourCols   = new HashSet<int> { tailStart + 2, tailStart + 10, tailStart + 12, tailStart + 13, tailStart + 14, tailStart + 15, tailStart + 17 };
+        var minuteCols = new HashSet<int> { tailStart + 3, tailStart + 6 };
+
+        var lay = new TemplateLayout(dayCount, fixedCols, tailHeaders, totalCols, tailStart, lastDayCol, edgeCols, hourCols, minuteCols);
+        WriteTemplateTitleAndLegend(sheet, st, result, lay);
+        WriteTemplateHeaders(sheet, st, result, lay);
+        ConfigureTemplateSheet(sheet, st, result, lay);
+        WriteTemplateRows(sheet, st, result, lay);
+        WriteTemplateTotals(wb, sheet, st, result, lay);
+
+        return ToBytes(wb);
+    }
+
+    /// <summary>第 1~2 行：标题、统计周期、图例块（从 <see cref="ExportTemplateReport"/> 里原样搬出，逻辑没有改动）。</summary>
+    private static void WriteTemplateTitleAndLegend(ISheet sheet, TemplateReportStyles st, TemplateReportResultDto result, TemplateLayout lay)
+    {
+        var dayCount = lay.DayCount;
+        var totalCols = lay.TotalCols;
+        var tailStart = lay.TailStart;
+        var lastDayCol = lay.LastDayCol;
 
         // ── 第 1 行：标题靠左，拆成"主标题 + 统计周期/人数"两段（不合并，这样冻结窗格后一打开就能看到）──
         var titleRow = sheet.CreateRow(0);
@@ -243,6 +261,17 @@ public static class ExcelExportHelper
             sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
             legendRow.HeightInPoints = 32;
         }
+    }
+
+    /// <summary>第 3~4 行：分组行和列名行（从 <see cref="ExportTemplateReport"/> 里原样搬出，逻辑没有改动）。</summary>
+    private static void WriteTemplateHeaders(ISheet sheet, TemplateReportStyles st, TemplateReportResultDto result, TemplateLayout lay)
+    {
+        var dayCount = lay.DayCount;
+        var fixedCols = lay.FixedCols;
+        var tailHeaders = lay.TailHeaders;
+        var tailStart = lay.TailStart;
+        var lastDayCol = lay.LastDayCol;
+        var edgeCols = lay.EdgeCols;
 
         // ── 第 3 行：分组行（深蓝底白字）；第 4 行：列名行（所有列名都写在这一行，筛选箭头也挂在这一行，
         //    所以筛选下拉框里每一列都有名字，不再有纵向合并的空白格）──
@@ -255,12 +284,12 @@ public static class ExcelExportHelper
             ("基本信息",                       0,              fixedCols - 1,  "D6DCE4", HorizontalAlignment.Center),
             // "考勤结果"横跨每日列，文字靠左（居中的话冻结窗格后往右滚动就看不到了）
             ("考勤结果（每日工时，单位：小时）", fixedCols,       lastDayCol,     "EEF3FA", HorizontalAlignment.Left),
-            ("出勤与工时",                     tailStart,      tailStart + 3,  "DDEBF7", HorizontalAlignment.Center),
-            ("迟到 · 早退 · 缺卡 · 旷工",       tailStart + 4,  tailStart + 10, "FBE5D6", HorizontalAlignment.Center),
-            ("出差 · 夜班 · 加班",              tailStart + 11, tailStart + 16, "E2EFDA", HorizontalAlignment.Center),
-            ("对照",                           tailStart + 17, tailStart + 17, "DDEBF7", HorizontalAlignment.Center),
-            ("发薪工时（正班+加班）",              tailStart + 18, tailStart + 18, "FFF2CC", HorizontalAlignment.Center),
-            ("说明",                           tailStart + 19, tailStart + 19, "EDEDED", HorizontalAlignment.Center),
+            ("出勤与工时",                     tailStart,      tailStart + 2,  "DDEBF7", HorizontalAlignment.Center),
+            ("迟到 · 早退 · 缺卡 · 旷工",       tailStart + 3,  tailStart + 9,  "FBE5D6", HorizontalAlignment.Center),
+            ("出差 · 夜班 · 加班",              tailStart + 10, tailStart + 15, "E2EFDA", HorizontalAlignment.Center),
+            ("对照",                           tailStart + 16, tailStart + 16, "DDEBF7", HorizontalAlignment.Center),
+            ("发薪工时（正班+加班）",              tailStart + 17, tailStart + 17, "FFF2CC", HorizontalAlignment.Center),
+            ("说明",                           tailStart + 18, tailStart + 18, "EDEDED", HorizontalAlignment.Center),
         ];
         foreach (var g in groups)
         {
@@ -296,6 +325,16 @@ public static class ExcelExportHelper
             SetCell(nameRow, col, WrapHeader(tailHeaders[i]),
                 st.Get(fill: tint, font: "1F3864", size: 9, bold: true, wrap: true, edge: edgeCols.Contains(col), bottomMedium: true));
         }
+    }
+
+    /// <summary>列宽、冻结窗格、A3 打印设置（从 <see cref="ExportTemplateReport"/> 里原样搬出，逻辑没有改动）。</summary>
+    private static void ConfigureTemplateSheet(ISheet sheet, TemplateReportStyles st, TemplateReportResultDto result, TemplateLayout lay)
+    {
+        var dayCount = lay.DayCount;
+        var fixedCols = lay.FixedCols;
+        var tailCols = lay.TailCols;
+        var totalCols = lay.TotalCols;
+        var tailStart = lay.TailStart;
 
         // 列宽：文字列按内容给，每日列和统计列压窄（同一屏多看十来列）
         int[] fixedWidths = [9, 13, 11, 10, 10, 15];
@@ -314,6 +353,18 @@ public static class ExcelExportHelper
         sheet.Footer.Center = "第 &P 页 / 共 &N 页";
         sheet.Footer.Right  = "打印日期 &D";
         sheet.SetZoom(90);
+    }
+
+    /// <summary>数据区：每人一行（每日格子 + 尾部统计列）（从 <see cref="ExportTemplateReport"/> 里原样搬出，逻辑没有改动）。</summary>
+    private static void WriteTemplateRows(ISheet sheet, TemplateReportStyles st, TemplateReportResultDto result, TemplateLayout lay)
+    {
+        var dayCount = lay.DayCount;
+        var fixedCols = lay.FixedCols;
+        var tailStart = lay.TailStart;
+        var lastDayCol = lay.LastDayCol;
+        var edgeCols = lay.EdgeCols;
+        var hourCols = lay.HourCols;
+        var minuteCols = lay.MinuteCols;
 
         // ── 数据区：白底，不加斑马纹（业务决定这份表颜色统一成白色）；颜色只用在夜班/休息日底色和异常字色上 ──
         ICellStyle Txt(bool left, int col) => st.Get(h: left ? HorizontalAlignment.Left : HorizontalAlignment.Center, indent: (short)(left ? 1 : 0), edge: edgeCols.Contains(col));
@@ -358,7 +409,6 @@ public static class ExcelExportHelper
             var c = tailStart;
             Put(xRow, c, (double)row.ActualWorkdays, Num(c), false); c++;
             Put(xRow, c, (double)row.LeaveDays, Num(c), true); c++;
-            Put(xRow, c, row.RestDays, Num(c), true); c++;
             // 总工时（正班+加班）跟正班工时统一口径后两列数值完全相同，删掉这一列，只保留"正班工时"
             // （加班已经单独有"加班总时长"及其细分列），避免同一张表里出现两列数字永远一样的困惑
             Put(xRow, c, (double)row.RegularWorkHours, Num(c), false); c++;
@@ -383,6 +433,17 @@ public static class ExcelExportHelper
             // 排班说明：没排班的人，告诉用户正班是怎么算的（正班已按规则处理，不会和加班重复）
             SetCell(xRow, c, NoShiftPayrollNote(row.NoShiftDays), row.NoShiftDays > 0 ? st.Get(font: orange, h: HorizontalAlignment.Left, indent: 1) : Txt(true, c));
         }
+    }
+
+    /// <summary>筛选箭头和合计行（从 <see cref="ExportTemplateReport"/> 里原样搬出，逻辑没有改动）。</summary>
+    private static void WriteTemplateTotals(IWorkbook wb, ISheet sheet, TemplateReportStyles st, TemplateReportResultDto result, TemplateLayout lay)
+    {
+        var fixedCols = lay.FixedCols;
+        var totalCols = lay.TotalCols;
+        var tailStart = lay.TailStart;
+        var edgeCols = lay.EdgeCols;
+        var hourCols = lay.HourCols;
+        var minuteCols = lay.MinuteCols;
 
         // 筛选箭头：列名行是第 4 行（下标 3），范围到最后一条员工数据为止——合计行在范围外，不会被筛掉或排序打乱
         var lastDataRow = 4 + Math.Max(result.Rows.Count, 1) - 1;
@@ -416,8 +477,14 @@ public static class ExcelExportHelper
             // 公式的计算结果先算好缓存进文件：Excel/WPS 打开时会自己重算，但用程序（或预览器）读取时才不会读到空值
             wb.GetCreationHelper().CreateFormulaEvaluator().EvaluateAll();
         }
+    }
 
-        return ToBytes(wb);
+    /// <summary>发薪汇总表的列布局：固定列数、每日列数、尾部统计列的起止位置，以及需要特殊格式/分隔线的列号。</summary>
+    private sealed record TemplateLayout(
+        int DayCount, int FixedCols, string[] TailHeaders, int TotalCols, int TailStart, int LastDayCol,
+        HashSet<int> EdgeCols, HashSet<int> HourCols, HashSet<int> MinuteCols)
+    {
+        public int TailCols => TailHeaders.Length;
     }
 
     /// <summary>发薪汇总表里"没排班"员工的说明：正班已经按规则处理（工作日最多 8 小时、休息日不计），可以直接用"实际总工时"。</summary>

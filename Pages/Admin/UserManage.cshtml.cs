@@ -13,6 +13,7 @@ using AttendanceSystem.Models.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using QRCoder;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -38,7 +39,7 @@ public class UserManageModel(
     /// 表单里看到/改动"管理范围"这个字段（把某人设成分公司管理员），也只有这种人能把别人的角色设成
     /// 管理员。不能只判断"是否受限"：一个没被设置范围、但角色只是文员的账号，IsScoped 也恒为 false，
     /// 光挡"受限"挡不住这种账号提权。</summary>
-    public bool CurrentUserIsUnscoped => IsHqSuperAdmin(HttpContext.GetCurrentUser()!);
+    public bool CurrentUserIsUnscoped => IsHqSuperAdmin(HttpContext.GetRequiredUser());
 
     /// <summary>是不是"总部超级管理员"：角色为 Admin，且自己没有被设置管理范围。</summary>
     private static bool IsHqSuperAdmin(CurrentUser cu) => cu.IsHqSuperAdmin;
@@ -80,6 +81,10 @@ public class UserManageModel(
     [BindProperty] public int?    GroupId        { get; set; }
     [BindProperty] public int?    SuperId        { get; set; }
     [BindProperty] public string? Position       { get; set; }
+
+    /// <summary>岗位下拉框选项：跟员工扫码登记页是同一份（<see cref="IEmployeeRegistrationService.AllowedPositions"/>），
+    /// 扫码登记的岗位带到"新增员工"弹窗时一定在选项里。</summary>
+    public string[] PositionOptions => IEmployeeRegistrationService.AllowedPositions;
     [BindProperty] public string? Phone          { get; set; }
     [BindProperty] public string? IdNumber       { get; set; }
     [BindProperty] public string? ContractCompany { get; set; }
@@ -121,7 +126,7 @@ public class UserManageModel(
     public async Task OnGetAsync(string? keyword, int p = 1, int? deptId = null,
                                  bool unassigned = false, string? status = null, string? role = null)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         deptId = await deptScopeService.ResolveEffectiveDeptIdAsync(cu, deptId);
         // "未分配部门"视图定义就是"没有部门"，天然在任何分公司范围之外，受限管理员看不到这个视图
         if (cu.IsScoped) unassigned = false;
@@ -145,7 +150,7 @@ public class UserManageModel(
         await LoadDropdownsAsync();
         await LoadUserDeviceIdsAsync();
         PendingRegistrations = await registrationService.GetPendingAsync(
-            await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!));
+            await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser()));
     }
 
     /// <summary>批量取当前这一页员工各自被指定推送到的设备 Id（编辑弹窗回填用）。</summary>
@@ -160,7 +165,7 @@ public class UserManageModel(
     /// 生成该分公司专属的二维码（校验调用者管理范围能看到这个部门，不能跨分公司生成别人的码）。</summary>
     public async Task<IActionResult> OnGetQr(int? deptId)
     {
-        if (deptId.HasValue && !await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, deptId))
+        if (deptId.HasValue && !await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), deptId))
             return Forbid();
 
         using var generator = new QRCodeGenerator();
@@ -177,7 +182,7 @@ public class UserManageModel(
     {
         // 前端下拉框已经只显示范围内的部门了，但这是个直接按 deptId 查询的 AJAX 接口，后端也要校验一遍，
         // 不然受限管理员可以绕过界面直接拿别的分公司的部门 id 探测/生成工号
-        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, deptId))
+        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), deptId))
             return new(new { employeeNo = (string?)null });
         return new(new { employeeNo = await userService.GenerateNextEmployeeNoAsync(deptId) });
     }
@@ -189,7 +194,7 @@ public class UserManageModel(
     /// </summary>
     public async Task<JsonResult> OnGetSuggestSupervisorAsync(int deptId)
     {
-        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, deptId))
+        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), deptId))
             return new(new { supervisorId = (int?)null, count = 0 });
 
         var supervisors = await db.Users
@@ -206,7 +211,7 @@ public class UserManageModel(
     /// <summary>驳回一条扫码登记（不建账号）。</summary>
     public async Task<IActionResult> OnPostRejectRegistrationAsync(int id)
     {
-        try { await registrationService.RejectAsync(id, RejectReason, HttpContext.GetCurrentUser()!); SuccessMessage = "已驳回该登记"; }
+        try { await registrationService.RejectAsync(id, RejectReason, HttpContext.GetRequiredUser()); SuccessMessage = "已驳回该登记"; }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
         {
@@ -237,8 +242,8 @@ public class UserManageModel(
             // 不会往下走到"建员工"那一步，避免同一条登记被重复建出两个账号。
             if (RegistrationId.HasValue)
             {
-                var claimed = await registrationService.ClaimForConfirmAsync(RegistrationId.Value, HttpContext.GetCurrentUser()!);
-                if (!claimed) throw new InvalidOperationException("该登记不存在，或已经被处理过了");
+                var claimed = await registrationService.ClaimForConfirmAsync(RegistrationId.Value, HttpContext.GetRequiredUser());
+                if (!claimed) throw new BusinessException("该登记不存在，或已经被处理过了");
                 claimedByMe = true;
             }
 
@@ -299,7 +304,7 @@ public class UserManageModel(
         {
             ValidateContact(requirePhone: false, requireSupervisor: false, requireDept: false);
             if (!await CanAccessUserAsync(EditUserId))
-                throw new InvalidOperationException("无权编辑该员工");
+                throw new BusinessException("无权编辑该员工");
             await EnsureCanManageTargetAsync(EditUserId);   // 文员/分公司管理员不能编辑（含降级）总部管理员等更高权限账号
 
             var oldPhotoUrl = (await userService.GetUserByIdAsync(EditUserId))?.IdCardPhotoUrl;
@@ -319,7 +324,7 @@ public class UserManageModel(
                 if (followedGroupId.HasValue) user.AttendanceGroupId = followedGroupId.Value;
             }
             bool ok;
-            try { ok = await userService.UpdateUserAsync(user, HttpContext.GetCurrentUser()!.UserId); }
+            try { ok = await userService.UpdateUserAsync(user, HttpContext.GetRequiredUser().UserId); }
             catch
             {
                 if (wroteNewPhoto) DeleteIdCardFile(user.IdCardPhotoUrl);
@@ -355,9 +360,9 @@ public class UserManageModel(
     {
         try
         {
-            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            if (!await CanAccessUserAsync(id)) throw new BusinessException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.DeactivateUserAsync(id, HttpContext.GetCurrentUser()!.UserId);
+            await userService.DeactivateUserAsync(id, HttpContext.GetRequiredUser().UserId);
             SuccessMessage = "已停用该账号（无法登录）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -373,9 +378,9 @@ public class UserManageModel(
     {
         try
         {
-            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            if (!await CanAccessUserAsync(id)) throw new BusinessException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.ActivateUserAsync(id, HttpContext.GetCurrentUser()!.UserId); SuccessMessage = "已启用该账号";
+            await userService.ActivateUserAsync(id, HttpContext.GetRequiredUser().UserId); SuccessMessage = "已启用该账号";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -390,9 +395,9 @@ public class UserManageModel(
     {
         try
         {
-            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            if (!await CanAccessUserAsync(id)) throw new BusinessException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.BlacklistUserAsync(id, HttpContext.GetCurrentUser()!.UserId); SuccessMessage = "已拉黑该员工（禁止登录，工号永不再用）";
+            await userService.BlacklistUserAsync(id, HttpContext.GetRequiredUser().UserId); SuccessMessage = "已拉黑该员工（禁止登录，工号永不再用）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -407,9 +412,9 @@ public class UserManageModel(
     {
         try
         {
-            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            if (!await CanAccessUserAsync(id)) throw new BusinessException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.RemoveFromBlacklistAsync(id, HttpContext.GetCurrentUser()!.UserId); SuccessMessage = "已移出黑名单（当前为“已停用”，如需恢复请再点“启用”）";
+            await userService.RemoveFromBlacklistAsync(id, HttpContext.GetRequiredUser().UserId); SuccessMessage = "已移出黑名单（当前为“已停用”，如需恢复请再点“启用”）";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -424,9 +429,9 @@ public class UserManageModel(
     {
         try
         {
-            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            if (!await CanAccessUserAsync(id)) throw new BusinessException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            await userService.DeleteUserAsync(id, HttpContext.GetCurrentUser()!.UserId);
+            await userService.DeleteUserAsync(id, HttpContext.GetRequiredUser().UserId);
             SuccessMessage = "已彻底删除该员工";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
@@ -443,11 +448,11 @@ public class UserManageModel(
     {
         try
         {
-            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            if (!await CanAccessUserAsync(id)) throw new BusinessException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            var target = await db.Users.FindAsync(id) ?? throw new InvalidOperationException("员工不存在");
+            var target = await db.Users.FindAsync(id) ?? throw new BusinessException("员工不存在");
             var oldUrl = target.FaceReferencePhotoUrl;
-            if (string.IsNullOrEmpty(oldUrl)) throw new InvalidOperationException("该员工还没有录入人脸照片");
+            if (string.IsNullOrEmpty(oldUrl)) throw new BusinessException("该员工还没有录入人脸照片");
             target.FaceReferencePhotoUrl = null;
             target.UpdatedAt = DateTime.Now;
             await db.SaveChangesAsync();   // 先写库、成功了再删文件：写库失败时文件还在，库里也没被清掉，不会出现"库里指着一个已删除的文件"
@@ -469,9 +474,9 @@ public class UserManageModel(
     {
         try
         {
-            if (!await CanAccessUserAsync(id)) throw new InvalidOperationException("无权操作该员工");
+            if (!await CanAccessUserAsync(id)) throw new BusinessException("无权操作该员工");
             await EnsureCanManageTargetAsync(id);
-            var pwd = await userService.ResetPasswordAsync(id, HttpContext.GetCurrentUser()!.UserId, ResetPasswordValue); SuccessMessage = $"密码已重置为：{pwd}";
+            var pwd = await userService.ResetPasswordAsync(id, HttpContext.GetRequiredUser().UserId, ResetPasswordValue); SuccessMessage = $"密码已重置为：{pwd}";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -488,7 +493,7 @@ public class UserManageModel(
     public async Task<IActionResult> OnPostBatchActivateAsync()
     {
         try { var ids = await FilterAccessibleUserIdsAsync(ParseIds(BatchIds));
-              var n = await userService.SetActiveBatchAsync(ids, true, HttpContext.GetCurrentUser()!.UserId);
+              var n = await userService.SetActiveBatchAsync(ids, true, HttpContext.GetRequiredUser().UserId);
               SuccessMessage = $"已启用 {n} 名员工（黑名单员工已跳过）"; }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -502,7 +507,7 @@ public class UserManageModel(
     public async Task<IActionResult> OnPostBatchDeactivateAsync()
     {
         try { var ids = await FilterAccessibleUserIdsAsync(ParseIds(BatchIds));
-              var n = await userService.SetActiveBatchAsync(ids, false, HttpContext.GetCurrentUser()!.UserId);
+              var n = await userService.SetActiveBatchAsync(ids, false, HttpContext.GetRequiredUser().UserId);
               SuccessMessage = $"已停用 {n} 名员工"; }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -520,7 +525,7 @@ public class UserManageModel(
     private async Task<bool> CanAccessUserAsync(int userId)
     {
         var deptId = await db.Users.Where(u => u.Id == userId).Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
-        return await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, deptId);
+        return await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), deptId);
     }
 
     /// <summary>
@@ -534,11 +539,11 @@ public class UserManageModel(
     /// </summary>
     private async Task EnsureCanManageTargetAsync(int userId)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (cu.IsHqSuperAdmin) return;
         var t = await db.Users.Where(u => u.Id == userId).Select(u => new { u.Role, u.ScopedDepartmentId }).FirstOrDefaultAsync();
         if (t is null || cu.CanManageAccount(t.Role, t.ScopedDepartmentId)) return;
-        throw new InvalidOperationException(t.ScopedDepartmentId is null
+        throw new BusinessException(t.ScopedDepartmentId is null
             ? "无权操作总部管理员账号，请联系总部管理员"
             : "文员无权操作管理员账号");
     }
@@ -547,7 +552,7 @@ public class UserManageModel(
     /// 其余的静默剔除（不报错——批量操作里"只处理有权限的那部分"比"整批因为混了一个越权 id 就全部失败"更实用）。</summary>
     private async Task<List<int>> FilterAccessibleUserIdsAsync(List<int> userIds)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (userIds.Count == 0 || IsHqSuperAdmin(cu)) return userIds;   // 本来就没传，或者是总部超级管理员，直接放行
 
         var targets = await db.Users.Where(u => userIds.Contains(u.Id))
@@ -574,7 +579,7 @@ public class UserManageModel(
     /// </summary>
     private async Task ApplyScopeAfterSaveAsync(int userId, bool isCreate)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         if (IsHqSuperAdmin(cu))
         {
             await userService.SetScopedDepartmentAsync(userId, ScopedDeptId);
@@ -607,23 +612,23 @@ public class UserManageModel(
 
     private async Task ValidateScopeForSaveAsync(User user, int? targetUserId = null)
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
 
         if (user.DepartmentId.HasValue && !await deptScopeService.CanAccessDeptAsync(cu, user.DepartmentId))
-            throw new InvalidOperationException("无权将员工分配到该部门");
+            throw new BusinessException("无权将员工分配到该部门");
 
         // 考勤组归属校验：原来这里只校验了部门/上级/角色/设备，唯独漏了考勤组——受限管理员能把自己的
         // 员工挂到任意考勤组（含别的分公司的组），套用对方的班次时间、休息日、午休/晚餐扣时和
         // 迟到早退容忍度，是一条真实的越权口子（2026-09-17 代码审查发现）
         if (user.AttendanceGroupId.HasValue && !await IsGroupInScopeAsync(cu, user.AttendanceGroupId.Value))
-            throw new InvalidOperationException("无权将员工分配到该考勤组");
+            throw new BusinessException("无权将员工分配到该考勤组");
 
         if (user.SupervisorUserId.HasValue)
         {
             var superDeptId = await db.Users.Where(u => u.Id == user.SupervisorUserId.Value)
                 .Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
             if (!await deptScopeService.CanAccessDeptAsync(cu, superDeptId))
-                throw new InvalidOperationException("直属上级必须是同一分公司范围内的人");
+                throw new BusinessException("直属上级必须是同一分公司范围内的人");
         }
 
         // 只有"总部超级管理员"才能把别人的角色设成管理员、或者设置/修改别人的管理范围——原来这里
@@ -638,11 +643,11 @@ public class UserManageModel(
                 ? await db.Users.Where(u => u.Id == targetUserId.Value).Select(u => (UserRole?)u.Role).FirstOrDefaultAsync()
                 : null;
             if (user.Role == UserRole.Admin && currentRole != UserRole.Admin)
-                throw new InvalidOperationException("无权将角色设置为管理员，请联系总部管理员操作");
+                throw new BusinessException("无权将角色设置为管理员，请联系总部管理员操作");
             if (user.Role != UserRole.Admin && currentRole == UserRole.Admin)
-                throw new InvalidOperationException("无权修改管理员账号的角色，请联系总部管理员操作");
+                throw new BusinessException("无权修改管理员账号的角色，请联系总部管理员操作");
             if (ScopedDeptId.HasValue)
-                throw new InvalidOperationException("无权设置管理范围，请联系总部管理员操作");
+                throw new BusinessException("无权设置管理范围，请联系总部管理员操作");
         }
 
         // 考勤机不做管理范围校验（2026-09-21 按业务要求取消隔离，方便员工借调到其他分公司时
@@ -653,7 +658,7 @@ public class UserManageModel(
         {
             var validDeviceCount = await db.ZKDevices.CountAsync(d => DeviceIds.Contains(d.Id) && d.IsActive);
             if (validDeviceCount != DeviceIds.Distinct().Count())
-                throw new InvalidOperationException("勾选的考勤机不存在或已停用");
+                throw new BusinessException("勾选的考勤机不存在或已停用");
         }
     }
 
@@ -668,44 +673,44 @@ public class UserManageModel(
     private void ValidateContact(bool requirePhone, bool requireSupervisor, bool requireDept)
     {
         if (string.IsNullOrWhiteSpace(EmployeeNo))
-            throw new InvalidOperationException("请填写工号");
+            throw new BusinessException("请填写工号");
         if (EmployeeNo.Trim().Length > 50)
-            throw new InvalidOperationException("工号不能超过 50 个字");
+            throw new BusinessException("工号不能超过 50 个字");
         // 工号会被直接拼进身份证照片的存储目录名（见 SaveIdCardPhotoAsync），只校验长度不够——
         // 填个 "../../xxx" 就能越出预期目录建文件夹/写文件，这里限定成字母数字下划线短横线，
         // 从根上堵掉路径穿越，不依赖调用方自己记得转义
         if (!System.Text.RegularExpressions.Regex.IsMatch(EmployeeNo.Trim(), @"^[A-Za-z0-9_-]+$"))
-            throw new InvalidOperationException("工号只能包含字母、数字、下划线和短横线");
+            throw new BusinessException("工号只能包含字母、数字、下划线和短横线");
         if (string.IsNullOrWhiteSpace(RealName))
-            throw new InvalidOperationException("请填写姓名");
+            throw new BusinessException("请填写姓名");
         if (RealName.Trim().Length > 50)
-            throw new InvalidOperationException("姓名不能超过 50 个字");
+            throw new BusinessException("姓名不能超过 50 个字");
         if (!Enum.TryParse<UserRole>(Role, out var parsedRole) || !Enum.IsDefined(parsedRole))   // 数字串 "99" 也能 TryParse 成功，必须再确认是已定义的角色
-            throw new InvalidOperationException("请选择正确的角色");
+            throw new BusinessException("请选择正确的角色");
         if (!string.IsNullOrEmpty(HireDate) && !DateOnly.TryParse(HireDate, out _))
-            throw new InvalidOperationException("入职日期格式不正确");
+            throw new BusinessException("入职日期格式不正确");
         if (requireSupervisor && !SuperId.HasValue)
-            throw new InvalidOperationException("请选择直属上级");
+            throw new BusinessException("请选择直属上级");
         if (requireDept && !DeptId.HasValue)
-            throw new InvalidOperationException("请选择部门");
+            throw new BusinessException("请选择部门");
 
         if (requirePhone && string.IsNullOrWhiteSpace(Phone))
-            throw new InvalidOperationException("请填写手机号（用于以后自助找回密码）");
+            throw new BusinessException("请填写手机号（用于以后自助找回密码）");
         if (!string.IsNullOrWhiteSpace(Phone) && !ContactValidationHelper.IsValidPhone(Phone))
-            throw new InvalidOperationException("请输入正确格式的手机号（11 位中国大陆手机号）");
+            throw new BusinessException("请输入正确格式的手机号（11 位中国大陆手机号）");
         if (!string.IsNullOrWhiteSpace(EmergencyContactPhone) && !ContactValidationHelper.IsValidPhone(EmergencyContactPhone))
-            throw new InvalidOperationException("请输入正确格式的紧急联系人电话（11 位中国大陆手机号）");
+            throw new BusinessException("请输入正确格式的紧急联系人电话（11 位中国大陆手机号）");
         if (!string.IsNullOrWhiteSpace(IdNumber) && !ContactValidationHelper.IsValidIdNumber(IdNumber))
-            throw new InvalidOperationException("请输入正确格式的身份证号（18 位）");
+            throw new BusinessException("请输入正确格式的身份证号（18 位）");
 
         if (!string.IsNullOrWhiteSpace(Position) && Position.Trim().Length > 100)
-            throw new InvalidOperationException("岗位不能超过 100 个字");
+            throw new BusinessException("岗位不能超过 100 个字");
         if (!string.IsNullOrWhiteSpace(ContractCompany) && ContractCompany.Trim().Length > 100)
-            throw new InvalidOperationException("合同公司不能超过 100 个字");
+            throw new BusinessException("合同公司不能超过 100 个字");
         if (!string.IsNullOrWhiteSpace(HomeAddress) && HomeAddress.Trim().Length > 200)
-            throw new InvalidOperationException("家庭住址不能超过 200 个字");
+            throw new BusinessException("家庭住址不能超过 200 个字");
         if (!string.IsNullOrWhiteSpace(EmergencyContactName) && EmergencyContactName.Trim().Length > 50)
-            throw new InvalidOperationException("紧急联系人姓名不能超过 50 个字");
+            throw new BusinessException("紧急联系人姓名不能超过 50 个字");
     }
 
     private User BuildUser() => new()
@@ -738,11 +743,11 @@ public class UserManageModel(
     {
         if (IdCardPhoto is null || IdCardPhoto.Length == 0) return oldUrl;   // 没上传新照片，保留原值
 
-        if (IdCardPhoto.Length > 10 * 1024 * 1024)
-            throw new InvalidOperationException("身份证照片不能超过 10MB");
+        if (IdCardPhoto.Length > InputLimits.MaxImageUploadBytes)
+            throw new BusinessException("身份证照片不能超过 10MB");
         var ext = Path.GetExtension(IdCardPhoto.FileName).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
-            throw new InvalidOperationException("身份证照片只支持 jpg / png / webp 格式");
+            throw new BusinessException("身份证照片只支持 jpg / png / webp 格式");
 
         // 只看扩展名挡不住"把其他类型文件改个后缀名冒充图片上传"——员工自助登记的身份证照片上传
         // 入口已经有这道文件头校验，管理员这边"新增/编辑员工"漏了，这里补上，两处共用同一个方法
@@ -751,7 +756,7 @@ public class UserManageModel(
         await using (var headerStream = IdCardPhoto.OpenReadStream())
             await headerStream.ReadExactlyAsync(header.AsMemory(0, (int)Math.Min(12, IdCardPhoto.Length)));
         if (!ImageValidationHelper.IsValidImageHeader(ext, header))
-            throw new InvalidOperationException("身份证照片文件内容与格式不符，请重新选择图片文件");
+            throw new BusinessException("身份证照片文件内容与格式不符，请重新选择图片文件");
 
         var uploadPath = appOptions.Value.UploadPath.Trim('/', '\\');
         var privateRoot = PrivateFileStorage.GetRoot(env);   // 身份证照片是敏感文件，存在 wwwroot 之外，见 PrivateFilesController
@@ -804,7 +809,7 @@ public class UserManageModel(
     /// <summary>提交操作后重新加载：沿用回传的筛选上下文，保持在同一部门/状态/页码。</summary>
     private async Task ReloadAsync()
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var deptId = await deptScopeService.ResolveEffectiveDeptIdAsync(cu, CtxDeptId);
         var unassigned = cu.IsScoped ? false : CtxUnassigned;
         // 同 OnGetAsync：黑名单全公司共享，不按管理范围钳制
@@ -826,12 +831,12 @@ public class UserManageModel(
         await LoadDropdownsAsync();
         await LoadUserDeviceIdsAsync();
         PendingRegistrations = await registrationService.GetPendingAsync(
-            await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!));
+            await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser()));
     }
 
     private async Task LoadTreeAsync()
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
 
         var depts = await db.Departments.OrderBy(d => d.SortIndex).ThenBy(d => d.DeptName).ToListAsync();
@@ -896,7 +901,7 @@ public class UserManageModel(
 
     private async Task LoadDropdownsAsync()
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
 
         // 考勤组本身没有直接的"归属部门"字段，只有"长期跟随本组的部门"这个反向集合——

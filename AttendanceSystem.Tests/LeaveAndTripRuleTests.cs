@@ -7,6 +7,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -114,7 +115,7 @@ public class LeaveAndTripRuleTests : SqliteTestBase
         using var db = CreateContext();
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Now.AddMonths(3).AddDays(1);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.PersonalLeave,
             LeaveStartTime = start, LeaveEndTime = start.AddHours(4), Reason = "t"
@@ -144,7 +145,7 @@ public class LeaveAndTripRuleTests : SqliteTestBase
         using var db = CreateContext();
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Now.AddMonths(3).AddDays(1);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.BusinessTrip,
             BusinessTripStartTime = start, BusinessTripEndTime = start.AddDays(2), Reason = "t"
@@ -176,7 +177,7 @@ public class LeaveAndTripRuleTests : SqliteTestBase
         using var db = CreateContext();
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Today.AddDays(-1).AddHours(9);   // 昨天9点，不管现在几点，昨天都已经过了今天0点这条线
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.BusinessTrip,
             BusinessTripStartTime = start, BusinessTripEndTime = start.AddDays(1), Reason = "t"
@@ -209,7 +210,7 @@ public class LeaveAndTripRuleTests : SqliteTestBase
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Now.AddHours(1);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(w.applicant, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(w.applicant, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.AnnualLeave,
             LeaveStartTime = start, LeaveEndTime = new DateTime(9999, 12, 31),   // 提交"结束时间=9999 年"的假单
@@ -226,10 +227,102 @@ public class LeaveAndTripRuleTests : SqliteTestBase
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Now.AddHours(1);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(w.applicant, new SubmitApprovalDto
+        await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(w.applicant, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.BusinessTrip, BusinessTripStartTime = start,
             BusinessTripEndTime = start.AddDays(ApprovalService.MaxLeaveOrTripSpanDays + 1), Reason = "x"
         }));
+    }
+
+    // ── 休息日请假拦截（2026-10 用户要求）：事假/病假/年假/调休整段落在休息日，提交时直接拒绝 ──
+
+    private static DateTime NextDayOfWeek(DayOfWeek dow, int hour)
+    {
+        var d = DateTime.Today.AddDays(3);   // 离今天至少 3 天，避开"开始时间最早只能选到往前 24 小时"
+        while (d.DayOfWeek != dow) d = d.AddDays(1);
+        return d.AddHours(hour);
+    }
+
+    private int NewPlainUser()
+    {
+        using var db = CreateContext();
+        var u = U("RL1", "没排班的人");
+        db.Users.Add(u); db.SaveChanges();
+        return u.Id;
+    }
+
+    [Theory]
+    [InlineData(DayOfWeek.Saturday)]
+    [InlineData(DayOfWeek.Sunday)]
+    public async Task 事假_整段在休息日_提交被拦截(DayOfWeek dow)
+    {
+        var uid = NewPlainUser();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = NextDayOfWeek(dow, 9);
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.PersonalLeave,
+            LeaveStartTime = start, LeaveEndTime = start.AddHours(8), Reason = "t"
+        }));
+        Assert.Contains("休息日不需要请假", ex.Message);
+    }
+
+    [Fact]
+    public async Task 事假_周六到周日两天都是休息日_也拦截()
+    {
+        var uid = NewPlainUser();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = NextDayOfWeek(DayOfWeek.Saturday, 9);
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        {
+            ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.SickLeave,
+            LeaveStartTime = start, LeaveEndTime = start.AddDays(1).AddHours(8), Reason = "t"
+        }));
+        Assert.Contains("休息日不需要请假", ex.Message);
+    }
+
+    [Fact]
+    public async Task 事假_区间里有上班日_不因休息日被拦截()
+    {
+        var uid = NewPlainUser();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = NextDayOfWeek(DayOfWeek.Saturday, 9);   // 周六 09:00 ~ 下周一 18:00，含周一这个上班日
+        try
+        {
+            await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+            {
+                ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.PersonalLeave,
+                LeaveStartTime = start, LeaveEndTime = start.AddDays(2).AddHours(9), Reason = "t"
+            });
+        }
+        catch (BusinessException ex)
+        {
+            // 这个测试账号没配审批人，后面可能因此失败，但不能是"休息日"拦截
+            Assert.DoesNotContain("休息日不需要请假", ex.Message);
+        }
+    }
+
+    [Fact]
+    public async Task 婚假_落在休息日_按自然日计算_不拦截()
+    {
+        var uid = NewPlainUser();
+        using var db = CreateContext();
+        var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
+        var start = NextDayOfWeek(DayOfWeek.Saturday, 9);
+        try
+        {
+            await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+            {
+                ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.MarriageLeave,
+                LeaveStartTime = start, LeaveEndTime = start.AddHours(8), Reason = "t"
+            });
+        }
+        catch (BusinessException ex)
+        {
+            Assert.DoesNotContain("休息日不需要请假", ex.Message);
+        }
     }
 }

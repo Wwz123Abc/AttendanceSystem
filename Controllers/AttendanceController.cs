@@ -21,7 +21,7 @@ public class AttendanceController(IAttendanceService attendanceService, IDeptSco
     /// <summary>查自己今天的考勤状态。</summary>
     [HttpGet("today")]
     public async Task<IActionResult> GetToday()
-        => Ok(new { Success = true, Data = await attendanceService.GetTodayAttendanceAsync(CurrentUserId) });
+        => Ok(ApiResponse.WithData(await attendanceService.GetTodayAttendanceAsync(CurrentUserId)));
 
     /// <summary>查自己的考勤记录列表。</summary>
     [HttpGet("personal")]
@@ -29,7 +29,7 @@ public class AttendanceController(IAttendanceService attendanceService, IDeptSco
     {
         query.UserId = CurrentUserId;   // 强制只查自己的，防止查到别人
         var list = await attendanceService.GetPersonalAttendanceAsync(query);
-        return Ok(new { Success = true, Data = list, Total = list.Count });
+        return Ok(ApiResponse.WithData(list, list.Count));
     }
 
     /// <summary>部门考勤统计（需管理员 / 文员）。</summary>
@@ -37,15 +37,15 @@ public class AttendanceController(IAttendanceService attendanceService, IDeptSco
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> GetDepartment([FromQuery] DeptAttendanceQueryDto query)
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
-        var list = await attendanceService.GetDeptAttendanceAsync(query, visibleIds);
-        return Ok(new { Success = true, Data = list, Total = list.Count });
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
+        var list = await attendanceService.GetDeptAttendanceAsync(query, visibleIds, HttpContext.RequestAborted);
+        return Ok(ApiResponse.WithData(list, list.Count));
     }
 
     /// <summary>自己的月度汇总。</summary>
     [HttpGet("monthly-summary")]
     public async Task<IActionResult> GetMonthlySummary([FromQuery] int year, [FromQuery] int month)
-        => Ok(new { Success = true, Data = await attendanceService.GetMonthlySummaryAsync(CurrentUserId, year, month) });
+        => Ok(ApiResponse.WithData(await attendanceService.GetMonthlySummaryAsync(CurrentUserId, year, month)));
 
     /// <summary>部门月度汇总列表（需管理员 / 文员）。</summary>
     [HttpGet("dept-monthly-summary")]
@@ -54,12 +54,12 @@ public class AttendanceController(IAttendanceService attendanceService, IDeptSco
         [FromQuery] int? deptId, [FromQuery] int? groupId,
         [FromQuery] int year, [FromQuery] int month)
     {
-        if (month is < 1 or > 12) return BadRequest(new { Success = false, Message = "月份不正确" });
-        if (year is < 2000 or > 2100) return BadRequest(new { Success = false, Message = "年份不正确" });
+        if (month is < 1 or > 12) return BadRequest(ApiResponse.Failed("月份不正确"));
+        if (year is < 2000 or > 2100) return BadRequest(ApiResponse.Failed("年份不正确"));
 
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
-        var list = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month, visibleIds);
-        return Ok(new { Success = true, Data = list, Total = list.Count });
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
+        var list = await attendanceService.GetDeptMonthlySummariesAsync(deptId, groupId, year, month, visibleIds, HttpContext.RequestAborted);
+        return Ok(ApiResponse.WithData(list, list.Count));
     }
 
     /// <summary>今日考勤看板（需管理员 / 文员）。</summary>
@@ -67,7 +67,7 @@ public class AttendanceController(IAttendanceService attendanceService, IDeptSco
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> GetTodayStats([FromQuery] int? groupId)
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
-        return Ok(new { Success = true, Data = await attendanceService.GetTodayStatsAsync(groupId, visibleIds) });
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
+        return Ok(ApiResponse.WithData(await attendanceService.GetTodayStatsAsync(groupId, visibleIds, HttpContext.RequestAborted)));
     }
 }

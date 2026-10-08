@@ -7,6 +7,7 @@ using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Approval;
 
@@ -77,13 +78,13 @@ public class ApplySubmitModel(
             }
 
             if (!Enum.TryParse<Models.Enums.ApprovalType>(ApprovalType, out var approvalType))
-                throw new InvalidOperationException("请选择正确的申请类型");
+                throw new BusinessException("请选择正确的申请类型");
             if (string.IsNullOrWhiteSpace(Reason))
-                throw new InvalidOperationException("请填写申请原因");
-            if (Reason.Trim().Length > 1000)
-                throw new InvalidOperationException("申请理由不能超过 1000 个字");
-            if (!string.IsNullOrWhiteSpace(BusinessTripDestination) && BusinessTripDestination.Trim().Length > 200)
-                throw new InvalidOperationException("出差目的地不能超过 200 个字");
+                throw new BusinessException("请填写申请原因");
+            if (Reason.Trim().Length > InputLimits.ApprovalReasonMaxLength)
+                throw new BusinessException("申请理由不能超过 1000 个字");
+            if (!string.IsNullOrWhiteSpace(BusinessTripDestination) && BusinessTripDestination.Trim().Length > InputLimits.BusinessTripDestinationMaxLength)
+                throw new BusinessException("出差目的地不能超过 200 个字");
 
             // 先保存附件，拿到它们的访问地址
             var attachmentUrls = new List<string>();
@@ -107,7 +108,7 @@ public class ApplySubmitModel(
                 {
                     // 假别缺失/被篡改时明确报错，不能静默记成"年假"（审批人会看到错的假别、还没有任何痕迹）
                     if (!Enum.TryParse<Models.Enums.LeaveType>(LeaveType, out var lt) || !Enum.IsDefined(lt))
-                        throw new InvalidOperationException("请选择请假类型");
+                        throw new BusinessException("请选择请假类型");
                     dto.LeaveType      = lt;
                     dto.LeaveStartTime = string.IsNullOrEmpty(LeaveStart) ? null : DateTime.Parse(LeaveStart);
                     dto.LeaveEndTime   = string.IsNullOrEmpty(LeaveEnd)   ? null : DateTime.Parse(LeaveEnd);
@@ -291,7 +292,7 @@ public class ApplySubmitModel(
         var skipped = new List<string>();
         foreach (var file in Attachments.Take(5)) // 最多存 5 个文件
         {
-            if (file.Length > 10 * 1024 * 1024) { skipped.Add($"{file.FileName}（超过 10MB）"); continue; }
+            if (file.Length > InputLimits.MaxImageUploadBytes) { skipped.Add($"{file.FileName}（超过 10MB）"); continue; }
             var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
             if (!AllowedAttachmentExtensions.Contains(ext)) { skipped.Add($"{file.FileName}（不支持的文件类型）"); continue; }
 

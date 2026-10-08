@@ -3,12 +3,14 @@
 @{
     ViewData["Title"] = "我的考勤日历";
 
-    // 上一月 / 下一月 / 回到本月 的年月
+    // 上一周期 / 下一周期 / 回到本周期（年月 = 周期的结束月份：10 月周期 = 9/26~10/25）
     var cur      = new DateOnly(Model.Year, Model.Month, 1);
     var prev     = cur.AddMonths(-1);
     var next     = cur.AddMonths(1);
     var today    = DateOnly.FromDateTime(DateTime.Today);
-    var isThisMo = Model.Year == today.Year && Model.Month == today.Month;
+    var (curY, curM) = AttendanceSystem.Helpers.PayrollCycle.EndMonthOf(today);
+    var isThisMo = Model.Year == curY && Model.Month == curM;
+    var p        = Model.Payroll;
 
     // 按颜色分桶：正常/异常/休假类/无数据（占位空格 or 还没到的日期）
     string DayBucket(AttendanceSystem.Models.Enums.AttendanceStatus? status) => status switch
@@ -96,52 +98,57 @@
     </div>
 </div>
 
-@if (Model.Summary is { } s)
-{
-    <!-- 本月概况：一眼看出这个月出勤情况，不用再切去"我的记录"页 -->
+@{
+    var actualDays   = p?.ActualWorkdays ?? 0m;
+    var expectedDays = p?.ExpectedWorkdays ?? 0;
+    var lateCount    = p?.LateCount ?? 0;
+    var absentDays   = p?.AbsentDays ?? 0;
+    var leaveDays    = p?.LeaveDays ?? 0m;
+    var payHours     = p?.PayableHours ?? 0m;
+}
+    <!-- 本周期概况：数字和"发薪考勤汇总表"同一套算法 -->
     <div class="row g-2 mb-3">
         <div class="col-6 col-md-2">
             <div class="card text-center py-2 stat-card border-start-success">
-                <div class="fw-bold text-success">@s.ActualWorkdays.ToString("0.#")<small class="text-muted">/@s.ExpectedWorkdays</small></div>
+                <div class="fw-bold text-success">@actualDays.ToString("0.#")<small class="text-muted">/@expectedDays</small></div>
                 <div class="text-muted small">实到/应到</div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-2 stat-card border-start-warning">
-                <div class="fw-bold text-warning">@s.LateCount</div>
+                <div class="fw-bold text-warning">@lateCount</div>
                 <div class="text-muted small">迟到次数</div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-2 stat-card border-start-danger">
-                <div class="fw-bold text-danger">@s.AbsentDays</div>
+                <div class="fw-bold text-danger">@absentDays</div>
                 <div class="text-muted small">旷工天数</div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-2 stat-card border-start-info">
-                <div class="fw-bold text-info">@s.LeaveDays.ToString("0.#")</div>
+                <div class="fw-bold text-info">@leaveDays.ToString("0.#")</div>
                 <div class="text-muted small">请假天数</div>
             </div>
         </div>
         <div class="col-6 col-md-2">
             <div class="card text-center py-2 stat-card border-start-primary">
-                <div class="fw-bold text-primary">@s.TotalWorkHours.ToString("F1")</div>
-                <div class="text-muted small">总工时(h)</div>
+                <div class="fw-bold text-primary">@payHours.ToString("F1")</div>
+                <div class="text-muted small">总工时(h)<br /><span style="font-size:11px">正班+加班，与发薪汇总表一致</span></div>
             </div>
         </div>
     </div>
-}
 
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <a href="?year=@prev.Year&month=@prev.Month" class="btn btn-outline-secondary btn-sm">
-            <i class="bi bi-chevron-left"></i> 上月
+            <i class="bi bi-chevron-left"></i> 上一周期
         </a>
         <div class="d-flex align-items-center gap-2">
             <form method="get" class="d-flex align-items-center gap-1 cal-jump">
                 <select name="year" class="form-select form-select-sm" style="width:90px" onchange="this.form.submit()">
-                    @for (int y = today.Year; y >= today.Year - 2; y--)
+                    @for (int y = curY; y >= curY - 2; y--)
                     {
                         <option value="@y" selected="@(y == Model.Year)">@y 年</option>
                     }
@@ -155,11 +162,11 @@
             </form>
             @if (!isThisMo)
             {
-                <a href="?year=@today.Year&month=@today.Month" class="btn btn-outline-primary btn-sm py-0 px-2">回到本月</a>
+                <a href="?year=@curY&month=@curM" class="btn btn-outline-primary btn-sm py-0 px-2">回到本周期</a>
             }
         </div>
         <a href="?year=@next.Year&month=@next.Month" class="btn btn-outline-secondary btn-sm">
-            下月 <i class="bi bi-chevron-right"></i>
+            下一周期 <i class="bi bi-chevron-right"></i>
         </a>
     </div>
     <div class="card-body">
@@ -244,30 +251,6 @@
 @section Scripts {
 <script>
 const CALENDAR_DETAILS = @Html.Raw(detailsJson);
-const dayModal = new bootstrap.Modal(document.getElementById('dayModal'));
-
-function showDay(dateStr) {
-    const d = CALENDAR_DETAILS[dateStr];
-    if (!d) return;
-
-    document.getElementById('dayModalTitle').textContent = dateStr + ' 考勤明细';
-
-    let rows = `
-        <dt class="col-4">考勤状态</dt><dd class="col-8">${d.statusText}</dd>
-        <dt class="col-4">上班打卡</dt><dd class="col-8">${d.clockIn}</dd>
-        <dt class="col-4">下班打卡</dt><dd class="col-8">${d.clockOut}</dd>
-        <dt class="col-4">实际工时</dt><dd class="col-8">${d.hours === '--' ? '--' : d.hours + ' 小时'}</dd>`;
-
-    if (d.late)     rows += `<dt class="col-4">迟到</dt><dd class="col-8 text-danger">${d.late} 分钟</dd>`;
-    if (d.early)     rows += `<dt class="col-4">早退</dt><dd class="col-8 text-danger">${d.early} 分钟</dd>`;
-    if (d.shiftName) rows += `
-        <dt class="col-4">当天排班</dt><dd class="col-8">${escapeHtml(d.shiftName)}（${escapeHtml(d.shiftTime)}）</dd>`;
-    if (d.note) rows += `<dt class="col-4">备注</dt><dd class="col-8 text-muted">${escapeHtml(d.note)}</dd>`;
-
-    document.getElementById('dayModalBody').innerHTML = `<dl class="row mb-0">${rows}</dl>`;
-    dayModal.show();
-}
-
-// escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
 </script>
+<script src="~/js/pages/my-calendar.js" asp-append-version="true"></script>
 }

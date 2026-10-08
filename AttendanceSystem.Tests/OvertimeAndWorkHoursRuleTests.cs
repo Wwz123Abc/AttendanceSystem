@@ -7,6 +7,7 @@ using AttendanceSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -64,7 +65,7 @@ public class OvertimeAndWorkHoursRuleTests : SqliteTestBase
         using var db = CreateContext();
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Today.AddHours(8);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.Overtime, Reason = "t", OvertimeStartTime = start, OvertimeEndTime = start.AddHours(25)
         }));
@@ -181,7 +182,7 @@ public class OvertimeAndWorkHoursRuleTests : SqliteTestBase
         using var db = CreateContext();
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Today.AddHours(18);
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.Overtime, Reason = "t", OvertimeStartTime = start, OvertimeEndTime = start.AddMinutes(20)
         }));
@@ -200,7 +201,7 @@ public class OvertimeAndWorkHoursRuleTests : SqliteTestBase
     {
         var uid = SeedOvertimeWorld(restDays: "");   // 没有每周休息日：今天肯定是工作日
         var ex = await TrySubmitOvertimeAsync(uid, new TimeOnly(sh, sm), new TimeOnly(eh, em));
-        var ioe = Assert.IsType<InvalidOperationException>(ex);
+        var ioe = Assert.IsType<BusinessException>(ex);
         Assert.StartsWith("加班时间不能和上班时间重叠，请只填下班后（或上班前）的加班时段", ioe.Message);
         Assert.Contains("08:30–17:30", ioe.Message);            // 提示里带上当天的班次时间
     }

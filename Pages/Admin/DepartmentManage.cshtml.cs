@@ -6,6 +6,7 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -38,7 +39,7 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
     // ── 读取并组装树 ──────────────────────────────────────────────────────────
     private async Task LoadAsync()
     {
-        var cu = HttpContext.GetCurrentUser()!;
+        var cu = HttpContext.GetRequiredUser();
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
 
         AllDepts = await db.Departments
@@ -137,17 +138,17 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
         try
         {
             if (string.IsNullOrWhiteSpace(DeptName))
-                throw new InvalidOperationException("请填写部门名称");
+                throw new BusinessException("请填写部门名称");
             if (DeptName.Trim().Length > 100)
-                throw new InvalidOperationException("部门名称不能超过 100 个字");
+                throw new BusinessException("部门名称不能超过 100 个字");
             if (SortIndex is < 0 or > 9999)
-                throw new InvalidOperationException("排序号请填 0-9999 之间");
+                throw new BusinessException("排序号请填 0-9999 之间");
 
-            var cu = HttpContext.GetCurrentUser()!;
+            var cu = HttpContext.GetRequiredUser();
             if (cu.IsScoped && !ParentId.HasValue)
-                throw new InvalidOperationException("只能在自己的管理范围内新建子部门，不能新建顶级部门");
+                throw new BusinessException("只能在自己的管理范围内新建子部门，不能新建顶级部门");
             if (!await deptScopeService.CanAccessDeptAsync(cu, ParentId))
-                throw new InvalidOperationException("无权在该上级部门下新建子部门");
+                throw new BusinessException("无权在该上级部门下新建子部门");
 
             var dept = new Department
             {
@@ -180,41 +181,41 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
         try
         {
             var dept = await db.Departments.FindAsync(EditId)
-                       ?? throw new InvalidOperationException("部门不存在");
+                       ?? throw new BusinessException("部门不存在");
 
-            var cu = HttpContext.GetCurrentUser()!;
+            var cu = HttpContext.GetRequiredUser();
             // 目标部门本身、改完之后的新上级，都必须在自己的管理范围内——防止受限管理员绕过界面
             // 直接拿别的分公司的部门 id 编辑，或者把自己范围内的部门"挪"到范围外（改父部门实现越权）
             if (!await deptScopeService.CanAccessDeptAsync(cu, dept.Id))
-                throw new InvalidOperationException("无权编辑该部门");
+                throw new BusinessException("无权编辑该部门");
             if (cu.IsScoped && dept.Id == cu.ScopedDepartmentId!.Value)
             {
                 // 自己的管理范围根部门本身：允许改名字/排序/启用状态，但不能改父部门——
                 // 改了父部门等于把自己整个管理范围挪到别的位置，这种事只有总部管理员能做
                 if (ParentId != dept.ParentId)
-                    throw new InvalidOperationException("不能修改自己管理范围根部门的上级部门，如需调整请联系总部管理员");
+                    throw new BusinessException("不能修改自己管理范围根部门的上级部门，如需调整请联系总部管理员");
                 // 停用自己的范围根部门，总部再打开自己的编辑弹窗时下拉框里就找不到它，容易误把范围改成"不受限"
                 if (!IsActive)
-                    throw new InvalidOperationException("不能停用自己管理范围的根部门，如需停用请联系总部管理员");
+                    throw new BusinessException("不能停用自己管理范围的根部门，如需停用请联系总部管理员");
             }
             else
             {
                 if (cu.IsScoped && !ParentId.HasValue)
-                    throw new InvalidOperationException("不能把部门挪到自己管理范围之外（顶级）");
+                    throw new BusinessException("不能把部门挪到自己管理范围之外（顶级）");
                 if (!await deptScopeService.CanAccessDeptAsync(cu, ParentId))
-                    throw new InvalidOperationException("无权把部门挪到该上级部门下");
+                    throw new BusinessException("无权把部门挪到该上级部门下");
             }
 
             if (string.IsNullOrWhiteSpace(DeptName))
-                throw new InvalidOperationException("请填写部门名称");
+                throw new BusinessException("请填写部门名称");
             if (DeptName.Trim().Length > 100)
-                throw new InvalidOperationException("部门名称不能超过 100 个字");
+                throw new BusinessException("部门名称不能超过 100 个字");
             if (SortIndex is < 0 or > 9999)
-                throw new InvalidOperationException("排序号请填 0-9999 之间");
+                throw new BusinessException("排序号请填 0-9999 之间");
             if (ParentId == EditId)
-                throw new InvalidOperationException("上级部门不能是自己");
+                throw new BusinessException("上级部门不能是自己");
             if (ParentId.HasValue && await IsDescendantAsync(ParentId.Value, EditId))
-                throw new InvalidOperationException("上级部门不能选择自己的下级部门（会形成循环）");
+                throw new BusinessException("上级部门不能选择自己的下级部门（会形成循环）");
 
             dept.DeptName  = DeptName.Trim();
             dept.ParentId  = ParentId;
@@ -246,9 +247,9 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
                 .Select(s => int.TryParse(s, out var i) ? i : 0)
                 .Where(i => i > 0).Distinct().ToList();
             if (ids.Count == 0)
-                throw new InvalidOperationException("请先勾选要删除的部门");
+                throw new BusinessException("请先勾选要删除的部门");
 
-            var cu = HttpContext.GetCurrentUser()!;
+            var cu = HttpContext.GetRequiredUser();
             var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
             // 受限管理员：范围外的 id 静默剔除（不能删别的分公司的部门）；自己的范围根部门本身也不能删——
             // 删了自己的范围根，整个管理范围就没了着落（数据库外键其实也会拦住这个操作，这里提前给个
@@ -256,26 +257,26 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
             if (visibleIds is not null)
                 ids = ids.Where(id => visibleIds.Contains(id) && id != cu.ScopedDepartmentId!.Value).ToList();
             if (ids.Count == 0)
-                throw new InvalidOperationException("没有可以删除的部门（不能删除自己管理范围之外的部门，也不能删除自己的管理范围根部门）");
+                throw new BusinessException("没有可以删除的部门（不能删除自己管理范围之外的部门，也不能删除自己的管理范围根部门）");
 
             // 有账号把这个部门当"管理范围"时数据库外键会拒绝删除，只给一句"删除失败，请稍后重试"，看不懂——提前说清楚
             if (await db.Users.AnyAsync(u => u.ScopedDepartmentId != null && ids.Contains(u.ScopedDepartmentId.Value)))
-                throw new InvalidOperationException("有账号把要删除的部门设成了管理范围，请先到「员工管理」里改掉他们的管理范围再删除");
+                throw new BusinessException("有账号把要删除的部门设成了管理范围，请先到「员工管理」里改掉他们的管理范围再删除");
             // 受限管理员：删除有下级部门的部门，下级会被"提升为顶级"，直接掉出他自己的管理范围（里面的员工再也看不到）
             if (visibleIds is not null
                 && await db.Departments.AnyAsync(d => d.ParentId != null && ids.Contains(d.ParentId.Value) && !ids.Contains(d.Id)))
-                throw new InvalidOperationException("要删除的部门下面还有下级部门，请先删除或移走下级部门（否则下级部门会掉出你的管理范围）");
+                throw new BusinessException("要删除的部门下面还有下级部门，请先删除或移走下级部门（否则下级部门会掉出你的管理范围）");
             // 受限管理员：删除部门后，里面的员工会被数据库外键自动置空成"未分配"，受限账号看不到"未分配"的人，
             // 这些员工就从他的管理范围里彻底消失了，只能找总部恢复（第 14 轮审查发现）
             if (visibleIds is not null
                 && await db.Users.AnyAsync(u => u.DepartmentId != null && ids.Contains(u.DepartmentId.Value)))
-                throw new InvalidOperationException("要删除的部门下还有员工，请先把员工调到别的部门再删除（否则他们会掉出你的管理范围）");
+                throw new BusinessException("要删除的部门下还有员工，请先把员工调到别的部门再删除（否则他们会掉出你的管理范围）");
             // 受限管理员：考勤机跟员工是同一个道理——ZKDeviceManage.cshtml.cs 里"受限管理员只能看自己范围内的设备"
             // 是用 d.DepartmentId != null 过滤的，部门删除后设备自动置空成"未归类"，同样会从他的管理范围里消失
             // （自我复核发现，跟第 14 轮审查发现的员工那条是同一类问题，第三方审查没提到设备这一条）
             if (visibleIds is not null
                 && await db.ZKDevices.AnyAsync(dv => dv.DepartmentId != null && ids.Contains(dv.DepartmentId.Value)))
-                throw new InvalidOperationException("要删除的部门下还有考勤机，请先把考勤机调到别的部门再删除（否则它们会掉出你的管理范围）");
+                throw new BusinessException("要删除的部门下还有考勤机，请先把考勤机调到别的部门再删除（否则它们会掉出你的管理范围）");
 
             var depts = await db.Departments.Where(d => ids.Contains(d.Id)).ToListAsync();
 

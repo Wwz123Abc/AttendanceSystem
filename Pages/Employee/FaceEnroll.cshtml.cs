@@ -10,6 +10,7 @@ using AttendanceSystem.Services.Interfaces;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Processing;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Employee;
 
@@ -50,18 +51,18 @@ public class FaceEnrollModel(
         try
         {
             if (!AgreeConsent)
-                throw new InvalidOperationException("请先勾选同意，再上传人脸照片");
+                throw new BusinessException("请先勾选同意，再上传人脸照片");
             if (FacePhoto is null || FacePhoto.Length == 0)
-                throw new InvalidOperationException("请拍摄或选择一张人脸照片");
+                throw new BusinessException("请拍摄或选择一张人脸照片");
 
             var user = await db.Users.FindAsync(CurrentUserId)
-                ?? throw new InvalidOperationException("账号不存在");
+                ?? throw new BusinessException("账号不存在");
 
             // 录入过就不能自己再换：参考照是远程打卡防代打的唯一依据，员工要是能随时自己换，
             // 把它换成同事的脸，同事就能用自己的脸替他打卡（1:1 比对只能证明"镜头前的人=参考照上的人"）。
             // 确实要换（换脸、拍得不好）由管理员在「员工管理」里"清除人脸照片"后重新录入（2026-09-24 第 11 轮审查，用户确认）
             if (PrivateFileStorage.FaceReferenceFileExists(env, user.FaceReferencePhotoUrl))   // 地址在、文件也在才算"录入过"；文件丢了的允许重录
-                throw new InvalidOperationException("已经录入过人脸照片，如需更换请联系管理员在「员工管理」里清除后重新录入");
+                throw new BusinessException("已经录入过人脸照片，如需更换请联系管理员在「员工管理」里清除后重新录入");
 
             // 顺序：先写新文件（不删旧的）→ 写库 → 成功了才删旧文件；写库失败就把新文件回收掉。
             // 以前是先删旧照片再写库，写库一失败旧照片已经没了、库里却还指向它，这个员工的远程打卡就
@@ -117,11 +118,11 @@ public class FaceEnrollModel(
     {
         if (FacePhoto is null || FacePhoto.Length == 0) return oldUrl;
 
-        if (FacePhoto.Length > 10 * 1024 * 1024)
-            throw new InvalidOperationException("人脸照片不能超过 10MB");
+        if (FacePhoto.Length > InputLimits.MaxImageUploadBytes)
+            throw new BusinessException("人脸照片不能超过 10MB");
         var ext = Path.GetExtension(FacePhoto.FileName).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
-            throw new InvalidOperationException("人脸照片只支持 jpg / png / webp 格式");
+            throw new BusinessException("人脸照片只支持 jpg / png / webp 格式");
 
         // 只看扩展名不够：把 TIFF 之类的文件改个 .jpg 后缀就能骗过去，而 ImageSharp 解码时是按文件内容自动识别格式的——
         // SixLabors.ImageSharp 3.1.x 的 TIFF 解码/编码有已知高危漏洞（缓冲区越界、死循环），修复版 4.x 需要购买/申请商业授权
@@ -131,7 +132,7 @@ public class FaceEnrollModel(
         await using (var headerStream = FacePhoto.OpenReadStream())
             await headerStream.ReadExactlyAsync(header.AsMemory(0, (int)Math.Min(12, FacePhoto.Length)), ct);
         if (!ImageValidationHelper.IsValidImageHeader(ext, header))
-            throw new InvalidOperationException("照片文件内容与格式不符，请重新拍摄或选择 jpg / png / webp 图片");
+            throw new BusinessException("照片文件内容与格式不符，请重新拍摄或选择 jpg / png / webp 图片");
 
         // 先在内存里把两个尺寸都生成出来，做完人脸质量检测确认合格了，再落盘——
         // 检测不通过时不能已经写了一半文件，导致明明拒绝了却留下垃圾文件/误改了参考照片。
@@ -165,15 +166,15 @@ public class FaceEnrollModel(
         // 拿瘦身版去做质量检测就够了（脸部清不清楚跟这点分辨率差异关系不大），检测本身也更快
         var detect = await faceClient.DetectFaceAsync(verifyBytes, ct);
         if (detect.FaceCount == 0)
-            throw new InvalidOperationException("没有检测到人脸，请正对摄像头、保证光线充足后重拍");
+            throw new BusinessException("没有检测到人脸，请正对摄像头、保证光线充足后重拍");
         if (detect.FaceCount > 1)
-            throw new InvalidOperationException("照片里检测到多张人脸，请单人拍摄后重试");
+            throw new BusinessException("照片里检测到多张人脸，请单人拍摄后重试");
         if (detect.FaceSizeRatio < faceOptions.Value.EnrollMinFaceSizeRatio)
-            throw new InvalidOperationException("人脸在照片里太小，请靠近一些、让脸部占满画面中央后重拍");
+            throw new BusinessException("人脸在照片里太小，请靠近一些、让脸部占满画面中央后重拍");
         if (detect.QualityScore < faceOptions.Value.EnrollMinQualityScore)
-            throw new InvalidOperationException("照片不够清晰（可能模糊、光线太暗或遮挡），请正对摄像头、光线充足处重拍");
+            throw new BusinessException("照片不够清晰（可能模糊、光线太暗或遮挡），请正对摄像头、光线充足处重拍");
         if (detect.MaxPoseAngle > faceOptions.Value.EnrollMaxPoseAngle)
-            throw new InvalidOperationException("请正脸拍摄，不要侧脸或歪头");
+            throw new BusinessException("请正脸拍摄，不要侧脸或歪头");
 
         var uploadPath  = appOptions.Value.UploadPath.Trim('/', '\\');
         var privateRoot = PrivateFileStorage.GetRoot(env);   // 人脸照片是敏感文件，存在 wwwroot 之外，见 PrivateFilesController

@@ -15,6 +15,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Tests;
 
@@ -45,9 +46,9 @@ public class ApprovalSecurityAndRoutingTests : SqliteTestBase
             $"/uploads/approvals/7/{guid}.jpg\"><script>alert(1)</script>",
             "/uploads/approvals/7/short.jpg",
         })
-            Assert.Throws<InvalidOperationException>(() => Check(bad));
+            Assert.Throws<BusinessException>(() => Check(bad));
 
-        Assert.Throws<InvalidOperationException>(() =>
+        Assert.Throws<BusinessException>(() =>
             ApprovalService.ValidateAttachmentUrls(Enumerable.Repeat($"/uploads/approvals/7/{guid}.jpg", 21).ToList(), 7, "uploads"));
         ApprovalService.ValidateAttachmentUrls([], 7, "uploads");   // 没有附件不抛
     }
@@ -62,7 +63,7 @@ public class ApprovalSecurityAndRoutingTests : SqliteTestBase
         await db.SaveChangesAsync();
 
         emp.SupervisorUserId = emp.Id;
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateUserAsync(emp, adminId));
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => svc.UpdateUserAsync(emp, adminId));
         Assert.Contains("不能是员工本人", ex.Message);
     }
 

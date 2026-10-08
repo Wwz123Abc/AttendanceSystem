@@ -8,6 +8,7 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
+using AttendanceSystem.Models.Exceptions;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -49,29 +50,29 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
 
         try
         {
-            if (UserId <= 0) throw new InvalidOperationException("请先选择员工");
-            var user = await db.Users.FindAsync(UserId) ?? throw new InvalidOperationException("员工不存在");
-            var cuAdj = HttpContext.GetCurrentUser()!;
+            if (UserId <= 0) throw new BusinessException("请先选择员工");
+            var user = await db.Users.FindAsync(UserId) ?? throw new BusinessException("员工不存在");
+            var cuAdj = HttpContext.GetRequiredUser();
             if (!await deptScopeService.CanAccessDeptAsync(cuAdj, user.DepartmentId))
-                throw new InvalidOperationException("无权给该员工补卡");
+                throw new BusinessException("无权给该员工补卡");
             // 跟员工管理页同一套角色层级：文员不能改管理员的打卡、分公司账号不能改总部账号的打卡（以前只校验了部门范围）
             if (!cuAdj.CanManageAccount(user.Role, user.ScopedDepartmentId))
-                throw new InvalidOperationException("无权给该账号补卡，请联系总部管理员操作");
+                throw new BusinessException("无权给该账号补卡，请联系总部管理员操作");
 
             DateTime? clockIn = null;
             if (!string.IsNullOrWhiteSpace(ClockInTime))
             {
-                if (!DateTime.TryParse(ClockInTime, out var ci)) throw new InvalidOperationException("打卡时间格式不正确");
+                if (!DateTime.TryParse(ClockInTime, out var ci)) throw new BusinessException("打卡时间格式不正确");
                 clockIn = ci;
             }
             DateTime? clockOut = null;
             if (!string.IsNullOrWhiteSpace(ClockOutTime))
             {
-                if (!DateTime.TryParse(ClockOutTime, out var co)) throw new InvalidOperationException("打卡时间格式不正确");
+                if (!DateTime.TryParse(ClockOutTime, out var co)) throw new BusinessException("打卡时间格式不正确");
                 clockOut = co;
             }
             if (clockIn is null && clockOut is null)
-                throw new InvalidOperationException("上班/下班打卡时间至少要填一个");
+                throw new BusinessException("上班/下班打卡时间至少要填一个");
 
             var operatorName = User.FindFirstValue("RealName");
             await attendanceService.AdminAdjustPunchAsync(UserId, WorkDate, clockIn, clockOut, Remark, operatorName);
@@ -90,7 +91,7 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     /// <summary>取最近 50 条"管理员手动补卡"改过的考勤记录（按更新时间倒序），供页面下方的操作记录列表用。</summary>
     private async Task LoadRecentLogAsync()
     {
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var q = db.AttendanceRecords.Include(r => r.User)
             .Where(r => r.ApprovalNote != null && r.ApprovalNote.Contains("管理员手动补卡"));
         if (visibleIds is not null)
@@ -110,7 +111,7 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     public async Task<JsonResult> OnGetSearchUsersAsync(string? keyword)
     {
         if (string.IsNullOrWhiteSpace(keyword)) return new JsonResult(Array.Empty<object>());
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetCurrentUser()!);
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var q = db.Users.Where(u => u.RealName.Contains(keyword) || u.EmployeeNo.Contains(keyword));
         if (visibleIds is not null)
             q = q.Where(u => u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value));
@@ -126,7 +127,7 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     public async Task<JsonResult> OnGetRecordAsync(int userId, DateOnly workDate)
     {
         var targetDeptId = await db.Users.Where(u => u.Id == userId).Select(u => (int?)u.DepartmentId).FirstOrDefaultAsync();
-        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetCurrentUser()!, targetDeptId))
+        if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), targetDeptId))
             return new JsonResult(new { exists = false });
 
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
