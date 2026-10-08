@@ -143,4 +143,21 @@ public class SecurityRegressionTests : SqliteTestBase
         Assert.False(await CanRead("bbb222.jpg"));   // 同一个申请人、别人审批的那张单上的附件
         Assert.False(await CanRead("unknown.jpg"));  // 根本没记录在任何申请单上的文件
     }
+
+    [Fact]
+    public void 上传图片按文件头校验_TIFF等其他格式改成jpg后缀也过不去()
+    {
+        var jpeg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 0x4A, 0x46, 0x49, 0x46, 0, 1 };
+        var png  = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0 };
+        var tiffLittle = new byte[] { 0x49, 0x49, 0x2A, 0x00, 8, 0, 0, 0, 0, 0, 0, 0 };   // 小端 TIFF
+        var tiffBig    = new byte[] { 0x4D, 0x4D, 0x00, 0x2A, 0, 0, 0, 8, 0, 0, 0, 0 };   // 大端 TIFF
+        var bigTiff    = new byte[] { 0x49, 0x49, 0x2B, 0x00, 8, 0, 0, 0, 0, 0, 0, 0 };   // BigTIFF（有漏洞的解码路径之一）
+
+        Assert.True(AttendanceSystem.Helpers.ImageValidationHelper.IsValidImageHeader(".jpg", jpeg));
+        Assert.True(AttendanceSystem.Helpers.ImageValidationHelper.IsValidImageHeader(".png", png));
+        foreach (var fake in new[] { tiffLittle, tiffBig, bigTiff })
+            foreach (var ext in new[] { ".jpg", ".jpeg", ".png", ".webp" })
+                Assert.False(AttendanceSystem.Helpers.ImageValidationHelper.IsValidImageHeader(ext, fake));
+        Assert.False(AttendanceSystem.Helpers.ImageValidationHelper.IsValidImageHeader(".jpg", png));   // 内容和后缀不一致
+    }
 }

@@ -123,6 +123,16 @@ public class FaceEnrollModel(
         if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp"))
             throw new InvalidOperationException("人脸照片只支持 jpg / png / webp 格式");
 
+        // 只看扩展名不够：把 TIFF 之类的文件改个 .jpg 后缀就能骗过去，而 ImageSharp 解码时是按文件内容自动识别格式的——
+        // SixLabors.ImageSharp 3.1.x 的 TIFF 解码/编码有已知高危漏洞（缓冲区越界、死循环），修复版 4.x 需要购买/申请商业授权
+        // （Release 构建没有授权会直接失败），所以先在这里按文件头（魔数）确认内容真的是 jpg/png/webp，
+        // 不让别的格式进到解码器。跟自助登记、管理员上传身份证照片、考勤机抓拍用的是同一个校验（2026-10-08）。
+        var header = new byte[12];
+        await using (var headerStream = FacePhoto.OpenReadStream())
+            await headerStream.ReadExactlyAsync(header.AsMemory(0, (int)Math.Min(12, FacePhoto.Length)), ct);
+        if (!ImageValidationHelper.IsValidImageHeader(ext, header))
+            throw new InvalidOperationException("照片文件内容与格式不符，请重新拍摄或选择 jpg / png / webp 图片");
+
         // 先在内存里把两个尺寸都生成出来，做完人脸质量检测确认合格了，再落盘——
         // 检测不通过时不能已经写了一半文件，导致明明拒绝了却留下垃圾文件/误改了参考照片。
         byte[] mainBytes, verifyBytes;
