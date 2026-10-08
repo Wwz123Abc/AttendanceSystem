@@ -10,10 +10,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- EF Core 9.0.9 + MariaDB/MySQL（Pomelo 9.0.0）-->
+    <!-- EF Core 9.0.20 + MariaDB/MySQL（Pomelo 9.0.0）-->
     <PackageReference Include="AlibabaCloud.SDK.Facebody20191230" Version="5.0.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.9" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.9">
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.20" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.20">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
