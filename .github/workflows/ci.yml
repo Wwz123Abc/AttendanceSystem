@@ -20,7 +20,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 装 8.0（运行测试需要 .NET 8 运行时）和 10.0（和开发机一致的 SDK：编译、还原都用它；
       # global.json 只约定"不低于 8.0.100"，会自动选最高的那个）
