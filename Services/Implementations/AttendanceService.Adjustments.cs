@@ -49,20 +49,20 @@ public partial class AttendanceService
         var touchedMonths = new HashSet<(int Year, int Month)>();
 
         // ── 补卡 ──
-        if (approval.ApprovalType == ApprovalType.PunchReplenishment && approval.PunchDate.HasValue
-            && approval.PunchTime.HasValue)
-            await ApplyApprovedPunchReplenishmentAsync(approval, touchedMonths);
+        if (approval.ApprovalType == ApprovalType.PunchReplenishment && approval.PunchDate is { } punchDate
+            && approval.PunchTime is { } punchTime)
+            await ApplyApprovedPunchReplenishmentAsync(approval, punchDate, punchTime, touchedMonths);
         // ── 加班 ──：加班时长完全以审批单为准，不从打卡时间估算；累加到当天的加班时长上
         // （同一天可能有多张已批准的加班单，所以是加，不是覆盖）
-        else if (approval.ApprovalType == ApprovalType.Overtime && approval.OvertimeStartTime.HasValue
-                 && approval.OvertimeDurationHours is > 0)
-            await ApplyApprovedOvertimeAsync(approval, touchedMonths);
+        else if (approval.ApprovalType == ApprovalType.Overtime && approval.OvertimeStartTime is { } otStart
+                 && approval.OvertimeDurationHours is { } otDuration and > 0)
+            await ApplyApprovedOvertimeAsync(approval, otStart, otDuration, touchedMonths);
         // ── 请假 ──
-        else if (approval.ApprovalType == ApprovalType.Leave && approval.LeaveStartTime.HasValue)
-            await ApplyApprovedLeaveAsync(approval, touchedMonths);
+        else if (approval.ApprovalType == ApprovalType.Leave && approval.LeaveStartTime is { } leaveStart)
+            await ApplyApprovedLeaveAsync(approval, leaveStart, touchedMonths);
         // ── 出差 ──：出差期间不用打卡，逐天置为「出差」并按全勤记工时（工资按工时结算，不能漏记）
-        else if (approval.ApprovalType == ApprovalType.BusinessTrip && approval.BusinessTripStartTime.HasValue)
-            await ApplyApprovedBusinessTripAsync(approval, touchedMonths);
+        else if (approval.ApprovalType == ApprovalType.BusinessTrip && approval.BusinessTripStartTime is { } tripStart)
+            await ApplyApprovedBusinessTripAsync(approval, tripStart, touchedMonths);
 
         await db.SaveChangesAsync();
 
@@ -72,25 +72,25 @@ public partial class AttendanceService
     }
 
     /// <summary>补卡审批通过后回写：补上班/下班时间，重算当天工时。</summary>
-    private async Task ApplyApprovedPunchReplenishmentAsync(ApprovalRequest approval, HashSet<(int Year, int Month)> touchedMonths)
+    private async Task ApplyApprovedPunchReplenishmentAsync(ApprovalRequest approval, DateOnly punchDate, TimeOnly punchTime, HashSet<(int Year, int Month)> touchedMonths)
     {
         var record = await db.AttendanceRecords
             .FirstOrDefaultAsync(r => r.UserId == approval.ApplicantUserId
-                                   && r.WorkDate == approval.PunchDate.Value);
+                                   && r.WorkDate == punchDate);
         if (record is null)
         {
             // 当天完全没有记录也要新建一条：审批都通过了，补卡不能被静默忽略
-            record = new AttendanceRecord { UserId = approval.ApplicantUserId, WorkDate = approval.PunchDate.Value };
+            record = new AttendanceRecord { UserId = approval.ApplicantUserId, WorkDate = punchDate };
             db.AttendanceRecords.Add(record);
         }
 
-        var punchDt = approval.PunchDate.Value.ToDateTime(approval.PunchTime.Value);
+        var punchDt = punchDate.ToDateTime(punchTime);
         if (approval.PunchType == PunchType.ClockOut)
         {
             // 补的下班卡如果比上班卡还早，或者夜班（跨天班次）填的是"班次结束的那个凌晨时间"，说明下班在第二天：
             // 顺延一天。申请只有"日期 + 时间"，没法直接表达跨天，不顺延的话夜班漏打一次下班卡整晚工时都会丢
-            var shiftForPunch = (await GetShiftAssignmentAsync(approval.ApplicantUserId, approval.PunchDate.Value))?.ShiftSchedule;
-            punchDt = ResolvePunchReplenishmentClockOut(approval.PunchDate.Value, approval.PunchTime.Value, record.ClockInTime, shiftForPunch);
+            var shiftForPunch = (await GetShiftAssignmentAsync(approval.ApplicantUserId, punchDate))?.ShiftSchedule;
+            punchDt = ResolvePunchReplenishmentClockOut(punchDate, punchTime, record.ClockInTime, shiftForPunch);
         }
         // 提交时已经按同一套顺延规则查过一次（SubmitApprovalAsync），这里是审批时的兜底：提交之后、
         // 审批之前员工又补上了上班卡，顺延结果可能从"过去"变成"未来"（2026-09-29 第 12 轮审查发现，
@@ -107,13 +107,13 @@ public partial class AttendanceService
         // 补齐上下班两次卡后：重算当天实际工时（工资按工时结算，补完卡必须把工时补准），
         // 并解除“旷工/未打卡”状态（否则人有全天工时却仍被记旷工，工资和出勤对不上）。
         await RecalcWorkHoursAfterManualPunchAsync(record, approval.ApplicantUserId);
-        touchedMonths.Add((approval.PunchDate.Value.Year, approval.PunchDate.Value.Month));
+        touchedMonths.Add((punchDate.Year, punchDate.Month));
     }
 
     /// <summary>加班审批通过后回写：按审批单时长累加当天加班工时（加班时长只认审批单）。</summary>
-    private async Task ApplyApprovedOvertimeAsync(ApprovalRequest approval, HashSet<(int Year, int Month)> touchedMonths)
+    private async Task ApplyApprovedOvertimeAsync(ApprovalRequest approval, DateTime otStart, decimal otDuration, HashSet<(int Year, int Month)> touchedMonths)
     {
-        var workDate = DateOnly.FromDateTime(approval.OvertimeStartTime.Value);
+        var workDate = DateOnly.FromDateTime(otStart);
         var record = await db.AttendanceRecords
             .FirstOrDefaultAsync(r => r.UserId == approval.ApplicantUserId && r.WorkDate == workDate);
         if (record is null)
@@ -126,8 +126,8 @@ public partial class AttendanceService
         // 不直接用单子上存的时长，是因为改规则之前提交、还没批的老单子存的是不扣饭点的总长度；
         // 算完顺手把单子上的时长也改成实际记入的数，审批列表/记录里看到的和考勤上记的一致
         var otHours = approval.OvertimeEndTime.HasValue
-            ? ComputeWorkHours(approval.OvertimeStartTime.Value, approval.OvertimeEndTime.Value)
-            : approval.OvertimeDurationHours.Value;
+            ? ComputeWorkHours(otStart, approval.OvertimeEndTime.Value)
+            : otDuration;
         approval.OvertimeDurationHours = otHours;
 
         record.OvertimeHours += otHours;
@@ -142,10 +142,10 @@ public partial class AttendanceService
     }
 
     /// <summary>请假审批通过后回写：区间内逐天置为请假，累加请假小时，必要时重算有真实打卡那天的工时。</summary>
-    private async Task ApplyApprovedLeaveAsync(ApprovalRequest approval, HashSet<(int Year, int Month)> touchedMonths)
+    private async Task ApplyApprovedLeaveAsync(ApprovalRequest approval, DateTime leaveStart, HashSet<(int Year, int Month)> touchedMonths)
     {
-        var sd = DateOnly.FromDateTime(approval.LeaveStartTime.Value);
-        var leaveEnd = approval.LeaveEndTime ?? approval.LeaveStartTime.Value;
+        var sd = DateOnly.FromDateTime(leaveStart);
+        var leaveEnd = approval.LeaveEndTime ?? leaveStart;
         var ed = DateOnly.FromDateTime(leaveEnd);
 
         // 先把请假区间内已经存在的考勤记录一次性整批查出来，按"日期"放进一个字典。
@@ -179,12 +179,12 @@ public partial class AttendanceService
             // 短时长请假误判成没有交集直接跳过，这天没打卡的话会被后台旷工任务误标成旷工
             // （发现于 2026-09-18：这是 09-18 那次"无交集跳过"修复自身遗留的边界缺陷）。
             leaveShiftsInRange.TryGetValue(d, out var leaveShift);
-            if (!HasLeaveOverlapForDay(d, approval.LeaveStartTime.Value, leaveEnd, leaveShift)) continue;
+            if (!HasLeaveOverlapForDay(d, leaveStart, leaveEnd, leaveShift)) continue;
             // 休息日不算请假（婚假/产假/丧假除外）：不新建记录、不标"请假"、不覆盖原来的休假状态
             if (skipNonWorkdays && IsShiftWeeklyRestDay(d, leaveShift)) continue;
 
             var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-            var leaveHoursToday = ComputeLeaveHoursForDay(d, approval.LeaveStartTime.Value, leaveEnd, dailyCap, leaveShift);
+            var leaveHoursToday = ComputeLeaveHoursForDay(d, leaveStart, leaveEnd, dailyCap, leaveShift);
 
             // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
             // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
@@ -221,7 +221,7 @@ public partial class AttendanceService
             if (record.ClockInTime is { } workedCi && record.ClockOutTime is null)
             {
                 var dayStart      = d.ToDateTime(TimeOnly.MinValue);
-                var leaveSegStart = approval.LeaveStartTime.Value > dayStart ? approval.LeaveStartTime.Value : dayStart;
+                var leaveSegStart = leaveStart > dayStart ? leaveStart : dayStart;
                 if (workedCi < leaveSegStart)
                 {
                     var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart);
@@ -237,10 +237,10 @@ public partial class AttendanceService
     }
 
     /// <summary>出差审批通过后回写：区间内逐天置为出差并按全勤记工时（休息日不算）。</summary>
-    private async Task ApplyApprovedBusinessTripAsync(ApprovalRequest approval, HashSet<(int Year, int Month)> touchedMonths)
+    private async Task ApplyApprovedBusinessTripAsync(ApprovalRequest approval, DateTime tripStart, HashSet<(int Year, int Month)> touchedMonths)
     {
-        var sd = DateOnly.FromDateTime(approval.BusinessTripStartTime.Value);
-        var ed = DateOnly.FromDateTime(approval.BusinessTripEndTime ?? approval.BusinessTripStartTime.Value);
+        var sd = DateOnly.FromDateTime(tripStart);
+        var ed = DateOnly.FromDateTime(approval.BusinessTripEndTime ?? tripStart);
         var defaultHours = appOptions.Value.DefaultDailyWorkHours;
 
         // 和上面请假的道理一样：把这段时间已有的考勤记录、以及已有的排班，

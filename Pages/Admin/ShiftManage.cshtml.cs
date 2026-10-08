@@ -322,79 +322,79 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
     /// <summary>保存班次前的权限检查：必须选了考勤组，且该组（以及要编辑的原班次所在的组）在当前登录者可写的范围内。</summary>
     private async Task EnsureShiftWritableAsync()
     {
-    if (GroupId == 0) throw new Exception("请选择该班次所属的考勤组");
-    var cu = HttpContext.GetRequiredUser();
-    if (!await IsGroupWritableAsync(cu, GroupId))
-        throw new Exception("无权在该考勤组下设置班次");
-    if (ShiftId != 0)
-    {
-        var existingGroupId = await db.ShiftSchedules.Where(s => s.Id == ShiftId)
-            .Select(s => (int?)s.AttendanceGroupId).FirstOrDefaultAsync();
-        if (existingGroupId.HasValue && !await IsGroupWritableAsync(cu, existingGroupId.Value))
-            throw new Exception("无权编辑该班次");
-    }
+        if (GroupId == 0) throw new Exception("请选择该班次所属的考勤组");
+        var cu = HttpContext.GetRequiredUser();
+        if (!await IsGroupWritableAsync(cu, GroupId))
+            throw new Exception("无权在该考勤组下设置班次");
+        if (ShiftId != 0)
+        {
+            var existingGroupId = await db.ShiftSchedules.Where(s => s.Id == ShiftId)
+                .Select(s => (int?)s.AttendanceGroupId).FirstOrDefaultAsync();
+            if (existingGroupId.HasValue && !await IsGroupWritableAsync(cu, existingGroupId.Value))
+                throw new Exception("无权编辑该班次");
+        }
     }
 
     /// <summary>
     /// 班次表单校验：名称、上下班时间、容忍分钟、标准工时、颜色、午间必打卡窗口；校验不过直接抛带中文提示的异常。
     /// 返回解析好的上班时间、下班时间和午间必打卡窗口（逗号分隔文本）。
     /// </summary>
-    private (TimeOnly Start, TimeOnly End, string MidCheckWindowsCsv) ValidateShiftForm()
+    private (TimeOnly Start, TimeOnly End, string? MidCheckWindowsCsv) ValidateShiftForm()
     {
-    // 先判断原始值是否为空，再 Trim：字段留空提交时模型绑定会把它转成 null，直接 Trim() 会抛空引用异常
-    if (string.IsNullOrWhiteSpace(ShiftName)) throw new Exception("请填写班次名称");
-    var name = ShiftName.Trim();
-    if (name.Length > 50) throw new Exception("班次名称不能超过 50 个字");
-    if (!TimeOnly.TryParse(WorkStart, out var ws)) throw new Exception("上班时间格式不正确");
-    if (!TimeOnly.TryParse(WorkEnd, out var we)) throw new Exception("下班时间格式不正确");
-    // 不是跨天班次时，下班时间必须晚于上班时间——原来只挡了"完全相同"这一种情况，
-    // 没挡"下班时间比上班时间还早却没勾跨天"（比如手滑填了 09:00~08:00），这种配置会让
-    // ComputeWorkHours 算出的在岗分钟数是负的，被 rawMinutes<=0 的保护直接归零，
-    // 这个班次的工时会一直算成 0（迟到/早退判断同样会跟着错），且不会有任何报错提示
-    if (!CrossDay && we <= ws) throw new Exception("下班时间必须晚于上班时间（如果是跨天班次，请勾选「跨天」）");
-    // 反过来：勾了「跨天」但下班时间比上班时间还晚（比如 08:00~17:00 误勾跨天），会变成 33 小时的班，天天判早退、请假时长算错
-    if (CrossDay && we > ws) throw new Exception("跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）；白班请取消勾选「跨天」");
-    if (LateTol is < 0 or > 60) throw new Exception("迟到容忍分钟数请填 0-60 之间");
-    if (EarlyTol is < 0 or > 60) throw new Exception("早退容忍分钟数请填 0-60 之间");
-    if (EarliestIn < 0) throw new Exception("最多提前打卡分钟数不能为负数");
-    if (OtThresh is < 0 or > 120) throw new Exception("加班判定阈值请填 0-120 分钟之间");
-    if (StdHours is <= 0 or > 24) throw new Exception("标准工时请填 0-24 小时之间");
-    if (!System.Text.RegularExpressions.Regex.IsMatch(ShiftColor, "^#[0-9A-Fa-f]{6}$"))
-        throw new Exception("班次颜色格式不正确");
+        // 先判断原始值是否为空，再 Trim：字段留空提交时模型绑定会把它转成 null，直接 Trim() 会抛空引用异常
+        if (string.IsNullOrWhiteSpace(ShiftName)) throw new Exception("请填写班次名称");
+        var name = ShiftName.Trim();
+        if (name.Length > 50) throw new Exception("班次名称不能超过 50 个字");
+        if (!TimeOnly.TryParse(WorkStart, out var ws)) throw new Exception("上班时间格式不正确");
+        if (!TimeOnly.TryParse(WorkEnd, out var we)) throw new Exception("下班时间格式不正确");
+        // 不是跨天班次时，下班时间必须晚于上班时间——原来只挡了"完全相同"这一种情况，
+        // 没挡"下班时间比上班时间还早却没勾跨天"（比如手滑填了 09:00~08:00），这种配置会让
+        // ComputeWorkHours 算出的在岗分钟数是负的，被 rawMinutes<=0 的保护直接归零，
+        // 这个班次的工时会一直算成 0（迟到/早退判断同样会跟着错），且不会有任何报错提示
+        if (!CrossDay && we <= ws) throw new Exception("下班时间必须晚于上班时间（如果是跨天班次，请勾选「跨天」）");
+        // 反过来：勾了「跨天」但下班时间比上班时间还晚（比如 08:00~17:00 误勾跨天），会变成 33 小时的班，天天判早退、请假时长算错
+        if (CrossDay && we > ws) throw new Exception("跨天班次的下班时间应该早于上班时间（如 20:00 上班、次日 08:00 下班）；白班请取消勾选「跨天」");
+        if (LateTol is < 0 or > 60) throw new Exception("迟到容忍分钟数请填 0-60 之间");
+        if (EarlyTol is < 0 or > 60) throw new Exception("早退容忍分钟数请填 0-60 之间");
+        if (EarliestIn < 0) throw new Exception("最多提前打卡分钟数不能为负数");
+        if (OtThresh is < 0 or > 120) throw new Exception("加班判定阈值请填 0-120 分钟之间");
+        if (StdHours is <= 0 or > 24) throw new Exception("标准工时请填 0-24 小时之间");
+        if (!System.Text.RegularExpressions.Regex.IsMatch(ShiftColor, "^#[0-9A-Fa-f]{6}$"))
+            throw new Exception("班次颜色格式不正确");
 
-    // 午间必打卡窗口：每一行两个都留空就跳过；填了就必须成对、且开始早于结束
-    // （不同班次时间不一样，由管理员按这个班次自己的上下班时间去设置对应的中段窗口，
-    //  比如 8-18 点的班配 12-13 点；下午班/晚班配各自班次中段的时间；可以配多段）
-    // 数量给个上限：ShiftSchedule.MidCheckWindows / AttendanceRecord.MidCheckResults 都是
-    // [MaxLength(500)] 的字符串列，配太多段序列化后会超长，要么被截断要么存库时直接报错
-    if (MidCheckWindowInputs.Count > 10) throw new Exception("午间必打卡窗口最多只能配置 10 段");
-    var midCheckWindows = new List<(TimeOnly Start, TimeOnly End)>();
-    foreach (var w in MidCheckWindowInputs)
-    {
-        var hasStart = !string.IsNullOrWhiteSpace(w.Start);
-        var hasEnd   = !string.IsNullOrWhiteSpace(w.End);
-        if (!hasStart && !hasEnd) continue;
-        if (!hasStart || !hasEnd) throw new Exception("午间必打卡窗口要么都填，要么都留空");
-        if (!TimeOnly.TryParse(w.Start, out var ms) || !TimeOnly.TryParse(w.End, out var me))
-            throw new Exception("午间必打卡窗口时间格式不正确");
-        // 跨天班次（夜班）的窗口本身也可能跨过午夜（比如 23:30-00:30）——不能简单看
-        // "结束时间是不是比开始时间还早的钟点"，要跟 AttendanceService.ResolveShiftTime
-        // 用同一套规则：钟点比这个班次的上班时间还早，就说明已经过了午夜、算第二天。
-        // 用固定的锚点日期分别换算再比较，不受真实业务日期影响，只看相对先后顺序
-        // （2026-09-22 用户反馈：夜班配 23:30-00:30 会被误判成"结束时间早于开始时间"）。
-        DateTime Resolve(TimeOnly t) =>
-            CrossDay && t < ws ? DateOnly.MinValue.ToDateTime(t).AddDays(1) : DateOnly.MinValue.ToDateTime(t);
-        if (Resolve(me) <= Resolve(ms)) throw new Exception("午间必打卡窗口的结束时间要晚于开始时间");
-        // 窗口还必须落在这个班次自己的上下班时间范围内——不然对跨天（夜班）班次来说，
-        // 一个比班次上班时间还早的钟点会被上面同一套 Resolve 规则当成"下一天"，
-        // 直接被换算到班次区间之外，实际排班后这段窗口永远不会被真实打卡命中
-        // （工时会因为"必打卡窗口没打上卡"被误判、白白扣掉）
-        if (Resolve(ms) < Resolve(ws) || Resolve(me) > Resolve(we))
-            throw new Exception("午间必打卡窗口必须落在班次的上下班时间范围内");
-        if (midCheckWindows.Contains((ms, me))) throw new Exception("午间必打卡窗口不能配置两段完全相同的时间");
-        midCheckWindows.Add((ms, me));
-    }
-    var midCheckWindowsCsv = midCheckWindows.FormatMidCheckWindows();
+        // 午间必打卡窗口：每一行两个都留空就跳过；填了就必须成对、且开始早于结束
+        // （不同班次时间不一样，由管理员按这个班次自己的上下班时间去设置对应的中段窗口，
+        //  比如 8-18 点的班配 12-13 点；下午班/晚班配各自班次中段的时间；可以配多段）
+        // 数量给个上限：ShiftSchedule.MidCheckWindows / AttendanceRecord.MidCheckResults 都是
+        // [MaxLength(500)] 的字符串列，配太多段序列化后会超长，要么被截断要么存库时直接报错
+        if (MidCheckWindowInputs.Count > 10) throw new Exception("午间必打卡窗口最多只能配置 10 段");
+        var midCheckWindows = new List<(TimeOnly Start, TimeOnly End)>();
+        foreach (var w in MidCheckWindowInputs)
+        {
+            var hasStart = !string.IsNullOrWhiteSpace(w.Start);
+            var hasEnd   = !string.IsNullOrWhiteSpace(w.End);
+            if (!hasStart && !hasEnd) continue;
+            if (!hasStart || !hasEnd) throw new Exception("午间必打卡窗口要么都填，要么都留空");
+            if (!TimeOnly.TryParse(w.Start, out var ms) || !TimeOnly.TryParse(w.End, out var me))
+                throw new Exception("午间必打卡窗口时间格式不正确");
+            // 跨天班次（夜班）的窗口本身也可能跨过午夜（比如 23:30-00:30）——不能简单看
+            // "结束时间是不是比开始时间还早的钟点"，要跟 AttendanceService.ResolveShiftTime
+            // 用同一套规则：钟点比这个班次的上班时间还早，就说明已经过了午夜、算第二天。
+            // 用固定的锚点日期分别换算再比较，不受真实业务日期影响，只看相对先后顺序
+            // （2026-09-22 用户反馈：夜班配 23:30-00:30 会被误判成"结束时间早于开始时间"）。
+            DateTime Resolve(TimeOnly t) =>
+                CrossDay && t < ws ? DateOnly.MinValue.ToDateTime(t).AddDays(1) : DateOnly.MinValue.ToDateTime(t);
+            if (Resolve(me) <= Resolve(ms)) throw new Exception("午间必打卡窗口的结束时间要晚于开始时间");
+            // 窗口还必须落在这个班次自己的上下班时间范围内——不然对跨天（夜班）班次来说，
+            // 一个比班次上班时间还早的钟点会被上面同一套 Resolve 规则当成"下一天"，
+            // 直接被换算到班次区间之外，实际排班后这段窗口永远不会被真实打卡命中
+            // （工时会因为"必打卡窗口没打上卡"被误判、白白扣掉）
+            if (Resolve(ms) < Resolve(ws) || Resolve(me) > Resolve(we))
+                throw new Exception("午间必打卡窗口必须落在班次的上下班时间范围内");
+            if (midCheckWindows.Contains((ms, me))) throw new Exception("午间必打卡窗口不能配置两段完全相同的时间");
+            midCheckWindows.Add((ms, me));
+        }
+        var midCheckWindowsCsv = midCheckWindows.FormatMidCheckWindows();
         return (ws, we, midCheckWindowsCsv);
     }
 
