@@ -169,7 +169,7 @@
                                 所属部门（所属公司）
                                 <small class="text-muted fw-normal">（勾选部门 = 长期跟随本组：这些部门现有及以后新增/调入的员工都会自动归入本考勤组；所属公司会按勾选部门自动带出）</small>
                             </label>
-                            <div id="deptTreeList" class="border rounded p-2" style="max-height:220px;overflow-y:auto;">
+                            <div id="deptTreeList" data-dept-tree class="border rounded p-2" style="max-height:260px;overflow-y:auto;">
                                 @foreach (var d in Model.DeptTree)
                                 {
                                     var linkedGroup = d.AttendanceGroupId.HasValue

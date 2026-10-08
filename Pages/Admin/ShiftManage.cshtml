@@ -174,7 +174,7 @@
                         <div class="row g-2 mb-2">
                             <div class="col-6">
                                 <label class="form-label small mb-1">按部门筛选</label>
-                                <select id="deptFilter" class="form-select form-select-sm" onchange="filterMembers()">
+                                <select id="deptFilter" class="form-select form-select-sm" data-dept-picker onchange="filterMembers()">
                                     <option value="">全部部门</option>
                                     @foreach (var deptName in Model.Members.Select(m => m.DeptName ?? "未分配").Distinct().OrderBy(n => n))
                                     {

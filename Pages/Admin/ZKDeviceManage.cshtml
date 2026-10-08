@@ -111,7 +111,7 @@
                     {
                         <div class="mb-3">
                             <label class="form-label">归属部门</label>
-                            <select asp-for="DepartmentId" id="fDepartmentId" class="form-select">
+                            <select asp-for="DepartmentId" id="fDepartmentId" class="form-select" data-dept-picker>
                                 <option value="">未归类（总部共用设备）</option>
                                 @foreach (var dep in Model.AssignableDepts)
                                 { <option value="@dep.Id">@dep.DeptName</option> }

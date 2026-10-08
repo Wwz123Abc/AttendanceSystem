@@ -105,7 +105,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">上级部门</label>
-                        <select asp-for="ParentId" class="form-select" id="fParentId">
+                        <select asp-for="ParentId" class="form-select" id="fParentId" data-dept-picker>
                             <option value="">（顶级部门 · 无上级）</option>
                             @foreach (var r in Model.Rows)
                             {

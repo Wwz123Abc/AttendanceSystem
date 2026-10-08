@@ -59,7 +59,7 @@
                 范围
                 <small class="text-muted fw-normal">（勾选公司=连它下面所有部门一起，范围大；只勾具体部门=只看这个部门，范围小；都不勾=全公司所有人）</small>
             </label>
-            <div id="reportDeptTree" class="border rounded p-2 mb-2" style="max-height:200px;overflow-y:auto;">
+            <div id="reportDeptTree" data-dept-tree class="border rounded p-2 mb-2" style="max-height:260px;overflow-y:auto;">
                 @foreach (var d in Model.DeptTree)
                 {
                     <div class="form-check" style="padding-left:@(1.5 + d.Depth * 1.2)rem">

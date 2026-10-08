@@ -45,7 +45,7 @@
                     </div>
                     <div class="col-md-8" id="scopeDeptWrap" style="display:none">
                         <label class="form-label fw-semibold">选择部门（含其所有子部门）</label>
-                        <select asp-for="ScopeId" id="scopeDeptSelect" class="form-select">
+                        <select asp-for="ScopeId" id="scopeDeptSelect" class="form-select" data-dept-picker>
                             <option value="">请选择</option>
                             @foreach (var d in Model.DeptOptions)
                             { <option value="@d.Id">@d.Name</option> }
