@@ -192,7 +192,7 @@ public static class ExcelExportHelper
             "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
             "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
-            "应出勤天数", "排班说明"
+            "应出勤天数", "实际总工时(h)", "排班说明"
         ];
         var tailCols   = tailHeaders.Length;      // 直接取表头个数，不再手写数字
         var totalCols  = fixedCols + dayCount + tailCols;
@@ -201,13 +201,13 @@ public static class ExcelExportHelper
         // 分组的最后一列：右边线用深一点的颜色当分组分隔线（合同公司、每日最后一天、正班工时、旷工天数、休息日加班）
         var edgeCols = new HashSet<int> { fixedCols - 1, lastDayCol, tailStart + 3, tailStart + 10, tailStart + 16 };
         // 带单位的工时列（(h)）用 1 位小数、0 显示"-"；分钟列（(分)）用千分位
-        var hourCols   = new HashSet<int> { tailStart + 3, tailStart + 11, tailStart + 13, tailStart + 14, tailStart + 15, tailStart + 16 };
+        var hourCols   = new HashSet<int> { tailStart + 3, tailStart + 11, tailStart + 13, tailStart + 14, tailStart + 15, tailStart + 16, tailStart + 18 };
         var minuteCols = new HashSet<int> { tailStart + 4, tailStart + 7 };
 
         // ── 第 1 行：标题靠左，拆成"主标题 + 统计周期/人数"两段（不合并，这样冻结窗格后一打开就能看到）──
         var titleRow = sheet.CreateRow(0);
         titleRow.HeightInPoints = 34;
-        SetCell(titleRow, 0, "月度考勤汇总", st.Get(font: "1F3864", size: 16, bold: true, h: HorizontalAlignment.Left, border: false));
+        SetCell(titleRow, 0, "发薪考勤汇总", st.Get(font: "1F3864", size: 16, bold: true, h: HorizontalAlignment.Left, border: false));
         SetCell(titleRow, 2,
             $"统计周期 {result.StartDate:yyyy-MM-dd} 至 {result.EndDate:yyyy-MM-dd}（{dayCount} 天）· 共 {result.Rows.Count} 人",
             st.Get(font: "7F7F7F", size: 11, h: HorizontalAlignment.Left, border: false));
@@ -229,7 +229,7 @@ public static class ExcelExportHelper
             Block(8, 10, "休息/节假日", st.Get(fill: "F2F2F2", size: 9));
             Block(11, 13, "迟到/早退", st.Get(font: "C55A11", size: 9, bold: true));
             Block(14, 16, "缺卡/旷工", st.Get(font: "C00000", size: 9, bold: true));
-            Block(17, lastDayCol, "格内数字 = 当日工时（小时，不足半小时舍去）；空白 = 应出勤但没有工时", noteStyle);
+            Block(17, lastDayCol, "格内数字 = 当日工时 = 正班 + 加班（小时，不足半小时舍去）；空白 = 当天没有工时", noteStyle);
             Block(tailStart, totalCols - 1, "(分) = 分钟　(h) = 小时　最后一行“合计”会随筛选结果变化", noteStyle);
         }
         else
@@ -237,7 +237,7 @@ public static class ExcelExportHelper
             // 天数太少（比如只导出一周）放不下图例块：退回成一行短说明
             SetCell(legendRow, 0,
                 genText + "　｜　夜班=淡黄底；休息日/节假日（当天没有工时）=浅灰底；迟到/早退=橙色字；缺卡/旷工=红色字；" +
-                "格内数字=当日工时（小时，不足半小时舍去）；空白=应出勤但没有工时；带(分)的列单位是分钟，带(h)的列单位是小时；最后一行“合计”会随筛选结果变化。",
+                "格内数字=当日工时=正班+加班（小时，不足半小时舍去）；空白=当天没有工时；带(分)的列单位是分钟，带(h)的列单位是小时；最后一行“合计”会随筛选结果变化。",
                 st.Get(font: "7F7F7F", size: 9, h: HorizontalAlignment.Left, wrap: true, border: false));
             for (var c = 1; c < totalCols; c++) legendRow.CreateCell(c);
             sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, totalCols - 1));
@@ -258,7 +258,9 @@ public static class ExcelExportHelper
             ("出勤与工时",                     tailStart,      tailStart + 3,  "DDEBF7", HorizontalAlignment.Center),
             ("迟到 · 早退 · 缺卡 · 旷工",       tailStart + 4,  tailStart + 10, "FBE5D6", HorizontalAlignment.Center),
             ("出差 · 夜班 · 加班",              tailStart + 11, tailStart + 16, "E2EFDA", HorizontalAlignment.Center),
-            ("对照",                           tailStart + 17, tailStart + 18, "DDEBF7", HorizontalAlignment.Center),
+            ("对照",                           tailStart + 17, tailStart + 17, "DDEBF7", HorizontalAlignment.Center),
+            ("发薪工时（正班+加班）",              tailStart + 18, tailStart + 18, "FFF2CC", HorizontalAlignment.Center),
+            ("说明",                           tailStart + 19, tailStart + 19, "EDEDED", HorizontalAlignment.Center),
         ];
         foreach (var g in groups)
         {
@@ -374,8 +376,12 @@ public static class ExcelExportHelper
             Put(xRow, c, (double)row.WeekdayOvertimeHours, Num(c), true); c++;
             Put(xRow, c, (double)row.RestDayOvertimeHours, Num(c), true); c++;
             Put(xRow, c, row.ExpectedWorkdays, Num(c), false); c++;   // 应出勤天数
-            // 排班说明（新列只能加在最后）：没排班的人正班工时没有按班次封顶、已含工作日加班，提醒别和加班总时长直接相加
-            SetCell(xRow, c, NoShiftNote(row.NoShiftDays), row.NoShiftDays > 0 ? st.Get(font: orange, h: HorizontalAlignment.Left, indent: 1) : Txt(true, c));
+            // 实际总工时 = 正班 + 加班：发工资直接按这个乘时薪（加粗标出）
+            var payCell = xRow.CreateCell(c);
+            payCell.CellStyle = st.Get(font: "1F3864", bold: true, format: HourFormat, edge: edgeCols.Contains(c), fill: "FFF9E5");
+            payCell.SetCellValue((double)row.PayableHours); c++;
+            // 排班说明：没排班的人，告诉用户正班是怎么算的（正班已按规则处理，不会和加班重复）
+            SetCell(xRow, c, NoShiftPayrollNote(row.NoShiftDays), row.NoShiftDays > 0 ? st.Get(font: orange, h: HorizontalAlignment.Left, indent: 1) : Txt(true, c));
         }
 
         // 筛选箭头：列名行是第 4 行（下标 3），范围到最后一条员工数据为止——合计行在范围外，不会被筛掉或排序打乱
@@ -413,6 +419,11 @@ public static class ExcelExportHelper
 
         return ToBytes(wb);
     }
+
+    /// <summary>发薪汇总表里"没排班"员工的说明：正班已经按规则处理（工作日最多 8 小时、休息日不计），可以直接用"实际总工时"。</summary>
+    public static string NoShiftPayrollNote(int noShiftDays) => noShiftDays > 0
+        ? $"没排班{noShiftDays}天：工作日正班按8h封顶、休息日只计加班，已避免与加班重复"
+        : "";
 
     /// <summary>"没排班"员工的标注文字：他们的正班工时没有按班次封顶，已经包含了工作日加班时间。没有就返回空串。</summary>
     public static string NoShiftNote(int noShiftDays) => noShiftDays > 0

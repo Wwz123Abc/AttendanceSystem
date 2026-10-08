@@ -23,7 +23,7 @@ public class ExcelExportColumnAlignmentTests
         "出勤天数", "请假天数", "休息天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
         "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
         "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
-        "应出勤天数", "排班说明"
+        "应出勤天数", "实际总工时(h)", "排班说明"
     ];
 
     private static TemplateReportRowDto FullRow(string name, string no, decimal dayHours = 8) => new()
@@ -48,6 +48,7 @@ public class ExcelExportColumnAlignmentTests
         TotalOvertimeHours    = 10m,
         WeekdayOvertimeHours  = 4m,
         RestDayOvertimeHours  = 3m,
+        PayableHours          = 168.5m,
         ExpectedWorkdays      = 22
     };
 
@@ -90,7 +91,8 @@ public class ExcelExportColumnAlignmentTests
         Assert.Equal(10,    dataRow.GetCell(tailStart + 14).NumericCellValue);  // 加班总时长
         Assert.Equal(4,     dataRow.GetCell(tailStart + 15).NumericCellValue);  // 工作日加班
         Assert.Equal(3,     dataRow.GetCell(tailStart + 16).NumericCellValue);  // 休息日加班
-        Assert.Equal(22,    dataRow.GetCell(tailStart + 17).NumericCellValue);  // 应出勤天数（新增，放在最后一列）
+        Assert.Equal(22,    dataRow.GetCell(tailStart + 17).NumericCellValue);  // 应出勤天数
+        Assert.Equal(168.5, dataRow.GetCell(tailStart + 18).NumericCellValue);  // 实际总工时（正班+加班，发工资按这个）
 
         // 数据行最后一个有值的单元格必须正好是最后一列，不多出、也不少一列——
         // 这一条能直接抓出"表头 N 列，但写值那边多写/少写了一列"这种整体错位的 bug
@@ -184,7 +186,7 @@ public class ExcelExportColumnAlignmentTests
         var dates = Days(31);
         var sheet = Export(dates, RowFor(31, "甲", "E1"), RowFor(31, "乙", "E2"));
 
-        Assert.Equal("月度考勤汇总", sheet.GetRow(0).GetCell(0).StringCellValue);
+        Assert.Equal("发薪考勤汇总", sheet.GetRow(0).GetCell(0).StringCellValue);
         var sub = sheet.GetRow(0).GetCell(2).StringCellValue;
         Assert.Contains("统计周期 2026-08-26 至 2026-09-25", sub);
         Assert.Contains("31 天", sub);
@@ -227,8 +229,8 @@ public class ExcelExportColumnAlignmentTests
 
         // 第 3 行是分组行，按 6 组合并
         var band = sheet.GetRow(2);
-        string[] names = ["基本信息", "考勤结果（每日工时，单位：小时）", "出勤与工时", "迟到 · 早退 · 缺卡 · 旷工", "出差 · 夜班 · 加班", "对照"];
-        int[] firsts = [0, 6, 37, 41, 48, 54];
+        string[] names = ["基本信息", "考勤结果（每日工时，单位：小时）", "出勤与工时", "迟到 · 早退 · 缺卡 · 旷工", "出差 · 夜班 · 加班", "对照", "发薪工时（正班+加班）", "说明"];
+        int[] firsts = [0, 6, 37, 41, 48, 54, 55, 56];
         for (var i = 0; i < names.Length; i++) Assert.Equal(names[i], band.GetCell(firsts[i]).StringCellValue);
         var merged = Enumerable.Range(0, sheet.NumMergedRegions).Select(i => sheet.GetMergedRegion(i)).ToList();
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 0 && m.LastColumn == 5);

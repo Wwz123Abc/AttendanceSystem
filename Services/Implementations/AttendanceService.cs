@@ -811,18 +811,21 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
                 decimal? dayHours = null;
                 if (rec is not null)
                 {
-                    if (rec.ActualWorkHours > 0)
-                    {
-                        dayHours = FloorToHalf(rec.ActualWorkHours);       // 每日格子和月度合计统一按"半小时"取整口径
-                        totalWork += FloorToHalf(rec.ActualWorkHours);     // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
-                        if (isNightShift) nightShiftHours += FloorToHalf(rec.ActualWorkHours);   // 夜班总工时：当天算夜班才计入，取整口径和总工时一致
-                    }
+                    var dailyStdHours = assign?.ShiftSchedule.StandardWorkHours ?? defaultDailyHours;
+                    // 发薪口径（2026-10-08，用户确认"每天工时=正班+加班，直接按总工时发工资"）：
+                    // 正班——休息日一律 0；工作日最多算班次标准工时（没排班按默认 8 小时）。超出的部分是晚上的加班，
+                    // 只认加班单，不然没排班的人（正班不封顶、已含工作日加班）"正班+加班"会把同一段在岗时间算两遍；
+                    // 同时也把 9/28 前"休息日既记正班又记加班"的旧记录挡在报表外。
+                    var regularHalf = isShiftRest ? 0m : FloorToHalf(Math.Min(rec.ActualWorkHours, dailyStdHours));
+                    var otHalf      = rec.OvertimeHours > 0 ? FloorToHalf(rec.OvertimeHours) : 0m;
+                    if (regularHalf + otHalf > 0) dayHours = regularHalf + otHalf;   // 每日格子 = 正班 + 加班（半小时取整，不足舍去）
+                    totalWork += regularHalf;                                          // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
+                    if (isNightShift) nightShiftHours += regularHalf;                  // 夜班总工时：当天算夜班才计入
                     // 出勤天数/请假天数跟 GenerateMonthlySummaryAsync 共用同一个公式（ResolveAttendanceDayCredit），
                     // 不能只看"有没有工时"——半天假当天可能 ActualWorkHours>0（上午上班），整天假是 0，
                     // 两种都要正确记到"出勤"和"请假"里，不能像以前那样只用 ActualWorkHours>0 判断出勤、
                     // 完全没有"请假天数"这个概念，导致这份发工资用的报表和月度汇总页对不上
                     // （发现于 2026-09-18 数据核查）。
-                    var dailyStdHours = assign?.ShiftSchedule.StandardWorkHours ?? defaultDailyHours;
                     actualDays += ResolveAttendanceDayCredit(rec, dailyStdHours, isShiftRest);
                     if (rec.AttendanceStatus == AttendanceStatus.OnLeave)
                         leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
@@ -883,6 +886,7 @@ public class AttendanceService(AttendanceDbContext db, IOptions<AppSettingsOptio
             // "我的记录"统一口径后变成跟正班工时数值完全相同，2026-09-22 直接删掉了那个重复字段和对应的列
             // （加班单独看 TotalOvertimeHours），不用两处都留着同一个数字。
             row.RegularWorkHours        = totalWork;
+            row.PayableHours            = totalWork + totalOtHours;   // 实际总工时 = 正班 + 加班
             row.NoShiftDays             = noShiftDays;
             row.LateMinutes             = lateMin;
             row.EarlyLeaveMinutes       = earlyMin;

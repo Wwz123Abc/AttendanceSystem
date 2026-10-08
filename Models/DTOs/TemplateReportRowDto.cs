@@ -50,6 +50,11 @@ public class TemplateReportRowDto
     /// 只是这里单独拆出来展示，方便区分"正常上班的时长"和"另外走加班申请批的时长"。</summary>
     public decimal RegularWorkHours { get; set; }
 
+    /// <summary>实际总工时 = 正班工时 + 加班总时长（发工资直接按这个乘时薪）。
+    /// 正班已经按"休息日不计、工作日最多算班次标准工时（没排班按默认 8 小时）"处理，
+    /// 超出的部分只认加班单，所以两者相加不会重复。</summary>
+    public decimal PayableHours { get; set; }
+
     public int LateMinutes         { get; set; }   // 迟到时长（分钟，合计）
     public int EarlyLeaveCount     { get; set; }   // 早退次数
     public int LateCount           { get; set; }   // 迟到次数

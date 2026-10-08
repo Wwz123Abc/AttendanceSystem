@@ -21,7 +21,7 @@
     string NI(int v)     => v == 0 ? "" : v.ToString();
     string ND(decimal v) => v == 0 ? "" : v.ToString("0.##");
 
-    var totalCols = 6 + Model.Dates.Count + 19;   // 固定列 + 每日格子 + 尾部统计列(18，含请假天数/夜班总工时/正班工时/应出勤天数) + 操作列(1)，空数据行合并单元格用
+    var totalCols = 6 + Model.Dates.Count + 20;   // 固定列 + 每日格子 + 尾部统计列(18，含请假天数/夜班总工时/正班工时/应出勤天数) + 操作列(1)，空数据行合并单元格用
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -91,7 +91,7 @@
                     <i class="bi bi-search me-1"></i>查询
                 </button>
                 <button type="submit" class="btn btn-success btn-sm" onclick="document.getElementById('formHandler').value='ExportTemplate'">
-                    <i class="bi bi-download me-1"></i>导出模板汇总表（按当前起止日期/范围）
+                    <i class="bi bi-download me-1"></i>导出发薪考勤汇总表（按当前起止日期/范围）
                 </button>
                 <button type="submit" class="btn btn-outline-success btn-sm" onclick="document.getElementById('formHandler').value='ExportClockTimeSheet'">
                     <i class="bi bi-clock-history me-1"></i>导出打卡时间表（按当前起止日期/范围）
@@ -145,6 +145,7 @@
                         <th rowspan="2">工作日加班(h)</th>
                         <th rowspan="2">休息日加班(h)</th>
                         <th rowspan="2">应出勤天数</th>
+                        <th rowspan="2">实际总工时(h)<br /><small class="fw-normal text-muted">正班+加班</small></th>
                         <th rowspan="2">操作</th>
                     </tr>
                     <tr>
@@ -194,6 +195,7 @@
                             <td class="text-center">@ND(row.WeekdayOvertimeHours)</td>
                             <td class="text-center">@ND(row.RestDayOvertimeHours)</td>
                             <td class="text-center">@row.ExpectedWorkdays</td>
+                            <td class="text-center fw-semibold">@row.PayableHours.ToString("0.##")</td>
                             <td>
                                 <a asp-page-handler="ExportDetail"
                                    asp-route-userId="@row.UserId"

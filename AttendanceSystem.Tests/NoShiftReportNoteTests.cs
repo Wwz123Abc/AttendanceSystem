@@ -62,7 +62,8 @@ public class NoShiftReportNoteTests : SqliteTestBase
         var nameRow = sheet.GetRow(3);
         var last = nameRow.LastCellNum - 1;
         Assert.Equal("排班说明", nameRow.GetCell(last).StringCellValue);
-        Assert.Equal("应出勤天数", nameRow.GetCell(last - 1).StringCellValue.Replace(Environment.NewLine, "").Replace("\n", ""));   // 原来的最后一列"应出勤天数"位置不变
+        Assert.Equal("应出勤天数", nameRow.GetCell(last - 2).StringCellValue.Replace(Environment.NewLine, "").Replace("\n", ""));
+        Assert.Equal("实际总工时(h)", nameRow.GetCell(last - 1).StringCellValue.Replace(Environment.NewLine, "").Replace("\n", ""));   // 原来的最后一列"应出勤天数"位置不变
         Assert.Contains("没排班5天", sheet.GetRow(4).GetCell(last).StringCellValue);
         Assert.Equal("", sheet.GetRow(5).GetCell(last).StringCellValue);
     }

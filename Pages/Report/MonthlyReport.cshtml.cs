@@ -152,7 +152,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetCurrentUser()!, deptIds);
         var result = await attendanceService.GenerateTemplateReportAsync(start.Value, end.Value, deptIds);
         var bytes  = ExcelExportHelper.ExportTemplateReport(result);
-        return File(bytes, XlsxContentType, $"月度汇总_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
+        return File(bytes, XlsxContentType, $"发薪考勤汇总表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
 
     /// <summary>
