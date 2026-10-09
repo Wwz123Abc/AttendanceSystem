@@ -2,7 +2,6 @@
 @model AttendanceSystem.Pages.Admin.DashboardModel
 @{
     ViewData["Title"] = "数据看板";
-    ViewData["AutoRefresh"] = 30;   // 每 30 秒自动刷新今日实时统计
     var s = Model.Stats;
 }
 
@@ -23,7 +22,7 @@
 
 <div class="page-header">
     <h4><i class="bi bi-speedometer2 me-2 text-primary"></i>数据看板</h4>
-    <p class="text-muted mb-0">@DateTime.Today.ToString("yyyy年MM月dd日") 今日考勤实时统计 · 点击卡片可查看具体人员</p>
+    <p class="text-muted mb-0">@DateTime.Today.ToString("yyyy年MM月dd日") 今日考勤实时统计 · 点击卡片可查看具体人员 · 数字每 30 秒自动更新<span class="ms-2" id="st-updated"></span></p>
 </div>
 
 <div class="row g-3 mb-4">
@@ -32,7 +31,7 @@
              onclick="openDrilldown('total', '总人数')">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
-                    <div class="stat-value text-primary">@s.TotalEmployees</div>
+                    <div class="stat-value text-primary" id="st-total">@s.TotalEmployees</div>
                     <div class="text-muted small mt-1">总人数</div>
                 </div>
                 <div class="stat-icon stat-icon-primary"><i class="bi bi-people-fill"></i></div>
@@ -44,7 +43,7 @@
              onclick="openDrilldown('present', '已出勤')">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
-                    <div class="stat-value text-success">@s.PresentCount</div>
+                    <div class="stat-value text-success" id="st-present">@s.PresentCount</div>
                     <div class="text-muted small mt-1">已出勤</div>
                 </div>
                 <div class="stat-icon stat-icon-success"><i class="bi bi-check-circle-fill"></i></div>
@@ -56,7 +55,7 @@
              onclick="openDrilldown('absent', '缺勤')">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
-                    <div class="stat-value text-danger">@s.AbsentCount</div>
+                    <div class="stat-value text-danger" id="st-absent">@s.AbsentCount</div>
                     <div class="text-muted small mt-1">缺勤</div>
                 </div>
                 <div class="stat-icon stat-icon-danger"><i class="bi bi-x-circle-fill"></i></div>
@@ -68,7 +67,7 @@
              onclick="openDrilldown('late', '迟到')">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
-                    <div class="stat-value text-warning">@s.LateCount</div>
+                    <div class="stat-value text-warning" id="st-late">@s.LateCount</div>
                     <div class="text-muted small mt-1">迟到</div>
                 </div>
                 <div class="stat-icon stat-icon-warning"><i class="bi bi-alarm-fill"></i></div>
@@ -80,7 +79,7 @@
              onclick="openDrilldown('onleave', '请假')">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
-                    <div class="stat-value text-info">@s.OnLeaveCount</div>
+                    <div class="stat-value text-info" id="st-onleave">@s.OnLeaveCount</div>
                     <div class="text-muted small mt-1">请假</div>
                 </div>
                 <div class="stat-icon stat-icon-info"><i class="bi bi-calendar2-week-fill"></i></div>
@@ -92,13 +91,11 @@
              onclick="openDrilldown('notpunched', '未打卡')">
             <div class="d-flex align-items-center justify-content-between">
                 <div>
-                    <div class="stat-value text-secondary">@s.NotPunchedCount</div>
+                    <div class="stat-value text-secondary" id="st-notpunched">@s.NotPunchedCount</div>
                     <div class="text-muted small mt-1">未打卡</div>
                 </div>
                 <div class="stat-icon stat-icon-secondary"><i class="bi bi-question-circle-fill"></i></div>
             </div>
-        </div>
-    </div>
         </div>
     </div>
 </div>
@@ -111,11 +108,52 @@
                 @{
                     var rate = s.TotalEmployees > 0 ? (double)s.PresentCount / s.TotalEmployees * 100 : 0;
                 }
-                <div class="display-4 fw-bold text-success">@rate.ToString("F1")%</div>
-                <div class="text-muted small">@s.PresentCount / @s.TotalEmployees 人出勤</div>
+                <div class="display-4 fw-bold text-success" id="st-rate">@rate.ToString("F1")%</div>
+                <div class="text-muted small" id="st-ratetext">@s.PresentCount / @s.TotalEmployees 人出勤</div>
                 <div class="progress mt-3" style="height:10px;border-radius:var(--radius-sm);background:var(--gray-bg)">
-                    <div class="progress-bar bg-success" style="width:@rate%;border-radius:var(--radius-sm)"></div>
+                    <div class="progress-bar bg-success" id="st-ratebar" style="width:@rate%;border-radius:var(--radius-sm)"></div>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mt-1">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">近 7 天出勤情况 <small class="text-muted fw-normal ms-2">人数按状态统计；出勤率 = 出勤 ÷ 当前在职人数；整天没有记录的日子（休息日、节假日）不统计</small></div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead>
+                        <tr><th>日期</th><th class="text-end">出勤</th><th class="text-end">迟到</th><th class="text-end">请假</th><th class="text-end">旷工</th><th style="min-width:180px">出勤率</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var d in Model.Trend)
+                        {
+                            var dayName = "日一二三四五六"[(int)d.Date.DayOfWeek];
+                            <tr class="@(d.HasData ? "" : "text-muted")">
+                                <td class="text-nowrap">@d.Date.ToString("MM-dd") 周@(dayName)@(d.Date == s.StatsDate ? " · 今天" : "")</td>
+                                @if (d.HasData)
+                                {
+                                    <td class="text-end">@d.PresentCount</td>
+                                    <td class="text-end">@d.LateCount</td>
+                                    <td class="text-end">@d.OnLeaveCount</td>
+                                    <td class="text-end @(d.AbsentCount > 0 && d.Date != s.StatsDate ? "text-danger fw-semibold" : "")">@d.AbsentCount</td>
+                                    <td>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <div class="progress flex-grow-1" style="height:8px;background:var(--gray-bg)"><div class="progress-bar bg-success" style="width:@d.AttendanceRate.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%"></div></div>
+                                            <span class="small text-nowrap" style="width:48px">@d.AttendanceRate.ToString("F1")%</span>
+                                        </div>
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td colspan="5" class="small">无考勤记录（休息日/节假日）</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -136,7 +174,7 @@
                         <thead>
                             <tr>
                                 <th>工号</th><th>姓名</th><th>部门</th>
-                                <th>上班打卡</th><th>下班打卡</th><th>状态</th><th>备注</th>
+                                <th>上班打卡</th><th>下班打卡</th><th>状态</th>
                             </tr>
                         </thead>
                         <tbody id="drilldownBody"></tbody>

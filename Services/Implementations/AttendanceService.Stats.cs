@@ -18,10 +18,16 @@ public partial class AttendanceService
     public async Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default)
     {
         var today   = DateOnly.FromDateTime(clock.LocalToday());
-        var userIds = await BuildUserIdQueryAsync(null, groupId, deptIds, excludeExempt: true);
+        var users   = UserIdQuery(null, groupId, deptIds, excludeExempt: true);
+        var total   = await users.CountAsync(ct);
+        // 只取算数用的两个字段（状态、有没有上班卡），不再把整行考勤记录拉回来；筛选人员用子查询，不再先查出几千个 id 再塞进 IN 列表
         var records = await db.AttendanceRecords
-            .Where(r => r.WorkDate == today && userIds.Contains(r.UserId))
+            .Where(r => r.WorkDate == today && users.Contains(r.UserId))
+            .Select(r => new { r.AttendanceStatus, HasClockIn = r.ClockInTime != null })
             .ToListAsync(ct);
+
+        bool Present(AttendanceStatus s, bool hasClockIn) => hasClockIn || s == AttendanceStatus.BusinessTrip;   // 同 IsPresent
+        var presentCount = records.Count(r => Present(r.AttendanceStatus, r.HasClockIn));
 
         // "没出勤"的人里，旷工/请假/节假日已经各有自己的口径和卡片了，"未打卡"这张卡只应该统计
         // 剩下那批"今天还没来打卡、但又不属于旷工/请假/节假日"的人（比如上午还没到岗），
@@ -29,22 +35,60 @@ public partial class AttendanceService
         // 两张卡各数一遍，两个数字加起来会比总人数还多，看板数据对不上。
         // 只数"没出勤"的：半天假当天打了上班卡的记录同时是"出勤"和"请假"，两边都减一遍会把"未打卡"扣少
         // （卡片数小于下钻名单、人少时还可能出现负数，跟 GetTodayStatsDetailAsync 的 notpunched 名单对不上）
-        var accountedForCount = records.Count(r => !IsPresent(r) &&
+        var accountedForCount = records.Count(r => !Present(r.AttendanceStatus, r.HasClockIn) &&
             r.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.OnLeave or AttendanceStatus.Holiday);
 
         return new AttendanceStatsDto
         {
             StatsDate       = today,
-            TotalEmployees  = userIds.Count,
-            PresentCount    = records.Count(IsPresent),   // 打了上班卡，或已批准出差（无需打卡也算全勤）
+            TotalEmployees  = total,
+            PresentCount    = presentCount,   // 打了上班卡，或已批准出差（无需打卡也算全勤）
             AbsentCount     = records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent),
             // 迟到按「状态」统计（与缺勤/请假口径一致）：钉钉同步只写状态不写迟到分钟数，
             // 若按 LateMinutes>0 算会漏掉钉钉来的迟到。
             LateCount       = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late),
             OnLeaveCount    = records.Count(r => r.AttendanceStatus == AttendanceStatus.OnLeave),
             // 总人数 - 出勤 - 旷工/请假/节假日 = 剩下"还没打卡、原因待定"的人，不和旷工/请假重复计数
-            NotPunchedCount = userIds.Count - records.Count(IsPresent) - accountedForCount
+            NotPunchedCount = total - presentCount - accountedForCount
         };
+    }
+
+    /// <summary>
+    /// 看板"近几天出勤情况"：从今天往前数 <paramref name="days"/> 天，每天的出勤/迟到/请假/旷工人数。
+    /// 人数口径跟今日卡片一致（按状态数、免考勤的人不算）；总人数用"当前在职人数"，不回溯历史人员变动。
+    /// 一整天一条记录都没有的日子（休息日、节假日）<see cref="DailyAttendanceTrendDto.HasData"/> 为 false。
+    /// </summary>
+    public async Task<List<DailyAttendanceTrendDto>> GetRecentTrendAsync(HashSet<int>? deptIds, int days = 7, CancellationToken ct = default)
+    {
+        var today = DateOnly.FromDateTime(clock.LocalToday());
+        var start = today.AddDays(-(days - 1));
+        var users = UserIdQuery(null, null, deptIds, excludeExempt: true);
+        var total = await users.CountAsync(ct);
+        var rows = await db.AttendanceRecords
+            .Where(r => r.WorkDate >= start && r.WorkDate <= today && users.Contains(r.UserId))
+            .GroupBy(r => r.WorkDate)
+            .Select(g => new
+            {
+                Date    = g.Key,
+                Records = g.Count(),
+                Present = g.Count(r => r.ClockInTime != null || r.AttendanceStatus == AttendanceStatus.BusinessTrip),
+                Late    = g.Count(r => r.AttendanceStatus == AttendanceStatus.Late),
+                OnLeave = g.Count(r => r.AttendanceStatus == AttendanceStatus.OnLeave),
+                Absent  = g.Count(r => r.AttendanceStatus == AttendanceStatus.Absent)
+            })
+            .ToListAsync(ct);
+        var byDate = rows.ToDictionary(x => x.Date);
+        var list = new List<DailyAttendanceTrendDto>();
+        for (var d = today; d >= start; d = d.AddDays(-1))   // 最新的一天排最上面
+        {
+            byDate.TryGetValue(d, out var x);
+            list.Add(new DailyAttendanceTrendDto
+            {
+                Date = d, TotalEmployees = total, HasData = x is not null,
+                PresentCount = x?.Present ?? 0, LateCount = x?.Late ?? 0, OnLeaveCount = x?.OnLeave ?? 0, AbsentCount = x?.Absent ?? 0
+            });
+        }
+        return list;
     }
 
     /// <summary>

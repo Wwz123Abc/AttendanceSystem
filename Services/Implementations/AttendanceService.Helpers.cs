@@ -94,6 +94,10 @@ public partial class AttendanceService
     /// （2026-09-24 补漏；2026-10-07 起正式工角色一律免考勤，不再靠逐个勾选）。
     /// </summary>
     private async Task<List<int>> BuildUserIdQueryAsync(int? deptId, int? groupId, HashSet<int>? deptIds = null, bool excludeExempt = false)
+        => await UserIdQuery(deptId, groupId, deptIds, excludeExempt).ToListAsync();
+
+    /// <summary>同上，但不立刻查库，返回可以嵌进别的查询里当子查询用的 id 查询（看板这类只要数量的统计用，不必把几千个 id 拉回来再塞进 IN 列表）。</summary>
+    private IQueryable<int> UserIdQuery(int? deptId, int? groupId, HashSet<int>? deptIds = null, bool excludeExempt = false)
     {
         var q = db.Users.Where(u => u.IsActive).AsQueryable();
         if (excludeExempt) q = q.NeedingAttendance();
@@ -102,7 +106,7 @@ public partial class AttendanceService
         // 分公司管理员范围过滤：deptIds 是"自己范围内的部门 id 全集"（含下级部门），跟上面 deptId 的
         // 单值精确匹配是两码事——deptId 是页面自己选的筛选条件，deptIds 是登录者身份带来的强制范围
         if (deptIds is not null) q = q.Where(u => u.DepartmentId != null && deptIds.Contains(u.DepartmentId.Value));
-        return await q.Select(u => u.Id).ToListAsync();
+        return q.Select(u => u.Id);
     }
 
     /// <summary>把“考勤日记录”实体转成给页面用的展示对象(DTO)。</summary>

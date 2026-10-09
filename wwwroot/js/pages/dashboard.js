@@ -32,7 +32,6 @@ async function openDrilldown(category, title) {
                 <td class="small">${escapeHtml(p.clockIn)}</td>
                 <td class="small">${escapeHtml(p.clockOut)}</td>
                 <td><span class="badge ${p.badge}">${escapeHtml(p.statusText)}</span></td>
-                <td class="small text-danger">${p.locationAbnormal ? escapeHtml(p.locationAbnormalNote ?? '定位异常') : ''}</td>
             </tr>`).join('');
         document.getElementById('drilldownTableWrap').classList.remove('d-none');
     } catch (e) {
@@ -43,3 +42,26 @@ async function openDrilldown(category, title) {
 }
 
 // escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
+
+
+// ── 今日数字每 30 秒悄悄更新一次（不整页刷新，不会闪屏、也不会打断正在看的名单弹窗）──
+const REFRESH_SECONDS = 30;
+async function refreshStats() {
+    if (document.hidden) return;   // 页面在后台标签里就先不取
+    try {
+        const resp = await fetch('?handler=Stats', { headers: { 'Accept': 'application/json' } });
+        if (!resp.ok) return;
+        const s = await resp.json();
+        if (!s.success) return;
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('st-total', s.total); set('st-present', s.present); set('st-absent', s.absent);
+        set('st-late', s.late); set('st-onleave', s.onLeave); set('st-notpunched', s.notPunched);
+        set('st-rate', s.rate.toFixed(1) + '%');
+        set('st-ratetext', `${s.present} / ${s.total} 人出勤`);
+        const bar = document.getElementById('st-ratebar');
+        if (bar) bar.style.width = s.rate + '%';
+        set('st-updated', '更新于 ' + s.updatedAt);
+    } catch (e) { /* 网络抖动就等下一轮 */ }
+}
+setInterval(refreshStats, REFRESH_SECONDS * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStats(); });

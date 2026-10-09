@@ -53,6 +53,50 @@ public class DashboardAndSummaryTests : SqliteTestBase
         Assert.Equal(stats.NotPunchedCount, list.Count);        // 卡片数字 = 下钻名单人数
     }
 
+    // ── 看板"近 7 天出勤情况" ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task 看板近7天_按状态数人数_没有记录的日子标成无数据_昨日旷工能看到()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var yesterday = today.AddDays(-1);
+        using (var db = CreateContext())
+        {
+            var a = U("T1", "准点"); var b = U("T2", "迟到"); var c = U("T3", "昨日旷工"); var d = U("T4", "请假");
+            db.Users.AddRange(a, b, c, d);
+            await db.SaveChangesAsync();
+            db.AttendanceRecords.AddRange(
+                new AttendanceRecord { UserId = a.Id, WorkDate = today, ClockInTime = today.ToDateTime(new TimeOnly(8, 0)), AttendanceStatus = AttendanceStatus.Normal },
+                new AttendanceRecord { UserId = b.Id, WorkDate = today, ClockInTime = today.ToDateTime(new TimeOnly(9, 30)), AttendanceStatus = AttendanceStatus.Late },
+                new AttendanceRecord { UserId = a.Id, WorkDate = yesterday, ClockInTime = yesterday.ToDateTime(new TimeOnly(8, 0)), AttendanceStatus = AttendanceStatus.Normal },
+                new AttendanceRecord { UserId = c.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.Absent },
+                new AttendanceRecord { UserId = d.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.OnLeave });
+            await db.SaveChangesAsync();
+        }
+
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var trend = await svc.GetRecentTrendAsync(null, 7);
+
+        Assert.Equal(7, trend.Count);
+        Assert.Equal(today, trend[0].Date);               // 最新的一天排最前
+        Assert.Equal(today.AddDays(-6), trend[^1].Date);
+        Assert.All(trend, x => Assert.Equal(4, x.TotalEmployees));
+
+        Assert.True(trend[0].HasData);
+        Assert.Equal(2, trend[0].PresentCount);
+        Assert.Equal(1, trend[0].LateCount);
+        Assert.Equal(50.0, trend[0].AttendanceRate);      // 2 / 4
+
+        Assert.Equal(1, trend[1].PresentCount);
+        Assert.Equal(1, trend[1].AbsentCount);            // 昨天的旷工在这里能看到
+        Assert.Equal(1, trend[1].OnLeaveCount);
+        Assert.Equal(25.0, trend[1].AttendanceRate);
+
+        Assert.False(trend[2].HasData);                   // 前天没有任何记录 = 休息日/节假日
+        Assert.Equal(0, trend[2].AttendanceRate);
+    }
+
     // ── M11：管理员手动补卡不能补未来的时间点 ───────────────────────────────────────
 
     [Fact]

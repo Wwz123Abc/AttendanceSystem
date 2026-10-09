@@ -12,11 +12,30 @@ namespace AttendanceSystem.Pages.Admin;
 public class DashboardModel(IAttendanceService attendanceService, IDeptScopeService deptScopeService) : PageModel
 {
     public AttendanceStatsDto Stats { get; set; } = new();   // 看板统计数据
+    public List<DailyAttendanceTrendDto> Trend { get; set; } = [];   // 近 7 天出勤情况
 
     public async Task OnGetAsync()
     {
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         Stats = await attendanceService.GetTodayStatsAsync(deptIds: visibleIds, ct: HttpContext.RequestAborted);
+        Trend = await attendanceService.GetRecentTrendAsync(visibleIds, 7, HttpContext.RequestAborted);
+    }
+
+    /// <summary>
+    /// 页面每 30 秒悄悄来取一次今日数字（只更新卡片上的数，不整页刷新）。
+    /// </summary>
+    public async Task<JsonResult> OnGetStatsAsync()
+    {
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
+        var s = await attendanceService.GetTodayStatsAsync(deptIds: visibleIds, ct: HttpContext.RequestAborted);
+        return new JsonResult(new
+        {
+            Success = true,
+            Total = s.TotalEmployees, Present = s.PresentCount, Absent = s.AbsentCount, Late = s.LateCount,
+            OnLeave = s.OnLeaveCount, NotPunched = s.NotPunchedCount,
+            Rate = s.TotalEmployees > 0 ? Math.Round((double)s.PresentCount / s.TotalEmployees * 100, 1) : 0,
+            UpdatedAt = DateTime.Now.ToString("HH:mm:ss")
+        });
     }
 
     /// <summary>
@@ -38,9 +57,7 @@ public class DashboardModel(IAttendanceService attendanceService, IDeptScopeServ
                 ClockIn  = r.ClockInText,
                 ClockOut = r.ClockOutText,
                 r.StatusText,
-                Badge    = ToBadgeClass(r.StatusCssClass),   // 转成本页实际在用的 Bootstrap 徽章色
-                r.LocationAbnormal,
-                r.LocationAbnormalNote
+                Badge    = ToBadgeClass(r.StatusCssClass)   // 转成本页实际在用的 Bootstrap 徽章色
             })
         });
     }

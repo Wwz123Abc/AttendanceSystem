@@ -57,6 +57,8 @@ public interface IAttendanceService
     /// <summary>今日考勤看板统计（出勤、缺勤、迟到等）。<paramref name="deptIds"/> 非空时只统计部门在这个
     /// 集合内的员工——分公司管理员登录时用来把看板收窄到自己管理范围内，不受限管理员不传（看全公司）。</summary>
     Task<AttendanceStatsDto>       GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default);
+    /// <summary>看板"近几天出勤情况"：今天往前 <paramref name="days"/> 天，每天的出勤/迟到/请假/旷工人数。</summary>
+    Task<List<DailyAttendanceTrendDto>> GetRecentTrendAsync(HashSet<int>? deptIds, int days = 7, CancellationToken ct = default);
     /// <summary>
     /// 看板下钻：某统计类别（total/present/absent/late/onleave/notpunched）对应的具体人员名单。
     /// 分类口径与 <see cref="GetTodayStatsAsync"/> 完全一致，保证卡片数字和点开的名单条数对得上。
