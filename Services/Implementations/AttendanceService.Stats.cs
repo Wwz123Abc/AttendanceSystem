@@ -43,8 +43,7 @@ public partial class AttendanceService
             LateCount       = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late),
             OnLeaveCount    = records.Count(r => r.AttendanceStatus == AttendanceStatus.OnLeave),
             // 总人数 - 出勤 - 旷工/请假/节假日 = 剩下"还没打卡、原因待定"的人，不和旷工/请假重复计数
-            NotPunchedCount = userIds.Count - records.Count(IsPresent) - accountedForCount,
-            LocationAbnormalCount = records.Count(r => r.LocationAbnormal)
+            NotPunchedCount = userIds.Count - records.Count(IsPresent) - accountedForCount
         };
     }
 
@@ -120,7 +119,6 @@ public partial class AttendanceService
                 && (!recordByUser.TryGetValue(id, out var npRec)
                     || npRec.AttendanceStatus is not (AttendanceStatus.Absent or AttendanceStatus.OnLeave or AttendanceStatus.Holiday)))
                 .ToList(),
-            "locationabnormal" => records.Where(r => r.LocationAbnormal).Select(r => r.UserId).ToList(),
             _            => []
         };
 

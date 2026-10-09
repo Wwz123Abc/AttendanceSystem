@@ -10,5 +10,4 @@ public class AttendanceStatsDto
     public int      LateCount       { get; set; }   // 迟到人数
     public int      OnLeaveCount    { get; set; }   // 请假人数
     public int      NotPunchedCount { get; set; }   // 未打卡人数
-    public int      LocationAbnormalCount { get; set; }   // 定位异常待审核人数
 }
