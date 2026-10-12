@@ -265,11 +265,13 @@ public partial class AttendanceService
         if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
         var userIds = await uq.Select(u => u.Id).ToListAsync(ct);
 
-        return (await db.AttendanceRecords
+        var list = (await db.AttendanceRecords
                 .Include(r => r.User).ThenInclude(u => u.Department)
                 .Where(r => userIds.Contains(r.UserId) && r.WorkDate >= start && r.WorkDate <= end)
                 .OrderBy(r => r.User.EmployeeNo).ThenBy(r => r.WorkDate)
                 .ToListAsync(ct))
             .Select(ToDto).ToList();
+        await MarkLateMidChecksAsync(list, ct);   // 午间窗口外才打的卡，导出里也写成"迟到 hh:mm"
+        return list;
     }
 }

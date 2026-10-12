@@ -53,7 +53,7 @@ public class ApprovalRequestDto
     public string ContentText => ApprovalType switch
     {
         ApprovalType.PunchReplenishment =>
-            $"补{(PunchType == Enums.PunchType.ClockOut ? "下班" : "上班")}卡 {PunchDate:yyyy-MM-dd} {PunchTime:HH\\:mm}",
+            $"补{Services.Implementations.PunchReplenishmentRules.TypeText(PunchType)}卡 {PunchDate:yyyy-MM-dd} {PunchTime:HH\\:mm}",
         ApprovalType.Leave =>
             $"{LeaveTypeText}：{LeaveStartTime:yyyy-MM-dd HH:mm} ~ {LeaveEndTime:yyyy-MM-dd HH:mm}",
         ApprovalType.Overtime =>

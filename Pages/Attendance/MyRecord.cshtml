@@ -128,8 +128,9 @@
                                 {
                                     @foreach (var h in r.MidCheckHits)
                                     {
-                                        <div class="@(h.IsSatisfied ? "" : "text-danger")">
-                                            @h.WindowStart.ToString("HH:mm")-@h.WindowEnd.ToString("HH:mm")：@(h.HitTime.HasValue ? h.HitTime.Value.ToString("HH:mm") : "未打卡")
+                                        <div class="@(h.IsSatisfied ? "" : h.IsLate ? "text-warning" : "text-danger")"
+                                             title="@(h.IsLate ? "超出午间窗口后才打的卡，这一时段按未打卡计算工时" : "")">
+                                            @h.WindowStart.ToString("HH:mm")-@h.WindowEnd.ToString("HH:mm")：@(h.HitTime.HasValue ? h.HitTime.Value.ToString("HH:mm") : h.IsLate ? $"迟到（{h.LateTime:HH\\:mm} 打卡，晚了 {h.LateMinutes} 分钟）" : "未打卡")
                                         </div>
                                     }
                                 }

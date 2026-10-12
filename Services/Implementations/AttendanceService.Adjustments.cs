@@ -71,36 +71,65 @@ public partial class AttendanceService
             await GenerateMonthlySummaryAsync(y, m, [approval.ApplicantUserId]);
     }
 
-    /// <summary>补卡审批通过后回写：补上班/下班时间，重算当天工时。</summary>
+    /// <summary>
+    /// 补卡审批通过后回写。规则见 <see cref="PunchReplenishmentRules"/>：
+    /// ① 上班卡只有比现有上班时间更早才写入，下班卡只有比现有下班时间更晚才写入——否则这张补卡"不生效"，
+    ///    已有的打卡原样保留，只在备注里记一笔（审批本身已经通过，不报错）；
+    /// ② 午间卡只新增一条午间打卡记录，不动上下班时间，然后重新算午间命中和当天工时；条件不满足时报错、不能通过；
+    /// ③ 写入前再校验一遍：时间还没到的（夜班下班卡顺延到第二天）不能通过，上下班卡不能越过前一天的下班/下一个上班。
+    /// </summary>
     private async Task ApplyApprovedPunchReplenishmentAsync(ApprovalRequest approval, DateOnly punchDate, TimeOnly punchTime, HashSet<(int Year, int Month)> touchedMonths)
     {
+        var type = approval.PunchType ?? PunchType.ClockOut;   // 提交时必填；老数据没有类型的按下班处理（原行为）
+        var ctx = await PunchReplenishmentRules.LoadAsync(db, approval.ApplicantUserId, punchDate);
+        var punchDt = PunchReplenishmentRules.ResolveTime(type, punchDate, punchTime, ctx.ClockIn, ctx.Shift);
+        // 提交时已经按同一套规则查过一次，这里是审批时的兜底：提交之后、审批之前现状可能变了（员工又补上了上班卡、
+        // 顺延结果从"过去"变成"未来"……）。直接抛异常，让外层事务整单回滚，不会出现"改了一半"的记录。
+        if (punchDt > clock.LocalNow())
+            throw new BusinessException(
+                $"补卡时间 {punchDt:MM-dd HH:mm} 还没到，现在不能审批通过（夜班下班卡会算到第二天），请到时间后再审批或驳回");
+
+        var problem = PunchReplenishmentRules.FindProblem(type, punchDate, punchDt, ctx);
         var record = await db.AttendanceRecords
-            .FirstOrDefaultAsync(r => r.UserId == approval.ApplicantUserId
-                                   && r.WorkDate == punchDate);
+            .FirstOrDefaultAsync(r => r.UserId == approval.ApplicantUserId && r.WorkDate == punchDate);
+
+        if (type == PunchType.MidCheck)
+        {
+            if (problem is not null || record is null) throw new BusinessException("午间补卡不能通过：" + (problem ?? "这天没有考勤记录"));
+            if (!await db.AttendancePunches.AnyAsync(p => p.UserId == approval.ApplicantUserId && p.PunchType == PunchType.MidCheck && p.PunchTime == punchDt))
+                db.AttendancePunches.Add(new AttendancePunch
+                {
+                    UserId = approval.ApplicantUserId, PunchTime = punchDt, PunchType = PunchType.MidCheck, IsValid = true,
+                    DeviceInfo = $"补卡审批:{approval.RequestNo}", CreatedAt = clock.LocalNow()
+                });
+            AppendApprovalNote(record, $"午间补卡已审批通过（{approval.RequestNo}）{punchDt:HH:mm}");
+            record.UpdatedAt = clock.LocalNow();
+            // 午间命中要立刻刷新（只有上班卡、还没下班卡时下面的重算会直接返回，不会顺带更新）
+            record.MidCheckResults = (await LoadMidCheckResultsAsync(approval.ApplicantUserId, punchDate, ctx.Shift))?.FormatMidCheckResults();
+            await RecalcWorkHoursAfterManualPunchAsync(record, approval.ApplicantUserId);
+            touchedMonths.Add((punchDate.Year, punchDate.Month));
+            return;
+        }
+
+        if (problem is not null)
+        {
+            // 不生效：不改上下班时间，只在备注里留一笔，免得有人以为补卡生效了
+            if (record is not null)
+            {
+                AppendApprovalNote(record, $"补{PunchReplenishmentRules.TypeText(type)}卡已审批通过（{approval.RequestNo}）但未生效：{problem}");
+                record.UpdatedAt = clock.LocalNow();
+            }
+            return;
+        }
+
         if (record is null)
         {
             // 当天完全没有记录也要新建一条：审批都通过了，补卡不能被静默忽略
             record = new AttendanceRecord { UserId = approval.ApplicantUserId, WorkDate = punchDate };
             db.AttendanceRecords.Add(record);
         }
-
-        var punchDt = punchDate.ToDateTime(punchTime);
-        if (approval.PunchType == PunchType.ClockOut)
-        {
-            // 补的下班卡如果比上班卡还早，或者夜班（跨天班次）填的是"班次结束的那个凌晨时间"，说明下班在第二天：
-            // 顺延一天。申请只有"日期 + 时间"，没法直接表达跨天，不顺延的话夜班漏打一次下班卡整晚工时都会丢
-            var shiftForPunch = (await GetShiftAssignmentAsync(approval.ApplicantUserId, punchDate))?.ShiftSchedule;
-            punchDt = ResolvePunchReplenishmentClockOut(punchDate, punchTime, record.ClockInTime, shiftForPunch);
-        }
-        // 提交时已经按同一套顺延规则查过一次（SubmitApprovalAsync），这里是审批时的兜底：提交之后、
-        // 审批之前员工又补上了上班卡，顺延结果可能从"过去"变成"未来"（2026-09-29 第 12 轮审查发现，
-        // M5 只堵了提交那一刻，没堵审批这一刻）。这里直接抛异常，让外层事务整单回滚，不会出现
-        // "改了一半"的记录。
-        if (punchDt > clock.LocalNow())
-            throw new BusinessException(
-                $"补卡时间 {punchDt:MM-dd HH:mm} 还没到，现在不能审批通过（夜班下班卡会算到第二天），请到时间后再审批或驳回");
-        if (approval.PunchType == PunchType.ClockIn) record.ClockInTime  = punchDt;   // 补上班卡
-        else                                          record.ClockOutTime = punchDt;   // 补下班卡
+        if (type == PunchType.ClockIn) record.ClockInTime  = punchDt;   // 补上班卡（已确认比现有的更早）
+        else                           record.ClockOutTime = punchDt;   // 补下班卡（已确认比现有的更晚）
         AppendApprovalNote(record, $"补卡已审批通过（{approval.RequestNo}）");
         record.UpdatedAt    = clock.LocalNow();
 

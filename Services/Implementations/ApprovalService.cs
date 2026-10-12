@@ -169,40 +169,35 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             throw new BusinessException("出差目的地不能超过 200 个字");
     }
 
-    /// <summary>补卡申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>
+    /// <summary>
+    /// 补卡申请的提交校验：必填字段、不能补未来的时间，以及按班次/当天已有打卡/前后一天的上下班卡校验（规则集中在
+    /// <see cref="PunchReplenishmentRules"/>，审批回写时再用同一份规则校验一次），最后挡掉重复申请。
+    /// 补下班/午间卡要先把"最终会落到哪个时刻"算出来再比较（夜班跨过午夜会算到第二天），否则能提交出一个"现在还没到"的时间点
+    /// （2026-09-29 第 12 轮审查）。这里直接查库、不走 attendanceService，因为测试用的 FakeAttendanceService 没实现那些方法。
+    /// </summary>
     private async Task ValidatePunchReplenishmentAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
     {
         if (dto.PunchDate is null || dto.PunchType is null || dto.PunchTime is null)
             throw new BusinessException("请填写完整的补卡日期、类型和时间");
         if (dto.PunchDate.Value > DateOnly.FromDateTime(clock.LocalToday()))
             throw new BusinessException("补卡日期不能晚于今天");
-        // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点——以前只检查了日期不晚于今天，
-        // 没检查具体时间点：员工早上就能提交"今天 17:30 下班卡"，只要审批人批得快，中午提前走人
-        // 也会按 17:30 结算工时（2026-09-29 审查发现 M5）。
-        // 补下班卡还要按审批回写同一套顺延规则（UpdateAttendanceAfterApprovalAsync/ResolvePunchReplenishmentClockOut）
-        // 先把最终会落到哪个时刻算出来再比较——不然夜班下班卡顺延到第二天后，仍然能提交出一个
-        // "现在还没到"的时间点（2026-09-29 第 12 轮审查发现，M5 只堵了一半）。这里直接查库、不走
-        // attendanceService.GetShiftAssignmentAsync，因为测试用的 FakeAttendanceService 没实现那个方法。
-        var punchAt = dto.PunchDate.Value.ToDateTime(dto.PunchTime.Value);
-        if (dto.PunchType == PunchType.ClockOut)
-        {
-            var existingClockIn = await db.AttendanceRecords
-                .Where(r => r.UserId == applicantUserId && r.WorkDate == dto.PunchDate.Value)
-                .Select(r => r.ClockInTime)
-                .FirstOrDefaultAsync();
-            var shiftForPunch = await db.ShiftAssignments
-                .Where(a => a.UserId == applicantUserId && a.WorkDate == dto.PunchDate.Value)
-                .Select(a => a.ShiftSchedule)
-                .FirstOrDefaultAsync();
-            punchAt = AttendanceService.ResolvePunchReplenishmentClockOut(
-                dto.PunchDate.Value, dto.PunchTime.Value, existingClockIn, shiftForPunch);
-        }
+        var type = dto.PunchType.Value;
+        var date = dto.PunchDate.Value;
+        // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点（2026-09-29 审查发现 M5：员工早上就能提交
+        // "今天 17:30 下班卡"，批得快就能中午提前走人按 17:30 结算工时）
+        var ctx = await PunchReplenishmentRules.LoadAsync(db, applicantUserId, date);
+        var punchAt = PunchReplenishmentRules.ResolveTime(type, date, dto.PunchTime.Value, ctx.ClockIn, ctx.Shift);
         if (punchAt > clock.LocalNow())
             throw new BusinessException($"补卡时间 {punchAt:MM-dd HH:mm} 还没到，请填写真实已经发生的打卡时间（夜班下班卡会算到第二天）");
+        // 补上班卡要比现有的更早、补下班卡要比现有的更晚、午间卡要落在没命中的窗口里……（见规则类），不然补了也不会生效，直接拒绝提交
+        if (PunchReplenishmentRules.FindProblem(type, date, punchAt, ctx) is { } problem)
+            throw new BusinessException(problem);
+        // 重复申请：同一天同一类型已经有有效申请就不能再提交；午间卡一天可能有多段窗口，按"同一个时间点"判重
         if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
                 && a.ApprovalType == ApprovalType.PunchReplenishment && activeStatuses.Contains(a.ApprovalStatus)
-                && a.PunchDate == dto.PunchDate && a.PunchType == dto.PunchType))
-            throw new BusinessException("这天的补卡申请已经提交过了，不能重复提交");
+                && a.PunchDate == dto.PunchDate && a.PunchType == dto.PunchType
+                && (type != PunchType.MidCheck || a.PunchTime == dto.PunchTime)))
+            throw new BusinessException(type == PunchType.MidCheck ? "这个时间点的午间补卡申请已经提交过了，不能重复提交" : "这天的补卡申请已经提交过了，不能重复提交");
     }
 
     /// <summary>请假申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>

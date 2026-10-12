@@ -61,8 +61,74 @@ public partial class AttendanceService
         if (q.Year.HasValue && q.Month.HasValue)
             query = query.Where(r => r.WorkDate.Year == q.Year && r.WorkDate.Month == q.Month);
 
-        return (await query.OrderByDescending(r => r.WorkDate).ToListAsync())
+        var list = (await query.OrderByDescending(r => r.WorkDate).ToListAsync())
             .Select(ToDto).ToList();
+        await MarkLateMidChecksAsync(list);
+        return list;
+    }
+
+    /// <summary>
+    /// 给考勤列表里"午间没在窗口内打上"的时段补上"迟到"标记：窗口结束之后、下班/下一段窗口之前有过午间打卡，
+    /// 就显示成"迟到 hh:mm"，而不是"未打卡"。只改展示，不改工时口径（窗口没打上仍按午间漏打算工时）。
+    /// 现算而不是存库，所以已有的历史记录也立刻能显示，不用重算数据。可以一次处理多个人的列表（按记录上的 UserId 分别查）。
+    /// </summary>
+    private async Task MarkLateMidChecksAsync(List<AttendanceRecordDto> dtos, CancellationToken ct = default)
+    {
+        var todo = dtos.Where(d => d.MidCheckHits.Any(h => !h.IsSatisfied)).ToList();
+        if (todo.Count == 0) return;
+        var userIds = todo.Select(d => d.UserId).Distinct().ToList();
+        var minDate = todo.Min(d => d.WorkDate);
+        var maxDate = todo.Max(d => d.WorkDate);
+        var from = minDate.ToDateTime(TimeOnly.MinValue).AddDays(-1);
+        var to   = maxDate.ToDateTime(TimeOnly.MinValue).AddDays(2);
+        var punchRows = await db.AttendancePunches
+            .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= from && p.PunchTime <= to)
+            .Select(p => new { p.UserId, p.PunchTime }).ToListAsync(ct);
+        var punchesByUser = punchRows.GroupBy(p => p.UserId).ToDictionary(g => g.Key, g => g.Select(x => x.PunchTime).ToList());
+        var shiftRows = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+            .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= minDate && a.WorkDate <= maxDate)
+            .ToListAsync(ct);
+        var shifts = shiftRows.ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+        foreach (var d in todo)
+        {
+            shifts.TryGetValue((d.UserId, d.WorkDate), out var shift);
+            punchesByUser.TryGetValue(d.UserId, out var punches);
+            d.MidCheckHits = FindLateMidChecks(d.WorkDate, shift, d.MidCheckHits, d.ClockOutTime, punches ?? []);
+        }
+    }
+
+    /// <summary>
+    /// 在没命中的窗口里找"迟到"的那次午间打卡：窗口结束之后的第一次打卡，并且要早于——下一段窗口的开始、
+    /// 下班打卡、"应下班前 <see cref="ClockOutEligibleHoursBeforeEnd"/> 小时"（再晚就是下班那一次了）。
+    /// 夜班窗口跨过午夜按班次推算到第二天。找不到就保持"未打卡"。
+    /// </summary>
+    public static List<MidCheckWindowResult> FindLateMidChecks(
+        DateOnly workDate, ShiftSchedule? shift, List<MidCheckWindowResult> hits, DateTime? clockOut, List<DateTime> punches)
+    {
+        DateTime Resolve(TimeOnly t) => shift is null ? workDate.ToDateTime(t) : ResolveShiftTime(workDate, t, shift);
+        DateTime? upperByShift = null;
+        if (shift is not null)
+        {
+            var end = workDate.ToDateTime(shift.WorkEndTime);
+            if (shift.IsCrossDay) end = end.AddDays(1);
+            upperByShift = end.AddHours(-ClockOutEligibleHoursBeforeEnd);
+        }
+        var result = new List<MidCheckWindowResult>(hits.Count);
+        for (var i = 0; i < hits.Count; i++)
+        {
+            var h = hits[i];
+            if (h.IsSatisfied) { result.Add(h); continue; }
+            var windowEnd = Resolve(h.WindowEnd);
+            var upper = DateTime.MaxValue;
+            if (i + 1 < hits.Count) upper = Min(upper, Resolve(hits[i + 1].WindowStart));
+            if (clockOut is { } co) upper = Min(upper, co);
+            if (upperByShift is { } u) upper = Min(upper, u);
+            var late = punches.Where(t => t > windowEnd && t < upper).OrderBy(t => t).Cast<DateTime?>().FirstOrDefault();
+            result.Add(late.HasValue ? h with { LateTime = TimeOnly.FromDateTime(late.Value) } : h);
+        }
+        return result;
+
+        static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
     }
 
     /// <summary>查某部门/考勤组在一段时间内的所有人考勤记录。</summary>
@@ -70,7 +136,7 @@ public partial class AttendanceService
     {
         var userIds = await BuildUserIdQueryAsync(q.DepartmentId, q.AttendanceGroupId, deptIds, excludeExempt: true);   // 先圈出这批人（免考勤的正式工不显示）
 
-        return (await db.AttendanceRecords
+        var list = (await db.AttendanceRecords
             .Include(r => r.User).ThenInclude(u => u.Department)
             .Where(r => userIds.Contains(r.UserId)
                      && r.WorkDate >= q.StartDate
@@ -78,6 +144,8 @@ public partial class AttendanceService
             .OrderBy(r => r.WorkDate).ThenBy(r => r.User.EmployeeNo)
             .ToListAsync(ct))
             .Select(ToDto).ToList();
+        await MarkLateMidChecksAsync(list, ct);
+        return list;
     }
 
     /// <summary>取某员工某月的汇总（含每日明细）。</summary>

@@ -68,7 +68,9 @@
                             <select asp-for="PunchTypeVal" class="form-select">
                                 <option value="ClockIn">上班打卡</option>
                                 <option value="ClockOut">下班打卡</option>
+                                <option value="MidCheck">午间打卡</option>
                             </select>
+                            <div class="form-text">补上班卡只有比现有上班时间更早才生效，补下班卡只有比现有下班时间更晚才生效；中午那次打卡漏了/超出时间窗口，请选“午间打卡”，时间填在班次的午间窗口内。</div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">打卡时间</label>

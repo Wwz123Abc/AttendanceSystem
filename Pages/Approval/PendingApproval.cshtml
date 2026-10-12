@@ -167,7 +167,7 @@
     string DetailText(ApprovalRequestDto i) => i.ApprovalType switch
     {
         ApprovalType.PunchReplenishment =>
-            $"{i.PunchDate:yyyy-MM-dd} {(i.PunchType == PunchType.ClockIn ? "上班卡" : "下班卡")} {i.PunchTime:HH:mm}",
+            $"{i.PunchDate:yyyy-MM-dd} {AttendanceSystem.Services.Implementations.PunchReplenishmentRules.TypeText(i.PunchType)}卡 {i.PunchTime:HH:mm}",
         ApprovalType.Leave =>
             $"{i.LeaveTypeText} {i.LeaveStartTime:yyyy-MM-dd HH:mm} ~ {i.LeaveEndTime:yyyy-MM-dd HH:mm}（{i.LeaveDurationHours:0.#}h）",
         ApprovalType.Overtime =>
@@ -239,8 +239,7 @@ const APPROVAL_DETAILS = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
         leaveHours = i.LeaveDurationHours?.ToString("0.##") ?? "",
         // 补卡
         punchDate  = i.PunchDate?.ToString("yyyy-MM-dd") ?? "",
-        punchType  = i.PunchType == AttendanceSystem.Models.Enums.PunchType.ClockIn ? "上班打卡"
-                   : i.PunchType == AttendanceSystem.Models.Enums.PunchType.ClockOut ? "下班打卡" : "",
+        punchType  = i.PunchType is null ? "" : AttendanceSystem.Services.Implementations.PunchReplenishmentRules.TypeText(i.PunchType) + "打卡",
         punchTime  = i.PunchTime?.ToString("HH:mm") ?? "",
         // 加班
         otStart = i.OvertimeStartTime?.ToString("yyyy-MM-dd HH:mm") ?? "",

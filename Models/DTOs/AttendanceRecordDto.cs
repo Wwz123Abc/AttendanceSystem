@@ -37,13 +37,13 @@ public class AttendanceRecordDto
 
     /// <summary>每一段午间打卡的展示文字，如 "10:00-10:10: 10:05"；没打上显示 "--"。</summary>
     public List<string> MidCheckTexts => MidCheckHits
-        .Select(h => $"{h.WindowStart:HH\\:mm}-{h.WindowEnd:HH\\:mm}: {(h.HitTime.HasValue ? h.HitTime.Value.ToString("HH\\:mm") : "--")}")
+        .Select(h => $"{h.WindowStart:HH\\:mm}-{h.WindowEnd:HH\\:mm}: {(h.HitTime.HasValue ? h.HitTime.Value.ToString("HH\\:mm") : h.IsLate ? $"迟到 {h.LateTime:HH\\:mm}" : "--")}")
         .ToList();
 
     /// <summary>午间打卡时间，简洁版（只显示打卡时刻，多段用"、"隔开），给报表/列表这种寸土寸金的地方用；没配窗口或都没打上显示 "--"。</summary>
     public string MidCheckTimeText => MidCheckHits.Count == 0
         ? "--"
-        : string.Join("、", MidCheckHits.Select(h => h.HitTime.HasValue ? h.HitTime.Value.ToString("HH:mm") : "--"));
+        : string.Join("、", MidCheckHits.Select(h => h.HitTime.HasValue ? h.HitTime.Value.ToString("HH:mm") : h.IsLate ? $"迟到 {h.LateTime:HH\\:mm}" : "--"));
 
     public AttendanceStatus AttendanceStatus  { get; set; }                  // 考勤状态
     public string           StatusText        { get; set; } = string.Empty;  // 状态中文名
