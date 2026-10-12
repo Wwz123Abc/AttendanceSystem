@@ -55,6 +55,9 @@ public class DashboardAndSummaryTests : SqliteTestBase
 
     // ── 看板出勤率：分母是"应出勤"，不是在职总人数 ──────────────────────────
 
+    /// <summary>今天中午 12 点的时钟：这两条用例里排的是 8:30 的白班，不能受"现在几点"影响。</summary>
+    private static FixedClock NoonToday() => new(DateTime.Today.AddHours(12));
+
     /// <summary>造一批典型的人：返回的 today/yesterday 两天的数据用于下面两条测试。</summary>
     private async Task<(DateOnly today, DateOnly yesterday)> SeedAttendanceRateWorld()
     {
@@ -95,7 +98,7 @@ public class DashboardAndSummaryTests : SqliteTestBase
     {
         await SeedAttendanceRateWorld();
         using var db = CreateContext();
-        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance, NoonToday());   // 中午 12 点：8:30 的白班已经开始
         var s = await svc.GetTodayStatsAsync();
 
         Assert.Equal(9, s.TotalEmployees);                 // 总人数卡片仍是全部在职需考勤的人
@@ -111,7 +114,7 @@ public class DashboardAndSummaryTests : SqliteTestBase
     {
         var (today, yesterday) = await SeedAttendanceRateWorld();
         using var db = CreateContext();
-        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance, NoonToday());
         var trend = await svc.GetRecentTrendAsync(null, 7);
 
         Assert.Equal(7, trend.Count);

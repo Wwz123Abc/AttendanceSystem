@@ -60,8 +60,46 @@ async function refreshStats() {
         set('st-ratetext', `${s.present} / ${s.expected} 人出勤（出勤 ÷ 应出勤）`);
         const bar = document.getElementById('st-ratebar');
         if (bar) bar.style.width = s.rate + '%';
+        const ns = document.getElementById('st-notstarted');
+        if (ns) { ns.classList.toggle('d-none', !s.notStarted); ns.textContent = `${s.notStarted} 人排了班、还没到上班时间，暂不算应出勤`; }
+        rateData = { group: s.byGroup || [], shift: s.byShift || [] };
+        renderRateTable();
         set('st-updated', '更新于 ' + s.updatedAt);
     } catch (e) { /* 网络抖动就等下一轮 */ }
 }
 setInterval(refreshStats, REFRESH_SECONDS * 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStats(); });
+
+
+// ── 今日出勤率明细：按考勤组 / 按班次切换 ──
+let rateData = { group: [], shift: [] };
+let rateView = 'group';
+function setRateView(v) {
+    rateView = v;
+    document.getElementById('rate-view-group').classList.toggle('active', v === 'group');
+    document.getElementById('rate-view-shift').classList.toggle('active', v === 'shift');
+    document.getElementById('rate-name-head').textContent = v === 'group' ? '考勤组' : '班次';
+    renderRateTable();
+}
+function renderRateTable() {
+    const rows = rateData[rateView] || [];
+    const body = document.getElementById('rateBody');
+    if (!body) return;
+    if (rows.length === 0) { body.innerHTML = '<tr><td colspan="5" class="text-center text-muted small py-3">今天暂无数据</td></tr>'; return; }
+    body.innerHTML = rows.map(r => {
+        const rateCell = r.rate == null
+            ? '<span class="text-muted small">—</span>'
+            : `<div class="d-flex align-items-center gap-2">
+                   <div class="progress flex-grow-1" style="height:8px;background:var(--gray-bg)"><div class="progress-bar bg-success" style="width:${r.rate}%"></div></div>
+                   <span class="small text-nowrap" style="width:48px">${r.rate.toFixed(1)}%</span>
+               </div>`;
+        return `<tr>
+            <td>${escapeHtml(r.name)}</td>
+            <td class="text-end">${r.isUnscheduled ? '—' : r.expected}</td>
+            <td class="text-end">${r.present}</td>
+            <td class="text-end ${r.notStarted ? 'text-info' : 'text-muted'}">${r.notStarted}</td>
+            <td>${rateCell}</td>
+        </tr>`;
+    }).join('');
+}
+refreshStats();   // 页面一打开就取一次，把明细表填上

@@ -110,10 +110,33 @@
                 }
                 <div class="display-4 fw-bold text-success" id="st-rate">@rate.ToString("F1")%</div>
                 <div class="text-muted small" id="st-ratetext">@s.PresentCount / @s.ExpectedCount 人出勤（出勤 ÷ 应出勤）</div>
-                <div class="text-muted small" style="font-size:12px">应出勤 = 已办入职的在职员工，去掉请假/节假日，以及今天没排班或休息又没打卡的人</div>
+                <div class="text-muted small" style="font-size:12px">应出勤 = 已办入职的在职员工，去掉请假/节假日，以及今天没排班或休息又没打卡的人；排了班但还没到上班时间的（如晚上才上班的夜班）暂不计入</div>
+                <div class="small text-info @(s.NotStartedCount > 0 ? "" : "d-none")" id="st-notstarted" style="font-size:12px">@(s.NotStartedCount) 人排了班、还没到上班时间，暂不算应出勤</div>
                 <div class="progress mt-3" style="height:10px;border-radius:var(--radius-sm);background:var(--gray-bg)">
                     <div class="progress-bar bg-success" id="st-ratebar" style="width:@rate%;border-radius:var(--radius-sm)"></div>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mt-1">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <span>今日出勤率明细 <small class="text-muted fw-normal ms-2">口径同上：出勤 ÷ 应出勤；排了班但还没到上班时间的人暂不计入应出勤</small></span>
+                <div class="btn-group btn-group-sm" role="group">
+                    <button type="button" class="btn btn-outline-primary active" id="rate-view-group" onclick="setRateView('group')">按考勤组</button>
+                    <button type="button" class="btn btn-outline-primary" id="rate-view-shift" onclick="setRateView('shift')">按班次</button>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead>
+                        <tr><th id="rate-name-head">考勤组</th><th class="text-end">应出勤</th><th class="text-end">出勤</th><th class="text-end">未到上班时间</th><th style="min-width:180px">出勤率</th></tr>
+                    </thead>
+                    <tbody id="rateBody"><tr><td colspan="5" class="text-center text-muted small py-3">加载中…</td></tr></tbody>
+                </table>
             </div>
         </div>
     </div>

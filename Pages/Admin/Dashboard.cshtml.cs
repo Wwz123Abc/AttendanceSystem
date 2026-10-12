@@ -33,10 +33,13 @@ public class DashboardModel(IAttendanceService attendanceService, IDeptScopeServ
             Success = true,
             Total = s.TotalEmployees, Expected = s.ExpectedCount, Present = s.PresentCount, Absent = s.AbsentCount, Late = s.LateCount,
             OnLeave = s.OnLeaveCount, NotPunched = s.NotPunchedCount,
-            Rate = s.AttendanceRate,
+            Rate = s.AttendanceRate, NotStarted = s.NotStartedCount,
+            ByGroup = s.ByGroup.Select(ToRow), ByShift = s.ByShift.Select(ToRow),
             UpdatedAt = DateTime.Now.ToString("HH:mm:ss")
         });
     }
+
+    private static object ToRow(RateBreakdownRowDto r) => new { r.Name, r.Total, r.Expected, r.Present, r.NotStarted, r.IsUnscheduled, r.Rate };
 
     /// <summary>
     /// 点开某张统计卡片时，AJAX 请求这里取该类别的具体人员名单。
