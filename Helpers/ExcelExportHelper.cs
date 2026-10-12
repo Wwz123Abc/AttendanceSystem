@@ -860,6 +860,86 @@ public static class ExcelExportHelper
         return ToBytes(wb);
     }
 
+    /// <summary>
+    /// 导出"审批进度"：两张表——①按审批人汇总（现在轮到他审的、后续级别的、最久挂了几天）；
+    /// ②还没审批完的申请明细（一张一行，带上现在该谁审、后续审批人）。
+    /// </summary>
+    public static byte[] ExportApprovalProgress(ApprovalProgressDto progress, DateTime now)
+    {
+        using var wb = new XSSFWorkbook();
+        var titleStyle  = TitleStyle(wb);
+        var headerStyle = HeaderStyle(wb);
+        var dataStyle   = DataStyle(wb);
+        var bandedStyle = BandedStyle(wb);
+
+        IRow Header(ISheet sheet, string title, string[] headers, int[] widths)
+        {
+            var titleRow = sheet.CreateRow(0);
+            SetCell(titleRow, 0, title, titleStyle);
+            sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, headers.Length - 1));
+            titleRow.HeightInPoints = 28;
+            var headerRow = sheet.CreateRow(1);
+            headerRow.HeightInPoints = 20;
+            for (var i = 0; i < headers.Length; i++)
+            {
+                SetCell(headerRow, i, headers[i], headerStyle);
+                sheet.SetColumnWidth(i, widths[i] * 256);
+            }
+            sheet.SetAutoFilter(new CellRangeAddress(1, 1, 0, headers.Length - 1));
+            return headerRow;
+        }
+
+        // ① 按审批人汇总
+        var s1 = wb.CreateSheet("按审批人汇总");
+        Header(s1, $"审批进度：按审批人汇总（截至 {now:yyyy-MM-dd HH:mm}，共 {progress.Items.Count} 张申请未审批完）",
+            ["审批人工号", "审批人", "角色", "部门", "现在轮到其审批", "排在后续级别", "最早一张提交时间", "已挂（天）", "最近登录"],
+            [12, 10, 8, 18, 14, 12, 17, 10, 17]);
+        for (var r = 0; r < progress.Approvers.Count; r++)
+        {
+            var a = progress.Approvers[r];
+            var row = s1.CreateRow(r + 2);
+            var st = r % 2 == 1 ? bandedStyle : dataStyle;
+            SetCell(row, 0, a.EmployeeNo, st);
+            SetCell(row, 1, a.Name + (a.IsActive ? "" : "（已停用）"), st);
+            SetCell(row, 2, a.RoleText, st);
+            SetCell(row, 3, a.DeptName ?? "", st);
+            SetCell(row, 4, a.CurrentCount, st);
+            SetCell(row, 5, a.LaterCount, st);
+            SetCell(row, 6, a.OldestSubmittedAt?.ToString("yyyy-MM-dd HH:mm") ?? "", st);
+            SetCell(row, 7, a.OldestSubmittedAt.HasValue ? (int)(now - a.OldestSubmittedAt.Value).TotalDays : 0, st);
+            SetCell(row, 8, a.LastLoginAt?.ToString("yyyy-MM-dd HH:mm") ?? "从未登录", st);
+        }
+        ApplyLookAndFeel(s1, freezeCols: 2, freezeRows: 2, repeatHeaderRows: 2);
+
+        // ② 未审批申请明细
+        var s2 = wb.CreateSheet("未审批申请明细");
+        Header(s2, $"审批进度：未审批完的申请明细（共 {progress.Items.Count} 张）",
+            ["申请单号", "类型", "申请人工号", "申请人", "部门", "申请内容", "申请理由", "提交时间", "已挂（天）", "状态", "现在该谁审", "审批人工号", "后续审批人"],
+            [20, 8, 12, 10, 16, 42, 30, 17, 10, 10, 12, 12, 14]);
+        for (var r = 0; r < progress.Items.Count; r++)
+        {
+            var i = progress.Items[r];
+            var row = s2.CreateRow(r + 2);
+            var st = r % 2 == 1 ? bandedStyle : dataStyle;
+            SetCell(row, 0, i.RequestNo, st);
+            SetCell(row, 1, i.TypeText, st);
+            SetCell(row, 2, i.ApplicantEmployeeNo, st);
+            SetCell(row, 3, i.ApplicantName, st);
+            SetCell(row, 4, i.DeptName ?? "", st);
+            SetCell(row, 5, i.ContentText, st);
+            SetCell(row, 6, i.Reason, st);
+            SetCell(row, 7, i.SubmittedAt.ToString("yyyy-MM-dd HH:mm"), st);
+            SetCell(row, 8, (int)(now - i.SubmittedAt).TotalDays, st);
+            SetCell(row, 9, i.StatusText, st);
+            SetCell(row, 10, i.CurrentApproverName, st);
+            SetCell(row, 11, i.CurrentApproverNo, st);
+            SetCell(row, 12, i.LaterApprovers, st);
+        }
+        ApplyLookAndFeel(s2, freezeCols: 4, freezeRows: 2, repeatHeaderRows: 2);
+
+        return ToBytes(wb);
+    }
+
     // ── 下面是“样式工厂”：各做一种单元格外观（字体/颜色/边框/对齐）─────────────
 
     // 全部报表统一用这个字体——默认字体是英文的 Arial，中文在 Excel 里显示会发虚，换成微软雅黑更清楚

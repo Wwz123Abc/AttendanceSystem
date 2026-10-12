@@ -96,6 +96,79 @@
     </div>
 </div>
 
+<div class="card mb-3" id="progressCard" data-dept="@Model.DeptId">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>
+            审批进度：还没审批完的申请 <strong class="text-warning">@Model.Progress.Items.Count</strong> 张，涉及 @Model.Progress.Approvers.Count 位审批人
+            <small class="text-muted fw-normal ms-2">不受上面提交日期限制，只按部门筛选</small>
+        </span>
+        <a class="btn btn-outline-success btn-sm @(Model.Progress.Items.Count == 0 ? "disabled" : "")"
+           href="?handler=ExportProgress&deptId=@Model.DeptId"><i class="bi bi-file-earmark-excel me-1"></i>导出审批进度</a>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive" style="max-height:360px;overflow-y:auto">
+            <table class="table table-hover table-sm mb-0 align-middle">
+                <thead class="table-light" style="position:sticky;top:0;z-index:1">
+                    <tr>
+                        <th>审批人</th><th>角色</th><th>部门</th>
+                        <th class="text-end">现在轮到其审批</th><th class="text-end">排在后续级别</th>
+                        <th class="text-end">最早一张已挂</th><th>最近登录</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model.Progress.Approvers.Count == 0)
+                    {
+                        <tr><td colspan="8" class="empty-state"><i class="bi bi-check2-circle"></i>没有未审批完的申请</td></tr>
+                    }
+                    @foreach (var ap in Model.Progress.Approvers)
+                    {
+                        var days = ap.OldestSubmittedAt.HasValue ? (int)(DateTime.Now - ap.OldestSubmittedAt.Value).TotalDays : 0;
+                        <tr>
+                            <td class="small text-nowrap">@ap.Name@(ap.IsActive ? "" : "（已停用）")<br /><span class="text-muted">@ap.EmployeeNo</span></td>
+                            <td class="small">@ap.RoleText</td>
+                            <td class="small">@ap.DeptName</td>
+                            <td class="text-end fw-semibold @(ap.CurrentCount > 0 ? "text-warning" : "text-muted")">@ap.CurrentCount</td>
+                            <td class="text-end text-muted">@ap.LaterCount</td>
+                            <td class="text-end small @(days >= 3 ? "text-danger fw-semibold" : "")">@(ap.CurrentCount > 0 ? $"{days} 天" : "—")</td>
+                            <td class="small text-nowrap">@(ap.LastLoginAt.HasValue ? ap.LastLoginAt.Value.ToString("MM-dd HH:mm") : "从未登录")</td>
+                            <td class="text-end">
+                                @if (ap.CurrentCount > 0)
+                                {
+                                    <button type="button" class="btn btn-outline-primary btn-sm py-0 text-nowrap" data-approver-id="@ap.ApproverUserId" data-approver-name="@ap.Name"
+                                            onclick="openPendingOf(this)">查看申请</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="pendingOfModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="pendingOfTitle">待审批申请</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div id="pendingOfLoading" class="text-center text-muted py-4">加载中…</div>
+                <div class="table-responsive d-none" id="pendingOfWrap">
+                    <table class="table table-hover table-sm mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr><th>单号</th><th>类型</th><th>申请人</th><th>部门</th><th style="min-width:220px">申请内容</th><th>提交时间</th><th>已挂</th><th>后续审批人</th></tr>
+                        </thead>
+                        <tbody id="pendingOfBody"></tbody>
+                    </table>
+                </div>
+                <div id="pendingOfEmpty" class="empty-state d-none"><i class="bi bi-inbox"></i>没有数据</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="card">
     <div class="card-header">
         @Model.StartDate.ToString("yyyy-MM-dd") 至 @Model.EndDate.ToString("yyyy-MM-dd") 提交的申请（共 @Model.Total 条）
@@ -175,3 +248,7 @@
         </div>
     }
 </div>
+
+@section Scripts {
+<script src="~/js/pages/approval-records.js" asp-append-version="true"></script>
+}

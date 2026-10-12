@@ -18,6 +18,11 @@ public interface IApprovalService
     /// 用来收窄到自己范围内，不受限管理员不传（查全公司）。
     Task<(List<ApprovalRequestDto> Items, int Total)> QueryApprovalsAsync(ApprovalQueryDto query, HashSet<int>? deptIds = null);
     /// <summary>
+    /// 审批进度：还没审批完（待审批 / 审批中）的申请，以及每个审批人手上压了几张。
+    /// <paramref name="deptIds"/> 非空时只看申请人部门在这个集合内的申请（分公司管理员收窄到自己范围，同 <see cref="QueryApprovalsAsync"/>）。
+    /// </summary>
+    Task<ApprovalProgressDto> GetApprovalProgressAsync(HashSet<int>? deptIds = null, CancellationToken ct = default);
+    /// <summary>
     /// 审批申请详情（含各审批节点）。仅「申请人本人 / 该单审批人 / 管理员(文员)」可查看，
     /// 其他人返回 null，避免越权查看他人申请的事由与附件。<paramref name="managerVisibleDeptIds"/> 非空时，
     /// "管理员/文员"这条允许路径还要求申请人的部门落在这个集合内——分公司管理员不能仅凭 ManagePolicy

@@ -525,6 +525,58 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         return (items.Select(ToDto).ToList(), total);
     }
 
+    /// <summary>
+    /// 审批进度：把所有"待审批 / 审批中"的申请找出来，标明现在该谁审（待处理节点里最靠前的一级）和排在后面的人，
+    /// 再按"现在该审的人"汇总成每个审批人一行。不受提交时间窗口限制——还没审完的就是还没审完。
+    /// </summary>
+    public async Task<ApprovalProgressDto> GetApprovalProgressAsync(HashSet<int>? deptIds = null, CancellationToken ct = default)
+    {
+        var query = db.ApprovalRequests
+            .Include(a => a.Applicant).ThenInclude(u => u.Department)
+            .Include(a => a.ApprovalSteps).ThenInclude(s => s.Approver).ThenInclude(u => u.Department)
+            .Where(a => a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress);
+        if (deptIds is not null)
+            query = query.Where(a => a.Applicant.DepartmentId != null && deptIds.Contains(a.Applicant.DepartmentId.Value));
+        var open = await query.OrderBy(a => a.SubmittedAt).ToListAsync(ct);
+
+        var items = new List<PendingApprovalItemDto>(open.Count);
+        var rows = new Dictionary<int, ApproverProgressRowDto>();
+        ApproverProgressRowDto RowOf(User u) => rows.TryGetValue(u.Id, out var r) ? r : rows[u.Id] = new ApproverProgressRowDto
+        {
+            ApproverUserId = u.Id, Name = u.RealName, EmployeeNo = u.EmployeeNo, RoleText = u.Role.ToDisplayName(),
+            DeptName = u.Department?.DeptName, IsActive = u.IsActive, LastLoginAt = u.LastLoginAt
+        };
+
+        foreach (var a in open)
+        {
+            var pending = a.ApprovalSteps.Where(s => s.ApprovalStatus == ApprovalStatus.Pending).OrderBy(s => s.StepOrder).ToList();
+            var current = pending.FirstOrDefault();
+            var dto = ToDto(a);
+            items.Add(new PendingApprovalItemDto
+            {
+                RequestId = a.Id, RequestNo = a.RequestNo, TypeText = dto.ApprovalTypeText, StatusText = dto.ApprovalStatusText,
+                ApplicantName = dto.ApplicantName, ApplicantEmployeeNo = dto.ApplicantEmployeeNo, DeptName = dto.DeptName,
+                ContentText = dto.ContentText, Reason = a.Reason ?? "", SubmittedAt = a.SubmittedAt,
+                CurrentApproverId = current?.ApproverUserId, CurrentApproverName = current?.Approver.RealName ?? "",
+                CurrentApproverNo = current?.Approver.EmployeeNo ?? "",
+                LaterApprovers = string.Join("、", pending.Skip(1).Select(s => s.Approver.RealName))
+            });
+            if (current is not null)
+            {
+                var r = RowOf(current.Approver);
+                r.CurrentCount++;
+                if (r.OldestSubmittedAt is null || a.SubmittedAt < r.OldestSubmittedAt) r.OldestSubmittedAt = a.SubmittedAt;
+            }
+            foreach (var later in pending.Skip(1)) RowOf(later.Approver).LaterCount++;
+        }
+
+        return new ApprovalProgressDto
+        {
+            Items = items,
+            Approvers = rows.Values.OrderByDescending(r => r.CurrentCount).ThenByDescending(r => r.LaterCount).ThenBy(r => r.EmployeeNo).ToList()
+        };
+    }
+
     /// <summary>查申请详情（带权限校验：只有申请人本人/该单审批人/管理员文员能看）。</summary>
     public async Task<ApprovalRequestDto?> GetApprovalDetailAsync(int id, int requesterUserId, bool isManager, HashSet<int>? managerVisibleDeptIds = null)
     {

@@ -40,6 +40,9 @@ public class ApprovalRecordsModel(
 
     public DateOnly WindowStart => GetWindowStart(DateOnly.FromDateTime(DateTime.Today));
 
+    /// <summary>审批进度：还没审批完的申请 + 每个审批人手上压了几张（只受部门筛选影响，不受提交日期窗口限制）。</summary>
+    public ApprovalProgressDto Progress { get; set; } = new();
+
     public List<ApprovalRequestDto> Items { get; set; } = [];
     public int Total { get; set; }
     public int TotalPages => Math.Max(1, (int)Math.Ceiling(Total / (double)PageSize));
@@ -75,6 +78,7 @@ public class ApprovalRecordsModel(
         query.PageSize  = PageSize;
 
         (Items, Total) = await approvalService.QueryApprovalsAsync(query, deptIds);
+        Progress  = await approvalService.GetApprovalProgressAsync(deptIds, HttpContext.RequestAborted);
         PageIndex = query.PageIndex;
         DeptId    = effDept;
         ShowAllDepts = !cu.IsScoped;
@@ -100,6 +104,36 @@ public class ApprovalRecordsModel(
 
         return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             $"总审批记录_{StartDate:yyyyMMdd}-{EndDate:yyyyMMdd}.xlsx");
+    }
+
+    /// <summary>点开某个审批人时，取"现在轮到他审批"的那些申请（审批进度表里的"查看申请"）。</summary>
+    public async Task<JsonResult> OnGetPendingOfAsync(int approverId, int? deptId)
+    {
+        var (_, deptIds, _) = await BuildQueryAsync(HttpContext.GetRequiredUser(), null, null, null, null, deptId, null);
+        var progress = await approvalService.GetApprovalProgressAsync(deptIds, HttpContext.RequestAborted);
+        var now = DateTime.Now;
+        return new JsonResult(new
+        {
+            Success = true,
+            Data = progress.Items.Where(i => i.CurrentApproverId == approverId).Select(i => new
+            {
+                i.RequestNo, i.TypeText, i.ApplicantName, i.ApplicantEmployeeNo, DeptName = i.DeptName ?? "—", i.ContentText,
+                SubmittedAt = i.SubmittedAt.ToString("MM-dd HH:mm"), Days = (int)(now - i.SubmittedAt).TotalDays, i.LaterApprovers
+            })
+        });
+    }
+
+    /// <summary>导出审批进度（按审批人汇总 + 未审批申请明细）。</summary>
+    public async Task<IActionResult> OnGetExportProgressAsync(int? deptId)
+    {
+        var cu = HttpContext.GetRequiredUser();
+        var (_, deptIds, _) = await BuildQueryAsync(cu, null, null, null, null, deptId, null);
+        var progress = await approvalService.GetApprovalProgressAsync(deptIds, HttpContext.RequestAborted);
+        var now = DateTime.Now;
+        logger.LogInformation("管理员 {OperatorNo} 导出了审批进度 Excel，未审批 {Count} 张、涉及审批人 {Approvers} 人（部门={DeptId}）",
+            User.FindFirstValue(ClaimTypes.Name) ?? "?", progress.Items.Count, progress.Approvers.Count, deptId);
+        return File(ExcelExportHelper.ExportApprovalProgress(progress, now), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            $"审批进度_{now:yyyyMMdd_HHmm}.xlsx");
     }
 
     /// <summary>把页面传来的筛选条件整理成查询条件：日期收进 2 个月窗口、部门收进当前账号的管理范围。</summary>
