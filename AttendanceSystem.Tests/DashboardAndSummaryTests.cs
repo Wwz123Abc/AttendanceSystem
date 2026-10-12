@@ -53,45 +53,84 @@ public class DashboardAndSummaryTests : SqliteTestBase
         Assert.Equal(stats.NotPunchedCount, list.Count);        // 卡片数字 = 下钻名单人数
     }
 
-    // ── 看板"近 7 天出勤情况" ─────────────────────────────────────────────
+    // ── 看板出勤率：分母是"应出勤"，不是在职总人数 ──────────────────────────
 
-    [Fact]
-    public async Task 看板近7天_按状态数人数_没有记录的日子标成无数据_昨日旷工能看到()
+    /// <summary>造一批典型的人：返回的 today/yesterday 两天的数据用于下面两条测试。</summary>
+    private async Task<(DateOnly today, DateOnly yesterday)> SeedAttendanceRateWorld()
     {
         var today = DateOnly.FromDateTime(DateTime.Today);
         var yesterday = today.AddDays(-1);
-        using (var db = CreateContext())
-        {
-            var a = U("T1", "准点"); var b = U("T2", "迟到"); var c = U("T3", "昨日旷工"); var d = U("T4", "请假");
-            db.Users.AddRange(a, b, c, d);
-            await db.SaveChangesAsync();
-            db.AttendanceRecords.AddRange(
-                new AttendanceRecord { UserId = a.Id, WorkDate = today, ClockInTime = today.ToDateTime(new TimeOnly(8, 0)), AttendanceStatus = AttendanceStatus.Normal },
-                new AttendanceRecord { UserId = b.Id, WorkDate = today, ClockInTime = today.ToDateTime(new TimeOnly(9, 30)), AttendanceStatus = AttendanceStatus.Late },
-                new AttendanceRecord { UserId = a.Id, WorkDate = yesterday, ClockInTime = yesterday.ToDateTime(new TimeOnly(8, 0)), AttendanceStatus = AttendanceStatus.Normal },
-                new AttendanceRecord { UserId = c.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.Absent },
-                new AttendanceRecord { UserId = d.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.OnLeave });
-            await db.SaveChangesAsync();
-        }
+        using var db = CreateContext();
+        var group = new AttendanceGroup { GroupName = "组" };
+        db.AttendanceGroups.Add(group);
+        await db.SaveChangesAsync();
+        var work = DayShift(); work.AttendanceGroupId = group.Id; work.RestDaysOfWeek = "";                      // 每天都是工作日
+        var rest = DayShift(); rest.AttendanceGroupId = group.Id; rest.RestDaysOfWeek = "0,1,2,3,4,5,6";       // 每天都是休息日
+        db.ShiftSchedules.AddRange(work, rest);
+        var a = U("A", "准点");   var b = U("B", "迟到");     var c = U("C", "还没来");   var d = U("D", "今天休息");
+        var e = U("E", "请假");   var f = U("F", "没排班没来"); var g = U("G", "没排班但来了"); var h = U("H", "明天才入职");
+        var i = U("I", "没填入职日期");
+        h.HireDate = today.AddDays(1); i.HireDate = null;
+        db.Users.AddRange(a, b, c, d, e, f, g, h, i);
+        await db.SaveChangesAsync();
+        foreach (var u in new[] { a, b, c, e, h }) foreach (var day in new[] { today, yesterday })
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = u.Id, WorkDate = day, ShiftScheduleId = work.Id });
+        db.ShiftAssignments.Add(new ShiftAssignment { UserId = d.Id, WorkDate = today, ShiftScheduleId = rest.Id });
+        db.AttendanceRecords.AddRange(
+            new AttendanceRecord { UserId = a.Id, WorkDate = today, ClockInTime = today.ToDateTime(new TimeOnly(8, 0)), AttendanceStatus = AttendanceStatus.Normal },
+            new AttendanceRecord { UserId = b.Id, WorkDate = today, ClockInTime = today.ToDateTime(new TimeOnly(9, 40)), AttendanceStatus = AttendanceStatus.Late },
+            new AttendanceRecord { UserId = e.Id, WorkDate = today, AttendanceStatus = AttendanceStatus.OnLeave },
+            new AttendanceRecord { UserId = g.Id, WorkDate = today, ClockInTime = today.ToDateTime(new TimeOnly(8, 10)), AttendanceStatus = AttendanceStatus.Normal },
+            // 昨天：A 正常，B 旷工，C 旷工，E 请假
+            new AttendanceRecord { UserId = a.Id, WorkDate = yesterday, ClockInTime = yesterday.ToDateTime(new TimeOnly(8, 0)), AttendanceStatus = AttendanceStatus.Normal },
+            new AttendanceRecord { UserId = b.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.Absent },
+            new AttendanceRecord { UserId = c.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.Absent },
+            new AttendanceRecord { UserId = e.Id, WorkDate = yesterday, AttendanceStatus = AttendanceStatus.OnLeave });
+        await db.SaveChangesAsync();
+        return (today, yesterday);
+    }
 
-        using var db2 = CreateContext();
-        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+    [Fact]
+    public async Task 看板出勤率_分母是应出勤_没排班休息日没入职请假的人没来不拉低_来了照样算()
+    {
+        await SeedAttendanceRateWorld();
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+        var s = await svc.GetTodayStatsAsync();
+
+        Assert.Equal(9, s.TotalEmployees);                 // 总人数卡片仍是全部在职需考勤的人
+        Assert.Equal(3, s.PresentCount);                   // A、B（迟到也算出勤）、G（没排班但来了）
+        // 应出勤 = A、B、G（已出勤） + C（排了班、还没来）= 4；
+        // D 今天休息、E 请假、F 没排班没来、H 明天才入职、I 没填入职日期，都不算
+        Assert.Equal(4, s.ExpectedCount);
+        Assert.Equal(75.0, s.AttendanceRate);              // 3 / 4，而不是 3 / 9 = 33.3%
+    }
+
+    [Fact]
+    public async Task 看板近7天_每天按各自的应出勤算出勤率_没有记录的日子标成无数据_昨日旷工能看到()
+    {
+        var (today, yesterday) = await SeedAttendanceRateWorld();
+        using var db = CreateContext();
+        var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
         var trend = await svc.GetRecentTrendAsync(null, 7);
 
         Assert.Equal(7, trend.Count);
         Assert.Equal(today, trend[0].Date);               // 最新的一天排最前
         Assert.Equal(today.AddDays(-6), trend[^1].Date);
-        Assert.All(trend, x => Assert.Equal(4, x.TotalEmployees));
 
         Assert.True(trend[0].HasData);
-        Assert.Equal(2, trend[0].PresentCount);
+        Assert.Equal(3, trend[0].PresentCount);
         Assert.Equal(1, trend[0].LateCount);
-        Assert.Equal(50.0, trend[0].AttendanceRate);      // 2 / 4
+        Assert.Equal(1, trend[0].OnLeaveCount);
+        Assert.Equal(4, trend[0].ExpectedCount);          // 同今日卡片
+        Assert.Equal(75.0, trend[0].AttendanceRate);
 
-        Assert.Equal(1, trend[1].PresentCount);
-        Assert.Equal(1, trend[1].AbsentCount);            // 昨天的旷工在这里能看到
+        Assert.Equal(yesterday, trend[1].Date);
+        Assert.Equal(1, trend[1].PresentCount);           // A
+        Assert.Equal(2, trend[1].AbsentCount);            // B、C 昨天旷工
         Assert.Equal(1, trend[1].OnLeaveCount);
-        Assert.Equal(25.0, trend[1].AttendanceRate);
+        Assert.Equal(3, trend[1].ExpectedCount);          // A + B + C（E 请假不算；G 昨天没来也没排班不算）
+        Assert.Equal(33.3, trend[1].AttendanceRate);      // 1 / 3
 
         Assert.False(trend[2].HasData);                   // 前天没有任何记录 = 休息日/节假日
         Assert.Equal(0, trend[2].AttendanceRate);

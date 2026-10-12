@@ -31,9 +31,9 @@ public class DashboardModel(IAttendanceService attendanceService, IDeptScopeServ
         return new JsonResult(new
         {
             Success = true,
-            Total = s.TotalEmployees, Present = s.PresentCount, Absent = s.AbsentCount, Late = s.LateCount,
+            Total = s.TotalEmployees, Expected = s.ExpectedCount, Present = s.PresentCount, Absent = s.AbsentCount, Late = s.LateCount,
             OnLeave = s.OnLeaveCount, NotPunched = s.NotPunchedCount,
-            Rate = s.TotalEmployees > 0 ? Math.Round((double)s.PresentCount / s.TotalEmployees * 100, 1) : 0,
+            Rate = s.AttendanceRate,
             UpdatedAt = DateTime.Now.ToString("HH:mm:ss")
         });
     }

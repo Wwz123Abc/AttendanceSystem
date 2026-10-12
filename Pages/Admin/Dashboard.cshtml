@@ -106,10 +106,11 @@
             <div class="card-header">出勤率</div>
             <div class="card-body text-center py-4">
                 @{
-                    var rate = s.TotalEmployees > 0 ? (double)s.PresentCount / s.TotalEmployees * 100 : 0;
+                    var rate = s.AttendanceRate;
                 }
                 <div class="display-4 fw-bold text-success" id="st-rate">@rate.ToString("F1")%</div>
-                <div class="text-muted small" id="st-ratetext">@s.PresentCount / @s.TotalEmployees 人出勤</div>
+                <div class="text-muted small" id="st-ratetext">@s.PresentCount / @s.ExpectedCount 人出勤（出勤 ÷ 应出勤）</div>
+                <div class="text-muted small" style="font-size:12px">应出勤 = 已办入职的在职员工，去掉请假/节假日，以及今天没排班或休息又没打卡的人</div>
                 <div class="progress mt-3" style="height:10px;border-radius:var(--radius-sm);background:var(--gray-bg)">
                     <div class="progress-bar bg-success" id="st-ratebar" style="width:@rate%;border-radius:var(--radius-sm)"></div>
                 </div>
@@ -121,11 +122,11 @@
 <div class="row g-4 mt-1">
     <div class="col-12">
         <div class="card">
-            <div class="card-header">近 7 天出勤情况 <small class="text-muted fw-normal ms-2">人数按状态统计；出勤率 = 出勤 ÷ 当前在职人数；整天没有记录的日子（休息日、节假日）不统计</small></div>
+            <div class="card-header">近 7 天出勤情况 <small class="text-muted fw-normal ms-2">人数按状态统计；出勤率 = 出勤 ÷ 应出勤；整天没有记录的日子（休息日、节假日）不统计</small></div>
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0">
                     <thead>
-                        <tr><th>日期</th><th class="text-end">出勤</th><th class="text-end">迟到</th><th class="text-end">请假</th><th class="text-end">旷工</th><th style="min-width:180px">出勤率</th></tr>
+                        <tr><th>日期</th><th class="text-end">应出勤</th><th class="text-end">出勤</th><th class="text-end">迟到</th><th class="text-end">请假</th><th class="text-end">旷工</th><th style="min-width:180px">出勤率</th></tr>
                     </thead>
                     <tbody>
                         @foreach (var d in Model.Trend)
@@ -135,6 +136,7 @@
                                 <td class="text-nowrap">@d.Date.ToString("MM-dd") 周@(dayName)@(d.Date == s.StatsDate ? " · 今天" : "")</td>
                                 @if (d.HasData)
                                 {
+                                    <td class="text-end">@d.ExpectedCount</td>
                                     <td class="text-end">@d.PresentCount</td>
                                     <td class="text-end">@d.LateCount</td>
                                     <td class="text-end">@d.OnLeaveCount</td>
@@ -148,7 +150,7 @@
                                 }
                                 else
                                 {
-                                    <td colspan="5" class="small">无考勤记录（休息日/节假日）</td>
+                                    <td colspan="6" class="small">无考勤记录（休息日/节假日）</td>
                                 }
                             </tr>
                         }

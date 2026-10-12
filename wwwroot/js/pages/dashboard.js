@@ -57,7 +57,7 @@ async function refreshStats() {
         set('st-total', s.total); set('st-present', s.present); set('st-absent', s.absent);
         set('st-late', s.late); set('st-onleave', s.onLeave); set('st-notpunched', s.notPunched);
         set('st-rate', s.rate.toFixed(1) + '%');
-        set('st-ratetext', `${s.present} / ${s.total} 人出勤`);
+        set('st-ratetext', `${s.present} / ${s.expected} 人出勤（出勤 ÷ 应出勤）`);
         const bar = document.getElementById('st-ratebar');
         if (bar) bar.style.width = s.rate + '%';
         set('st-updated', '更新于 ' + s.updatedAt);

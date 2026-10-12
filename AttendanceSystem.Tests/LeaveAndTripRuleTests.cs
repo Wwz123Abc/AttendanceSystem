@@ -130,6 +130,7 @@ public class LeaveAndTripRuleTests : SqliteTestBase
         using var db = CreateContext();
         var svc = new ApprovalService(db, new FakeAttendanceService(), AppOptions);
         var start = DateTime.Now.AddMonths(2);
+        while (start.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) start = start.AddDays(1);   // 事假选在休息日会被拦截，所以挑个工作日（否则这条测试会随日期忽过忽不过）
         var request = await svc.SubmitApprovalAsync(uid, new SubmitApprovalDto
         {
             ApprovalType = ApprovalType.Leave, LeaveType = LeaveType.PersonalLeave,

@@ -14,16 +14,16 @@ namespace AttendanceSystem.Services.Implementations;
 /// <summary>今日统计、迟到早退口径、出勤天数折算、休息日判断（<see cref="AttendanceService"/> 的一部分）。</summary>
 public partial class AttendanceService
 {
-    /// <summary>今日考勤看板统计（出勤/旷工/迟到/请假/未打卡人数）。</summary>
+    /// <summary>今日考勤看板统计（出勤/旷工/迟到/请假/未打卡人数，以及出勤率的分母"应出勤"）。</summary>
     public async Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default)
     {
         var today   = DateOnly.FromDateTime(clock.LocalToday());
         var users   = UserIdQuery(null, groupId, deptIds, excludeExempt: true);
         var total   = await users.CountAsync(ct);
-        // 只取算数用的两个字段（状态、有没有上班卡），不再把整行考勤记录拉回来；筛选人员用子查询，不再先查出几千个 id 再塞进 IN 列表
+        // 只取算数用的几个字段，不再把整行考勤记录拉回来；筛选人员用子查询，不再先查出几千个 id 再塞进 IN 列表
         var records = await db.AttendanceRecords
             .Where(r => r.WorkDate == today && users.Contains(r.UserId))
-            .Select(r => new { r.AttendanceStatus, HasClockIn = r.ClockInTime != null })
+            .Select(r => new { r.UserId, r.AttendanceStatus, HasClockIn = r.ClockInTime != null })
             .ToListAsync(ct);
 
         bool Present(AttendanceStatus s, bool hasClockIn) => hasClockIn || s == AttendanceStatus.BusinessTrip;   // 同 IsPresent
@@ -38,10 +38,17 @@ public partial class AttendanceService
         var accountedForCount = records.Count(r => !Present(r.AttendanceStatus, r.HasClockIn) &&
             r.AttendanceStatus is AttendanceStatus.Absent or AttendanceStatus.OnLeave or AttendanceStatus.Holiday);
 
+        // 应出勤（出勤率的分母）：见 CountExpected
+        var hireDates   = await HireDatesAsync(users, ct);
+        var shiftByUser = await ShiftsOnDayAsync(users, today, ct);
+        var stateByUser = records.ToDictionary(r => r.UserId, r => (r.AttendanceStatus, r.HasClockIn));
+        var expected    = CountExpected(today, hireDates, shiftByUser, stateByUser);
+
         return new AttendanceStatsDto
         {
             StatsDate       = today,
             TotalEmployees  = total,
+            ExpectedCount   = expected,
             PresentCount    = presentCount,   // 打了上班卡，或已批准出差（无需打卡也算全勤）
             AbsentCount     = records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent),
             // 迟到按「状态」统计（与缺勤/请假口径一致）：钉钉同步只写状态不写迟到分钟数，
@@ -53,9 +60,43 @@ public partial class AttendanceService
         };
     }
 
+    /// <summary>范围内每个人的入职日期（没填的是 null）。</summary>
+    private async Task<List<(int Id, DateOnly? Hire)>> HireDatesAsync(IQueryable<int> users, CancellationToken ct)
+        => (await db.Users.Where(u => users.Contains(u.Id)).Select(u => new { u.Id, u.HireDate }).ToListAsync(ct))
+            .Select(u => (u.Id, u.HireDate)).ToList();
+
+    /// <summary>某一天范围内每个人排的班次（没排班的不在字典里）。</summary>
+    private async Task<Dictionary<int, ShiftSchedule>> ShiftsOnDayAsync(IQueryable<int> users, DateOnly day, CancellationToken ct)
+        => (await db.ShiftAssignments.Where(a => a.WorkDate == day && users.Contains(a.UserId))
+                .Select(a => new { a.UserId, a.ShiftSchedule }).ToListAsync(ct))
+            .GroupBy(a => a.UserId).ToDictionary(g => g.Key, g => g.First().ShiftSchedule);
+
     /// <summary>
-    /// 看板"近几天出勤情况"：从今天往前数 <paramref name="days"/> 天，每天的出勤/迟到/请假/旷工人数。
-    /// 人数口径跟今日卡片一致（按状态数、免考勤的人不算）；总人数用"当前在职人数"，不回溯历史人员变动。
+    /// 某一天的"应出勤"人数（出勤率的分母）。算进去的人：
+    /// ① 已经出勤的（打了上班卡或出差）——不管有没有排班，打了卡就是应出勤的；
+    /// ② 还没出勤的，要同时满足：已办入职（入职日期已填且不晚于这天）、没有请假/节假日状态、
+    ///    这天排了班且按班次配置不是休息日。
+    /// 所以没排班、休息日、还没入职、请假的人，只要没来，就不拉低出勤率；他们来了照样算出勤。
+    /// </summary>
+    private static int CountExpected(DateOnly day, List<(int Id, DateOnly? Hire)> users,
+        Dictionary<int, ShiftSchedule> shiftByUser, Dictionary<int, (AttendanceStatus Status, bool HasClockIn)> stateByUser)
+    {
+        var n = 0;
+        foreach (var (id, hire) in users)
+        {
+            var hasRecord = stateByUser.TryGetValue(id, out var rec);
+            if (hasRecord && (rec.HasClockIn || rec.Status == AttendanceStatus.BusinessTrip)) { n++; continue; }
+            if (hire is null || hire.Value > day) continue;
+            if (hasRecord && rec.Status is AttendanceStatus.OnLeave or AttendanceStatus.Holiday) continue;
+            if (shiftByUser.TryGetValue(id, out var shift) && !IsShiftWeeklyRestDay(day, shift)) n++;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// 看板"近几天出勤情况"：从今天往前数 <paramref name="days"/> 天，每天的出勤/迟到/请假/旷工人数和应出勤人数。
+    /// 人数口径跟今日卡片一致（按状态数、免考勤的人不算、应出勤按 <see cref="CountExpected"/>）；
+    /// 人员范围用"当前在职人员"，不回溯历史人员变动。
     /// 一整天一条记录都没有的日子（休息日、节假日）<see cref="DailyAttendanceTrendDto.HasData"/> 为 false。
     /// </summary>
     public async Task<List<DailyAttendanceTrendDto>> GetRecentTrendAsync(HashSet<int>? deptIds, int days = 7, CancellationToken ct = default)
@@ -63,29 +104,34 @@ public partial class AttendanceService
         var today = DateOnly.FromDateTime(clock.LocalToday());
         var start = today.AddDays(-(days - 1));
         var users = UserIdQuery(null, null, deptIds, excludeExempt: true);
-        var total = await users.CountAsync(ct);
-        var rows = await db.AttendanceRecords
+        var hireDates = await HireDatesAsync(users, ct);
+        var records = await db.AttendanceRecords
             .Where(r => r.WorkDate >= start && r.WorkDate <= today && users.Contains(r.UserId))
-            .GroupBy(r => r.WorkDate)
-            .Select(g => new
-            {
-                Date    = g.Key,
-                Records = g.Count(),
-                Present = g.Count(r => r.ClockInTime != null || r.AttendanceStatus == AttendanceStatus.BusinessTrip),
-                Late    = g.Count(r => r.AttendanceStatus == AttendanceStatus.Late),
-                OnLeave = g.Count(r => r.AttendanceStatus == AttendanceStatus.OnLeave),
-                Absent  = g.Count(r => r.AttendanceStatus == AttendanceStatus.Absent)
-            })
+            .Select(r => new { r.UserId, r.WorkDate, r.AttendanceStatus, HasClockIn = r.ClockInTime != null })
             .ToListAsync(ct);
-        var byDate = rows.ToDictionary(x => x.Date);
+        var assigns = await db.ShiftAssignments
+            .Where(a => a.WorkDate >= start && a.WorkDate <= today && users.Contains(a.UserId))
+            .Select(a => new { a.UserId, a.WorkDate, a.ShiftSchedule })
+            .ToListAsync(ct);
+        var recordsByDay = records.GroupBy(r => r.WorkDate).ToDictionary(g => g.Key, g => g.ToList());
+        var shiftsByDay  = assigns.GroupBy(a => a.WorkDate).ToDictionary(g => g.Key, g => g.GroupBy(a => a.UserId).ToDictionary(x => x.Key, x => x.First().ShiftSchedule));
+
         var list = new List<DailyAttendanceTrendDto>();
         for (var d = today; d >= start; d = d.AddDays(-1))   // 最新的一天排最上面
         {
-            byDate.TryGetValue(d, out var x);
+            recordsByDay.TryGetValue(d, out var recs);
+            recs ??= [];
+            shiftsByDay.TryGetValue(d, out var shifts);
+            var states = recs.ToDictionary(r => r.UserId, r => (r.AttendanceStatus, r.HasClockIn));
             list.Add(new DailyAttendanceTrendDto
             {
-                Date = d, TotalEmployees = total, HasData = x is not null,
-                PresentCount = x?.Present ?? 0, LateCount = x?.Late ?? 0, OnLeaveCount = x?.OnLeave ?? 0, AbsentCount = x?.Absent ?? 0
+                Date = d,
+                HasData = recs.Count > 0,
+                ExpectedCount = CountExpected(d, hireDates, shifts ?? [], states),
+                PresentCount = recs.Count(r => r.HasClockIn || r.AttendanceStatus == AttendanceStatus.BusinessTrip),
+                LateCount    = recs.Count(r => r.AttendanceStatus == AttendanceStatus.Late),
+                OnLeaveCount = recs.Count(r => r.AttendanceStatus == AttendanceStatus.OnLeave),
+                AbsentCount  = recs.Count(r => r.AttendanceStatus == AttendanceStatus.Absent)
             });
         }
         return list;
