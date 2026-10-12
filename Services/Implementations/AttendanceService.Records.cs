@@ -93,18 +93,22 @@ public partial class AttendanceService
         {
             shifts.TryGetValue((d.UserId, d.WorkDate), out var shift);
             punchesByUser.TryGetValue(d.UserId, out var punches);
-            d.MidCheckHits = FindLateMidChecks(d.WorkDate, shift, d.MidCheckHits, d.ClockOutTime, punches ?? []);
+            d.MidCheckHits = FindLateMidChecks(d.WorkDate, shift, d.MidCheckHits, d.ClockOutTime, punches ?? [], d.ClockInTime);
         }
     }
 
     /// <summary>
     /// 在没命中的窗口里找"迟到"的那次午间打卡：窗口结束之后的第一次打卡，并且要早于——下一段窗口的开始、
     /// 下班打卡、"应下班前 <see cref="ClockOutEligibleHoursBeforeEnd"/> 小时"（再晚就是下班那一次了）。
+    /// 还要晚于上班卡——上午请假、窗口过了才来上班的人，那张上班卡不是"午间迟到"。
     /// 夜班窗口跨过午夜按班次推算到第二天。找不到就保持"未打卡"。
     /// </summary>
     public static List<MidCheckWindowResult> FindLateMidChecks(
-        DateOnly workDate, ShiftSchedule? shift, List<MidCheckWindowResult> hits, DateTime? clockOut, List<DateTime> punches)
+        DateOnly workDate, ShiftSchedule? shift, List<MidCheckWindowResult> hits, DateTime? clockOut, List<DateTime> punches,
+        DateTime? clockIn = null)
     {
+        // 上班卡所在的那一分钟也要排除（打卡流水精确到分钟，记录上的上班时间带秒）
+        var lowerBound = clockIn is { } ci ? new DateTime(ci.Year, ci.Month, ci.Day, ci.Hour, ci.Minute, 0) : DateTime.MinValue;
         DateTime Resolve(TimeOnly t) => shift is null ? workDate.ToDateTime(t) : ResolveShiftTime(workDate, t, shift);
         DateTime? upperByShift = null;
         if (shift is not null)
@@ -123,7 +127,7 @@ public partial class AttendanceService
             if (i + 1 < hits.Count) upper = Min(upper, Resolve(hits[i + 1].WindowStart));
             if (clockOut is { } co) upper = Min(upper, co);
             if (upperByShift is { } u) upper = Min(upper, u);
-            var late = punches.Where(t => t > windowEnd && t < upper).OrderBy(t => t).Cast<DateTime?>().FirstOrDefault();
+            var late = punches.Where(t => t > windowEnd && t > lowerBound && t < upper).OrderBy(t => t).Cast<DateTime?>().FirstOrDefault();
             result.Add(late.HasValue ? h with { LateTime = TimeOnly.FromDateTime(late.Value) } : h);
         }
         return result;

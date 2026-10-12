@@ -27,6 +27,41 @@ public class LateMidCheckDisplayTests : SqliteTestBase
     }
 
     [Fact]
+    public void 上班就晚于午间窗口_那张上班卡不算午间迟到()
+    {
+        var shift = DayShift();   // 08:30–17:30
+        List<MidCheckWindowResult> w = [new(new TimeOnly(11, 30), new TimeOnly(12, 30), null)];
+        // 上午请假、13:00 才来上班：当天只有 13:00 上班卡和 17:30 下班卡
+        var r = AttendanceService.FindLateMidChecks(Tue, shift, w, At(Tue, 17, 30), [At(Tue, 13, 0), At(Tue, 17, 30)], At(Tue, 13, 0));
+        Assert.False(Assert.Single(r).IsLate);
+        // 记录上的上班时间带秒（13:00:20），流水精确到分钟（13:00），同一分钟也不算
+        var r2 = AttendanceService.FindLateMidChecks(Tue, shift, w, At(Tue, 17, 30), [At(Tue, 13, 0), At(Tue, 17, 30)], At(Tue, 13, 0).AddSeconds(20));
+        Assert.False(Assert.Single(r2).IsLate);
+        // 上班卡之后、窗口结束之后真有一次午间卡（13:20），仍然算迟到
+        var r3 = AttendanceService.FindLateMidChecks(Tue, shift, w, At(Tue, 17, 30), [At(Tue, 8, 25), At(Tue, 13, 20), At(Tue, 17, 30)], At(Tue, 8, 25));
+        Assert.Equal(new TimeOnly(13, 20), Assert.Single(r3).LateTime);
+    }
+
+    [Fact]
+    public async Task 我的记录_上班晚于午间窗口_午间显示未打卡_不显示迟到()
+    {
+        var (uid, _) = SeedDayMidWorld();    // 窗口 12:00–13:00
+        using (var db = CreateContext())
+        {
+            var att = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var sync = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
+            await sync.ProcessAttLogAsync("SNM", [
+                new ZKAttLogRow("M1", At(Tue, 13, 30), 0, 15),
+                new ZKAttLogRow("M1", At(Tue, 17, 40), 0, 15)]);
+        }
+        using var db2 = CreateContext();
+        var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
+        var rec = Assert.Single(await svc.GetPersonalAttendanceAsync(new PersonalAttendanceQueryDto { UserId = uid, StartDate = Tue, EndDate = Tue }));
+        Assert.False(Assert.Single(rec.MidCheckHits).IsLate);
+        Assert.Equal("--", rec.MidCheckTimeText);
+    }
+
+    [Fact]
     public void 没有午间打卡_只有上下班卡_仍然是未打卡_不会把下班卡当成迟到的午间卡()
     {
         var shift = DayShift();
