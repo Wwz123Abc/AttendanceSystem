@@ -5,7 +5,7 @@
 <div class="page-header">
     <h4><i class="bi bi-clock-history me-2 text-primary"></i>手动补卡</h4>
 </div>
-<div class="text-muted small mb-3">管理员权限：可直接为任意员工、任意日期补录/修改打卡时间，保存后立即生效，不需要审批。</div>
+<div class="text-muted small mb-3">管理员权限：可直接为员工补上班卡、下班卡、午间打卡，规则和员工自己提交的补卡申请一致，保存后立即生效，不需要审批。</div>
 
 @if (!string.IsNullOrEmpty(Model.SuccessMessage))
 {
@@ -45,14 +45,24 @@
                     <div id="currentRecordBox" class="alert alert-light border small py-2" style="display:none"></div>
 
                     <div class="mb-3">
-                        <label class="form-label">上班打卡时间</label>
-                        <input asp-for="ClockInTime" type="datetime-local" class="form-control" id="fClockIn" />
-                        <div class="form-text">留空表示不修改上班打卡时间。</div>
+                        <label class="form-label">补哪种卡 <span class="text-danger">*</span></label>
+                        <select asp-for="PunchTypeValue" class="form-select" id="fPunchType">
+                            <option value="1">上班卡</option>
+                            <option value="2">下班卡</option>
+                            <option value="3">午间打卡</option>
+                        </select>
+                        <div class="form-text" id="fPunchTypeHelp"></div>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">下班打卡时间</label>
-                        <input asp-for="ClockOutTime" type="datetime-local" class="form-control" id="fClockOut" />
-                        <div class="form-text">留空表示不修改下班打卡时间；夜班等跨天班次请把日期部分选到次日。</div>
+                        <label class="form-label">补的打卡时间 <span class="text-danger">*</span></label>
+                        <input asp-for="PunchAt" type="datetime-local" class="form-control" id="fPunchAt" required />
+                        <div class="form-text">夜班等跨天班次的下班卡，请把日期选到次日。</div>
+                    </div>
+                    <div class="mb-3 form-check" id="fOverwriteBox">
+                        <input asp-for="AllowOverwrite" type="checkbox" class="form-check-input" id="fOverwrite" />
+                        <label class="form-check-label" for="fOverwrite">强制覆盖已有的上班/下班时间</label>
+                        <div class="form-text">不勾：和员工自己补卡一样，上班卡只有比现有的更早、下班卡只有比现有的更晚才会生效，防止把好数据覆盖掉。
+                            只有确认已有的时间填错了、要改掉它时才勾。</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">备注 <small class="text-muted">（可选）</small></label>
@@ -69,7 +79,9 @@
         <div class="alert alert-info small mb-0">
             <i class="bi bi-info-circle me-1"></i>
             保存后会按该员工当天排班的班次规则（含午间必打卡窗口）自动重算实际工时和迟到/早退状态，
-            口径和员工自己提交"补卡申请"经审批通过后的效果完全一致——区别只是不需要审批，管理员操作即时生效。
+            口径和员工自己提交"补卡申请"经审批通过后的效果完全一致——区别只是不需要审批，管理员操作即时生效。<br />
+            <strong>补午间那次卡请选"午间打卡"</strong>：只新增一条午间打卡，不会动上班、下班时间；时间要填在班次的午间窗口内。
+            补之前先点"查询当前打卡记录"，能看到这天的班次、午间窗口和所有原始打卡。
         </div>
     </div>
 </div>

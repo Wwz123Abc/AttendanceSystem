@@ -1,5 +1,6 @@
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
+using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Tests;
@@ -35,6 +36,7 @@ public class FakeAttendanceService : IAttendanceService
     public Task<List<DailyAttendanceTrendDto>> GetRecentTrendAsync(HashSet<int>? deptIds, int days = 7, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<List<AttendanceRecordDto>> GetTodayStatsDetailAsync(string category, int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<ShiftAssignment?> GetShiftAssignmentAsync(int userId, DateOnly date) => throw new NotImplementedException();
+    public Task AdminReplenishPunchAsync(int userId, DateOnly workDate, PunchType type, DateTime punchAt, bool allowOverwrite, string? remark, string? operatorName) => throw new NotImplementedException();
     public Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName) => throw new NotImplementedException();
     public Task<List<MyScheduleDto>> GetMyScheduleAsync(int userId, DateOnly start, DateOnly end) => throw new NotImplementedException();
     public Task<TemplateReportRowDto?> GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default) => throw new NotImplementedException();

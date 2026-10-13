@@ -47,15 +47,34 @@ async function loadCurrentRecord() {
     try {
         const resp = await fetch(`?handler=Record&userId=${userId}&workDate=${workDate}`);
         const data = await resp.json();
+        const extra = `<br>班次：${escapeHtml(data.shift || '—')}`
+            + `<br>原始打卡：${(data.punches && data.punches.length) ? data.punches.map(escapeHtml).join('、') : '无'}`
+            + (data.midResult ? `<br>午间命中：${escapeHtml(data.midResult)}` : '');
         if (!data.exists) {
-            box.innerHTML = '<i class="bi bi-info-circle me-1"></i>该员工这一天暂无考勤记录。';
+            box.innerHTML = '<i class="bi bi-info-circle me-1"></i>该员工这一天暂无考勤记录。' + extra;
         } else {
             box.innerHTML = `<i class="bi bi-info-circle me-1"></i>当前记录：上班 ${data.clockIn ? data.clockIn.replace('T', ' ') : '--'}，`
                 + `下班 ${data.clockOut ? data.clockOut.replace('T', ' ') : '--'}，状态 ${data.status}，工时 ${data.workHours} 小时`
-                + (data.note ? `，备注：${escapeHtml(data.note)}` : '');
+                + (data.note ? `，备注：${escapeHtml(data.note)}` : '') + extra;
         }
         box.style.display = '';
     } catch (e) { alert('查询失败，请重试'); }
 }
 
 // escapeHtml 已在 _Layout.cshtml 里全局定义一份，这里不再重复声明（2026-09-21 去重）。
+
+// 补卡类型不同，说明和"强制覆盖"是否可用也不同：午间卡只新增一条，不存在覆盖
+const PUNCH_TYPE_HELP = {
+    '1': '补上班卡：默认只有比现有上班时间更早才生效。',
+    '2': '补下班卡：默认只有比现有下班时间更晚才生效。',
+    '3': '补午间那次打卡：时间必须落在班次的午间窗口内、且这一段还没打上卡，只新增一条，不动上下班时间。'
+};
+function refreshPunchTypeUi() {
+    const v = document.getElementById('fPunchType').value;
+    document.getElementById('fPunchTypeHelp').textContent = PUNCH_TYPE_HELP[v] || '';
+    const mid = v === '3';
+    document.getElementById('fOverwriteBox').style.display = mid ? 'none' : '';
+    if (mid) document.getElementById('fOverwrite').checked = false;
+}
+document.getElementById('fPunchType').addEventListener('change', refreshPunchTypeUi);
+refreshPunchTypeUi();

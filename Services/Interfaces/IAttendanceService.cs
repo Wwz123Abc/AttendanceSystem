@@ -1,5 +1,6 @@
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
+using AttendanceSystem.Models.Enums;
 
 namespace AttendanceSystem.Services.Interfaces;
 
@@ -73,6 +74,12 @@ public interface IAttendanceService
     /// clockIn/clockOut 传 null 表示不改那一侧的打卡时间。operatorName 会记进备注里，方便留操作痕迹。
     /// </summary>
     Task                           AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName);
+    /// <summary>
+    /// 管理员帮员工补一次卡（上班 / 下班 / 午间），规则和员工自己提交的补卡申请一致（见 PunchReplenishmentRules）：
+    /// 上班卡要比现有的更早、下班卡要比现有的更晚、午间卡必须落在还没命中的午间窗口里；不满足就抛 BusinessException 说明原因。
+    /// <paramref name="allowOverwrite"/> = 勾了"强制覆盖"：上班/下班卡允许直接改掉已有时间。
+    /// </summary>
+    Task                           AdminReplenishPunchAsync(int userId, DateOnly workDate, PunchType type, DateTime punchAt, bool allowOverwrite, string? remark, string? operatorName);
     /// <summary>
     /// 生成"模板月度汇总表"（对照公司要求的外部模板文件列结构）。
     /// 统计周期可以是任意起止日期（比如"上月26号至本月25号"这种薪资结算周期，不一定是自然月）。

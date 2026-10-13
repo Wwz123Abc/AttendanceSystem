@@ -365,6 +365,66 @@ public partial class AttendanceService
         await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
     }
 
+    /// <summary>
+    /// 管理员帮员工补一次卡（上班 / 下班 / 午间）：和员工自己提交"补卡申请"经审批通过后的效果一致，用同一套规则
+    /// （<see cref="PunchReplenishmentRules"/>）——上班卡要比现有的更早、下班卡要比现有的更晚、午间卡只新增一条午间打卡
+    /// 且必须落在还没命中的窗口里，位置上不能越过前一天的下班卡/下一个上班；区别只是不用审批、立即生效。
+    /// 不满足就抛 <see cref="BusinessException"/> 写明原因。管理员确实要改掉已有的上班/下班时间时勾"强制覆盖"
+    /// （<paramref name="allowOverwrite"/>）：只跳过"更早/更晚"这一条，其余检查照旧。
+    /// 备注里写明操作人和补的是哪种卡，页面下方的操作记录靠它追溯。
+    /// </summary>
+    public async Task AdminReplenishPunchAsync(int userId, DateOnly workDate, PunchType type, DateTime punchAt, bool allowOverwrite, string? remark, string? operatorName)
+    {
+        if (!string.IsNullOrWhiteSpace(remark) && remark.Trim().Length > 100)
+            throw new BusinessException("补卡备注不能超过 100 个字");
+        var td = DateOnly.FromDateTime(punchAt);
+        if (td < workDate || td > workDate.AddDays(1))
+            throw new BusinessException($"打卡时间 {punchAt:yyyy-MM-dd HH:mm} 不在考勤日 {workDate:yyyy-MM-dd} 当天或第二天，请检查日期");
+        if (punchAt > clock.LocalNow())
+            throw new BusinessException($"打卡时间 {punchAt:yyyy-MM-dd HH:mm} 还没到，不能补录未来的打卡");
+
+        var ctx = await PunchReplenishmentRules.LoadAsync(db, userId, workDate);
+        // 管理员"强制覆盖"只对上班/下班卡有意义
+        var problem = PunchReplenishmentRules.FindProblem(type, workDate, punchAt, ctx, allowOverwrite && type != PunchType.MidCheck);
+        if (problem is not null) throw new BusinessException(problem);
+
+        var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
+        var typeText = PunchReplenishmentRules.TypeText(type);
+        var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员手动补卡" : $"管理员手动补卡（操作人：{operatorName}）";
+        var note = $"{opText}：补{typeText}卡 {punchAt:HH:mm}" + (string.IsNullOrWhiteSpace(remark) ? "" : $"，{remark.Trim()}");
+
+        if (type == PunchType.MidCheck)
+        {
+            if (record is null) throw new BusinessException("这天没有考勤记录，请先补上班卡");   // 规则已保证有上班卡，这里只是防御
+            if (!await db.AttendancePunches.AnyAsync(p => p.UserId == userId && p.PunchType == PunchType.MidCheck && p.PunchTime == punchAt))
+                db.AttendancePunches.Add(new AttendancePunch
+                {
+                    UserId = userId, PunchTime = punchAt, PunchType = PunchType.MidCheck, IsValid = true,
+                    DeviceInfo = $"管理员补卡:{operatorName}", CreatedAt = clock.LocalNow()
+                });
+            await db.SaveChangesAsync();   // 先落库，下面重算午间命中要读到这条新打卡
+            AppendApprovalNote(record, note);
+            record.UpdatedAt = clock.LocalNow();
+            record.MidCheckResults = (await LoadMidCheckResultsAsync(userId, workDate, ctx.Shift))?.FormatMidCheckResults();
+        }
+        else
+        {
+            if (record is null)
+            {
+                record = new AttendanceRecord { UserId = userId, WorkDate = workDate };
+                db.AttendanceRecords.Add(record);
+            }
+            if (type == PunchType.ClockIn) record.ClockInTime = punchAt;
+            else                           record.ClockOutTime = punchAt;
+            AppendApprovalNote(record, note);
+            record.UpdatedAt = clock.LocalNow();
+        }
+
+        await RecalcWorkHoursAfterManualPunchAsync(record, userId);
+        await db.SaveChangesAsync();
+        await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
+    }
+
     // ── 私有计算方法（下面这些只在本服务内部使用）─────────────────────────────────
 
     /// <summary>

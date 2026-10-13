@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
+using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
 using AttendanceSystem.Models.Exceptions;
@@ -23,9 +24,10 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
 {
     [BindProperty] public int      UserId       { get; set; }
     [BindProperty] public DateOnly WorkDate     { get; set; } = DateOnly.FromDateTime(DateTime.Today);
-    [BindProperty] public string?  ClockInTime  { get; set; }   // datetime-local 字符串，如 2026-08-13T20:05
-    [BindProperty] public string?  ClockOutTime { get; set; }
-    [BindProperty] public string?  Remark       { get; set; }
+    [BindProperty] public int      PunchTypeValue { get; set; } = (int)PunchType.ClockIn;   // 补哪种卡：1 上班 / 2 下班 / 3 午间
+    [BindProperty] public string?  PunchAt        { get; set; }   // datetime-local 字符串，如 2026-08-13T20:05
+    [BindProperty] public bool     AllowOverwrite { get; set; }   // 强制覆盖：允许直接改掉已有的上班/下班时间
+    [BindProperty] public string?  Remark         { get; set; }
 
     public string? SuccessMessage { get; set; }
     public string? ErrorMessage   { get; set; }
@@ -59,24 +61,14 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
             if (!cuAdj.CanManageAccount(user.Role, user.ScopedDepartmentId))
                 throw new BusinessException("无权给该账号补卡，请联系总部管理员操作");
 
-            DateTime? clockIn = null;
-            if (!string.IsNullOrWhiteSpace(ClockInTime))
-            {
-                if (!DateTime.TryParse(ClockInTime, out var ci)) throw new BusinessException("打卡时间格式不正确");
-                clockIn = ci;
-            }
-            DateTime? clockOut = null;
-            if (!string.IsNullOrWhiteSpace(ClockOutTime))
-            {
-                if (!DateTime.TryParse(ClockOutTime, out var co)) throw new BusinessException("打卡时间格式不正确");
-                clockOut = co;
-            }
-            if (clockIn is null && clockOut is null)
-                throw new BusinessException("上班/下班打卡时间至少要填一个");
+            if (!Enum.IsDefined(typeof(PunchType), PunchTypeValue)) throw new BusinessException("请选择补卡类型");
+            var type = (PunchType)PunchTypeValue;
+            if (string.IsNullOrWhiteSpace(PunchAt) || !DateTime.TryParse(PunchAt, out var punchAt))
+                throw new BusinessException("请填写补卡的打卡时间");
 
             var operatorName = User.FindFirstValue("RealName");
-            await attendanceService.AdminAdjustPunchAsync(UserId, WorkDate, clockIn, clockOut, Remark, operatorName);
-            SuccessMessage = $"已为 {user.RealName}（{user.EmployeeNo}）补录 {WorkDate:yyyy-MM-dd} 的打卡记录";
+            await attendanceService.AdminReplenishPunchAsync(UserId, WorkDate, type, punchAt, AllowOverwrite, Remark, operatorName);
+            SuccessMessage = $"已为 {user.RealName}（{user.EmployeeNo}）补录 {WorkDate:yyyy-MM-dd} 的{PunchReplenishmentRules.TypeText(type)}卡（{punchAt:MM-dd HH:mm}），已按班次规则重算工时";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)
@@ -123,6 +115,15 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
         return new JsonResult(users);
     }
 
+    /// <summary>打卡来源的简短说明：考勤机 / 补卡，其余不标。</summary>
+    private static string PunchSourceText(string? deviceInfo) => deviceInfo switch
+    {
+        null or "" => "",
+        var s when s.StartsWith("ZKDevice") => "·考勤机",
+        var s when s.StartsWith("补卡") || s.StartsWith("管理员补卡") => "·补卡",
+        _ => ""
+    };
+
     /// <summary>查询某员工某天当前的打卡记录（AJAX）：补卡前先看看现状，避免误覆盖。</summary>
     public async Task<JsonResult> OnGetRecordAsync(int userId, DateOnly workDate)
     {
@@ -131,9 +132,24 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
             return new JsonResult(new { exists = false });
 
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
-        if (record is null) return new JsonResult(new { exists = false });
+        // 班次、午间窗口、这天前后的所有原始打卡：补卡前先看清，免得把午间那次卡当成上班/下班补
+        var shift = await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate == workDate)
+            .Select(a => a.ShiftSchedule).FirstOrDefaultAsync();
+        var from = workDate.ToDateTime(TimeOnly.MinValue);
+        var punches = (await db.AttendancePunches
+                .Where(p => p.UserId == userId && p.PunchTime >= from && p.PunchTime < from.AddDays(2))
+                .OrderBy(p => p.PunchTime).Select(p => new { p.PunchTime, p.PunchType, p.DeviceInfo }).ToListAsync())
+            .Select(p => $"{p.PunchTime:MM-dd HH:mm}（{PunchReplenishmentRules.TypeText(p.PunchType)}{PunchSourceText(p.DeviceInfo)}）")
+            .ToList();
+        var shiftText = shift is null ? "未排班"
+            : $"{shift.ShiftName} {shift.WorkStartTime:HH\\:mm}-{shift.WorkEndTime:HH\\:mm}"
+              + (string.IsNullOrWhiteSpace(shift.MidCheckWindows) ? "，无午间窗口" : $"，午间窗口 {shift.MidCheckWindows.Replace(",", "、")}");
+        if (record is null) return new JsonResult(new { exists = false, shift = shiftText, punches });
         return new JsonResult(new
         {
+            shift     = shiftText,
+            punches,
+            midResult = record.MidCheckResults,
             exists    = true,
             clockIn   = record.ClockInTime?.ToString("yyyy-MM-ddTHH:mm"),
             clockOut  = record.ClockOutTime?.ToString("yyyy-MM-ddTHH:mm"),

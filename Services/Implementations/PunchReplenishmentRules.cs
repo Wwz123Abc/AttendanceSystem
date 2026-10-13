@@ -83,12 +83,14 @@ public static class PunchReplenishmentRules
     /// 这张补卡按当前现状能不能生效；不能的返回给员工看的原因（中文），可以的返回 null。
     /// 提交时返回的原因直接拒绝提交；审批回写时，上班/下班卡返回原因表示"这次不生效"（不覆盖已有数据），午间卡返回原因表示不能通过。
     /// </summary>
-    public static string? FindProblem(PunchType type, DateOnly date, DateTime punchAt, ReplenishmentContext ctx)
+    /// <param name="allowOverwrite">管理员"强制覆盖"：上班/下班卡不再要求"比现有的更早/更晚"，允许直接改掉已有的时间
+    /// （其余的位置检查——不能越过下班卡、前一天下班卡、下一个上班的边界——照样检查）；午间卡不受影响。</param>
+    public static string? FindProblem(PunchType type, DateOnly date, DateTime punchAt, ReplenishmentContext ctx, bool allowOverwrite = false)
     {
         switch (type)
         {
             case PunchType.ClockIn:
-                if (ctx.ClockIn is { } ci && punchAt >= ci)
+                if (!allowOverwrite && ctx.ClockIn is { } ci && punchAt >= ci)
                     return $"这天已经有上班卡（{ci:HH:mm}），补的上班时间必须比它更早才有效。如果要补的是中午那一次打卡，请选择“午间打卡”";
                 if (ctx.ClockOut is { } co && punchAt >= co)
                     return $"补的上班时间（{punchAt:HH:mm}）不能晚于这天已有的下班卡（{co:MM-dd HH:mm}）";
@@ -97,7 +99,9 @@ public static class PunchReplenishmentRules
                 return null;
 
             case PunchType.ClockOut:
-                if (ctx.ClockOut is { } oldOut && punchAt <= oldOut)
+                if (ctx.ClockIn is { } inT && punchAt <= inT)
+                    return $"补的下班时间（{punchAt:MM-dd HH:mm}）要晚于这天的上班卡（{inT:MM-dd HH:mm}），请核对日期和时间";
+                if (!allowOverwrite && ctx.ClockOut is { } oldOut && punchAt <= oldOut)
                     return $"这天已经有下班卡（{oldOut:MM-dd HH:mm}），补的下班时间必须比它更晚才有效。如果要补的是中午那一次打卡，请选择“午间打卡”";
                 if (ctx.NextBoundary is { } next && punchAt >= next)
                     return $"补的下班时间（{punchAt:MM-dd HH:mm}）不能晚于下一个上班的时间（{next:MM-dd HH:mm}），请核对日期和时间";
