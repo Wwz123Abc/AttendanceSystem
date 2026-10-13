@@ -139,7 +139,7 @@ public partial class AttendanceService
                             : [];
                         var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds);
                         var effCo = ClampEffectiveClockOut(r.WorkDate, co, shift, ResolveSecondHalfAbsentBoundary(r.WorkDate, shift, midCheckResults));
-                        var computedHours = ComputeWorkHours(effCi, effCo, user.AttendanceGroupId);
+                        var computedHours = ComputeWorkHours(effCi, effCo);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
                         r.ActualWorkHours = r.AttendanceStatus == AttendanceStatus.OnLeave
                             ? ApplyLeaveHoursCap(computedHours, r.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
                             : computedHours;

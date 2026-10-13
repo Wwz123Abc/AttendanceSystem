@@ -54,7 +54,7 @@ public partial class AttendanceService
     }
 
     /// <summary>算实际工时（小时）：上下班时间差，扣掉压到公司统一"不算钱"时段的部分。</summary>
-    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut, int? groupId) => ComputeWorkHours(clockIn, clockOut, groupId);
+    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut, int? groupId) => ComputeWorkHours(clockIn, clockOut);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
 
     /// <summary>
     /// 算某天的实际工时（正班），并处理"休息日自己打卡、没有批准的加班申请就不算工时"这条规则：

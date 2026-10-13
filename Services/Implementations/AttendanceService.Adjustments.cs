@@ -193,7 +193,6 @@ public partial class AttendanceService
                 .ToListAsync())
             .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
         var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
-        var leaveGroupId = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();   // 饭点按考勤组
         // 事假/病假/年假/调休：休息日不算请假
         var skipNonWorkdays = !LeaveCountsNaturalDays(approval.LeaveType);
 
@@ -215,7 +214,7 @@ public partial class AttendanceService
             if (skipNonWorkdays && IsShiftWeeklyRestDay(d, leaveShift)) continue;
 
             var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-            var leaveHoursToday = ComputeLeaveHoursForDay(d, leaveStart, leaveEnd, dailyCap, leaveShift, leaveGroupId);
+            var leaveHoursToday = ComputeLeaveHoursForDay(d, leaveStart, leaveEnd, dailyCap, leaveShift);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
 
             // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
             // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
@@ -255,7 +254,7 @@ public partial class AttendanceService
                 var leaveSegStart = leaveStart > dayStart ? leaveStart : dayStart;
                 if (workedCi < leaveSegStart)
                 {
-                    var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart, leaveGroupId);
+                    var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart);
                     record.ActualWorkHours = ApplyLeaveHoursCap(estimatedWork, record.LeaveHours, dailyCap);
                 }
             }

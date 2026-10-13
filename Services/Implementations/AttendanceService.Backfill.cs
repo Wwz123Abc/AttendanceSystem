@@ -92,7 +92,6 @@ public partial class AttendanceService
                     .ToListAsync())
                 .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
             var skipNonWorkdays = !LeaveCountsNaturalDays(approval.LeaveType);
-            var leaveGroupId = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
 
             for (var d = sd; d <= ed; d = d.AddDays(1))
             {
@@ -101,7 +100,7 @@ public partial class AttendanceService
                 if (skipNonWorkdays && IsShiftWeeklyRestDay(d, leaveShift)) continue;
 
                 var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-                var hoursToday = ComputeLeaveHoursForDay(d, lstart, lend, dailyCap, leaveShift, leaveGroupId);
+                var hoursToday = ComputeLeaveHoursForDay(d, lstart, lend, dailyCap, leaveShift);
                 var key = (approval.ApplicantUserId, d);
                 dailyLeaveTotals[key] = dailyLeaveTotals.GetValueOrDefault(key) + hoursToday;
 
@@ -151,8 +150,7 @@ public partial class AttendanceService
             if (record is not { ClockInTime: { } ci, ClockOutTime: null } || record.AttendanceStatus != AttendanceStatus.OnLeave) continue;
             if (ci >= leaveSegStart) continue;
             var shift = (await GetShiftAssignmentAsync(uid, day))?.ShiftSchedule;
-            var halfDayGroupId = await db.Users.Where(u => u.Id == uid).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
-            var newHours = ApplyLeaveHoursCap(ComputeWorkHours(ci, leaveSegStart, halfDayGroupId), record.LeaveHours,
+            var newHours = ApplyLeaveHoursCap(ComputeWorkHours(ci, leaveSegStart), record.LeaveHours,
                 ResolveDailyStandardHours(shift, defaultDailyHours));
             if (record.ActualWorkHours == newHours) continue;
             record.ActualWorkHours = newHours;

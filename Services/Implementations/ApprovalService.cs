@@ -86,7 +86,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         }
 
         var applicantGroupId = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();   // 饭点按考勤组
-        var leaveDuration = await ComputeLeaveDurationAsync(dto, applicantUserId, applicantGroupId);
+        var leaveDuration = await ComputeLeaveDurationAsync(dto, applicantUserId);
         var overtimeDuration = ComputeOvertimeDuration(dto, applicantGroupId);
         decimal? businessTripDuration = dto.BusinessTripStartTime.HasValue && dto.BusinessTripEndTime.HasValue
             ? (decimal)(dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays : null;
@@ -311,7 +311,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     }
 
     /// <summary>请假时长：逐日按班次累加，口径跟审批通过后的回写一致；没填请假时间返回 null。</summary>
-    private async Task<decimal?> ComputeLeaveDurationAsync(SubmitApprovalDto dto, int applicantUserId, int? groupId)
+    private async Task<decimal?> ComputeLeaveDurationAsync(SubmitApprovalDto dto, int applicantUserId)
     {
         // 请假时长：逐日按 ComputeLeaveHoursForDay 累加（跟审批通过后 UpdateAttendanceAfterApprovalAsync
         // 逐日回写用的是同一个函数），而不是直接拿整段起止时间套工时公式——直接套公式的话，跨天请假会把
@@ -338,7 +338,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 leaveShiftsInRange.TryGetValue(d, out var leaveShift);
                 if (skipNonWorkdays && AttendanceService.IsShiftWeeklyRestDay(d, leaveShift)) continue;
                 var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift, groupId);
+                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift);
             }
             leaveDuration = total;
         }

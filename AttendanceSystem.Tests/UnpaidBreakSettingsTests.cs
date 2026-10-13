@@ -56,15 +56,17 @@ public class UnpaidBreakSettingsTests : SqliteTestBase, IDisposable
     }
 
     [Fact]
-    public void 请假时长也按考勤组的饭点扣()
+    public void 请假时长和正班工时不看考勤组的饭点_一律按默认饭点()
     {
-        UnpaidBreakSettings.Apply(3, [(H(11, 30), H(12, 30))]);   // 考勤组 3 只有 11:30-12:30 一段饭点
+        UnpaidBreakSettings.Apply(3, [(H(11, 30), H(12, 30))]);   // 考勤组 3 只有 11:30-12:30 一段饭点（只给加班用）
         var shift = DayShift();
         var d = DateOnly.FromDateTime(T(5, 0, 0));
-        // 请假 12:30-15:30 共 3 小时：考勤组 3 的饭点到 12:30 就结束，不扣 → 3.0；默认饭点 12:00-13:00 压到 30 分钟 → 2.5
-        Assert.Equal(3.0m, AttendanceService.ComputeLeaveHoursForDay(d, T(5, 12, 30), T(5, 15, 30), 8, shift, 3));
-        Assert.Equal(2.5m, AttendanceService.ComputeLeaveHoursForDay(d, T(5, 12, 30), T(5, 15, 30), 8, shift, 4));
+        // 请假 12:30-15:30：默认饭点 12:00-13:00 压到 30 分钟 → 2.5；不会因为考勤组 3 的自定义饭点变成 3.0
         Assert.Equal(2.5m, AttendanceService.ComputeLeaveHoursForDay(d, T(5, 12, 30), T(5, 15, 30), 8, shift));
+        // 正班工时公式不带考勤组时，也是默认饭点
+        Assert.Equal(2.5m, AttendanceService.ComputeWorkHours(T(5, 12, 30), T(5, 15, 30)));
+        // 只有加班这一路显式传考勤组才会用自定义饭点
+        Assert.Equal(3.0m, AttendanceService.ComputeWorkHours(T(5, 12, 30), T(5, 15, 30), 3));
     }
 
     [Fact]
