@@ -17,7 +17,7 @@ namespace AttendanceSystem.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.9")
+                .HasAnnotation("ProductVersion", "9.0.20")
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
@@ -1224,6 +1224,105 @@ namespace AttendanceSystem.Migrations
                     b.ToTable("Notification");
                 });
 
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.PunchAdjustLog", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime?>("AddedMidCheckTime")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("AddedMidCheckTime");
+
+                    b.Property<string>("AdjustType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("AdjustType");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("CreatedAt");
+
+                    b.Property<DateTime?>("NewClockIn")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("NewClockIn");
+
+                    b.Property<DateTime?>("NewClockOut")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("NewClockOut");
+
+                    b.Property<string>("OperatorName")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("OperatorName");
+
+                    b.Property<decimal>("PrevActualWorkHours")
+                        .HasColumnType("decimal(65,30)")
+                        .HasColumnName("PrevActualWorkHours");
+
+                    b.Property<DateTime?>("PrevClockIn")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("PrevClockIn");
+
+                    b.Property<DateTime?>("PrevClockOut")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("PrevClockOut");
+
+                    b.Property<int>("PrevEarlyLeaveMinutes")
+                        .HasColumnType("int")
+                        .HasColumnName("PrevEarlyLeaveMinutes");
+
+                    b.Property<int>("PrevLateMinutes")
+                        .HasColumnType("int")
+                        .HasColumnName("PrevLateMinutes");
+
+                    b.Property<string>("PrevMidCheckResults")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("PrevMidCheckResults");
+
+                    b.Property<int>("PrevStatus")
+                        .HasColumnType("int")
+                        .HasColumnName("PrevStatus");
+
+                    b.Property<bool>("RecordExisted")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("RecordExisted");
+
+                    b.Property<string>("Remark")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)")
+                        .HasColumnName("Remark");
+
+                    b.Property<DateTime?>("RevertedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("RevertedAt");
+
+                    b.Property<string>("RevertedBy")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("RevertedBy");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int")
+                        .HasColumnName("UserId");
+
+                    b.Property<DateOnly>("WorkDate")
+                        .HasColumnType("date")
+                        .HasColumnName("WorkDate");
+
+                    b.HasKey("Id")
+                        .HasName("PK_PunchAdjustLog");
+
+                    b.HasIndex("UserId", "WorkDate");
+
+                    b.ToTable("PunchAdjustLog");
+                });
+
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftAssignment", b =>
                 {
                     b.Property<int>("Id")
@@ -1378,6 +1477,34 @@ namespace AttendanceSystem.Migrations
                             WorkEndTime = new TimeOnly(18, 0, 0),
                             WorkStartTime = new TimeOnly(9, 0, 0)
                         });
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.SystemSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("Key");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("UpdatedAt");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("UpdatedBy");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)")
+                        .HasColumnName("Value");
+
+                    b.HasKey("Key")
+                        .HasName("PK_SystemSetting");
+
+                    b.ToTable("SystemSetting");
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.User", b =>
@@ -1928,6 +2055,15 @@ namespace AttendanceSystem.Migrations
                         .HasConstraintName("FK_Notification_User_UserId");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.PunchAdjustLog", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftAssignment", b =>

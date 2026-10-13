@@ -1,0 +1,109 @@
+@page
+@model AttendanceSystem.Pages.Admin.MealBreakSettingsModel
+@{ ViewData["Title"] = "饭点设置"; }
+
+<div class="page-header">
+    <h4><i class="bi bi-cup-hot me-2 text-primary"></i>饭点设置</h4>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.SuccessMessage))
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <i class="bi bi-check-circle me-2"></i>@Model.SuccessMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <i class="bi bi-exclamation-circle me-2"></i>@Model.ErrorMessage
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-header">考勤组（点一个来设置它的饭点）</div>
+            <div class="list-group list-group-flush">
+                @foreach (var g in Model.Groups)
+                {
+                    <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-start @(g.Id == Model.GroupId ? "active" : "")"
+                       href="?groupId=@g.Id">
+                        <div>
+                            <div class="fw-semibold">@g.Name <span class="small @(g.Id == Model.GroupId ? "" : "text-muted")">· @g.Users 人</span></div>
+                            <div class="small @(g.Id == Model.GroupId ? "" : "text-muted")">@g.Windows</div>
+                        </div>
+                        @if (g.Customized) { <span class="badge bg-warning text-dark">已自定义</span> }
+                        else { <span class="badge bg-secondary">默认</span> }
+                    </a>
+                }
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card mb-3">
+            <div class="card-header">
+                @(Model.GroupName == "" ? "请先建立考勤组" : Model.GroupName + " 的饭点时段")
+                @if (Model.IsDefault) { <span class="badge bg-secondary ms-2">默认</span> }
+                else { <span class="badge bg-warning text-dark ms-2">已自定义</span> }
+            </div>
+            <div class="card-body">
+                <form method="post" asp-page-handler="Save" id="mealForm">
+                    <input type="hidden" name="GroupId" value="@Model.GroupId" />
+                    <table class="table table-sm align-middle mb-2">
+                        <thead><tr><th style="width:42%">开始</th><th style="width:42%">结束</th><th></th></tr></thead>
+                        <tbody id="mealRows">
+                            @for (var i = 0; i < Model.Starts.Count; i++)
+                            {
+                                <tr>
+                                    <td><input type="time" name="Starts" value="@Model.Starts[i]" class="form-control form-control-sm" disabled="@(!Model.CanEdit)" /></td>
+                                    <td><input type="time" name="Ends" value="@(i < Model.Ends.Count ? Model.Ends[i] : "")" class="form-control form-control-sm" disabled="@(!Model.CanEdit)" /></td>
+                                    <td class="text-end">@if (Model.CanEdit) { <button type="button" class="btn btn-outline-danger btn-sm py-0" onclick="removeMealRow(this)">删除</button> }</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    @if (Model.CanEdit && Model.GroupId > 0)
+                    {
+                        <button type="button" class="btn btn-outline-secondary btn-sm mb-3" onclick="addMealRow()"><i class="bi bi-plus-lg me-1"></i>添加一段</button>
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i>保存</button>
+                            <button type="submit" class="btn btn-outline-secondary" formaction="?handler=Reset"
+                                    onclick="return confirm('这个考勤组恢复成默认的 12:00-13:00、17:30-18:00、00:00-01:00、05:30-06:00 吗？')">恢复默认</button>
+                        </div>
+                    }
+                    else if (!Model.CanEdit)
+                    {
+                        <div class="text-muted small">只有总部管理员能修改，你现在只能查看。</div>
+                    }
+                    @if (!string.IsNullOrEmpty(Model.UpdatedInfo)) { <div class="text-muted small mt-2">@Model.UpdatedInfo</div> }
+                </form>
+            </div>
+        </div>
+        <div class="alert alert-info small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            饭点是"不算钱"的时段：这个考勤组的人，加班申请、请假、每天的实际工时，只要起止时间压到这几段，重叠的那部分就不计入时长，
+            然后按半小时向下取整；加班不足 0.5 小时不能提交。没有单独设置的考勤组用默认值（12:00-13:00、17:30-18:00、00:00-01:00、05:30-06:00）。
+        </div>
+        <div class="alert alert-warning small mb-0">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            <strong>改了以后</strong>：这个考勤组之后新提交的加班申请、新的打卡结算、以及重新计算（月度汇总重新生成、补卡后重算等）都会按新时段算；
+            <strong>已经存好的每日工时和已批的加班时长不会自己变</strong>，要改历史数据请联系开发人员核对后处理。<br />
+            一段饭点不能跨过 0 点（跨 0 点的请拆成两段），每段最长 4 小时，段与段不能重叠，最多 8 段。整行留空保存 = 删掉这一行。
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+function addMealRow() {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td><input type="time" name="Starts" class="form-control form-control-sm" /></td>'
+        + '<td><input type="time" name="Ends" class="form-control form-control-sm" /></td>'
+        + '<td class="text-end"><button type="button" class="btn btn-outline-danger btn-sm py-0" onclick="removeMealRow(this)">删除</button></td>';
+    document.getElementById('mealRows').appendChild(tr);
+}
+function removeMealRow(btn) { btn.closest('tr').remove(); }
+</script>
+}

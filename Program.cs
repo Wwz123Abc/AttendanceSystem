@@ -302,6 +302,19 @@ if (app.Environment.IsDevelopment())
     }
 }
 
+// 读出管理员在"饭点设置"页保存的饭点时段（没保存过、或表还没建好，就用默认值）
+{
+    using var scope = app.Services.CreateScope();
+    try
+    {
+        await AttendanceSystem.Helpers.UnpaidBreakSettings.LoadAsync(scope.ServiceProvider.GetRequiredService<AttendanceDbContext>());
+    }
+    catch (Exception ex)
+    {
+        Log.Warning(ex, "读取饭点时段设置失败，先使用默认值（如果还没跑迁移，请先执行 migrate.sql）");
+    }
+}
+
 // 播种：如果库里一个用户都没有，就创建默认部门/考勤组和管理员账号 admin / Admin@123
 static async Task SeedAdminAsync(AttendanceDbContext db)
 {

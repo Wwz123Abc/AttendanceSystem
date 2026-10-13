@@ -100,12 +100,13 @@
                         <th>工时(h)</th>
                         <th>备注</th>
                         <th>操作时间</th>
+                        <th>撤回</th>
                     </tr>
                 </thead>
                 <tbody>
                     @if (!Model.RecentLog.Any())
                     {
-                        <tr><td colspan="7" class="empty-state"><i class="bi bi-inbox"></i>暂无手动补卡记录</td></tr>
+                        <tr><td colspan="8" class="empty-state"><i class="bi bi-inbox"></i>暂无手动补卡记录</td></tr>
                     }
                     @foreach (var log in Model.RecentLog)
                     {
@@ -117,6 +118,19 @@
                             <td>@log.WorkHours.ToString("F1")</td>
                             <td class="small text-muted">@log.Note</td>
                             <td class="small text-muted">@log.UpdatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td class="text-nowrap">
+                                @if (log.RevertLogId.HasValue)
+                                {
+                                    <form method="post" asp-page-handler="Revert" asp-route-logId="@log.RevertLogId.Value"
+                                          onsubmit="return confirm('确定撤回 @log.RealName @log.WorkDate.ToString("yyyy-MM-dd") 的这次手动补卡吗？\n这天的上班/下班时间、状态、工时会恢复成补卡前的样子。');">
+                                        <button type="submit" class="btn btn-outline-danger btn-sm py-0">撤回</button>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <span class="small text-muted">@log.RevertHint</span>
+                                }
+                            </td>
                         </tr>
                     }
                 </tbody>

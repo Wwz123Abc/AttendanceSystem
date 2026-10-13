@@ -139,7 +139,7 @@ public partial class AttendanceService
                             : [];
                         var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds);
                         var effCo = ClampEffectiveClockOut(r.WorkDate, co, shift, ResolveSecondHalfAbsentBoundary(r.WorkDate, shift, midCheckResults));
-                        var computedHours = ComputeWorkHours(effCi, effCo);
+                        var computedHours = ComputeWorkHours(effCi, effCo, user.AttendanceGroupId);
                         r.ActualWorkHours = r.AttendanceStatus == AttendanceStatus.OnLeave
                             ? ApplyLeaveHoursCap(computedHours, r.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
                             : computedHours;

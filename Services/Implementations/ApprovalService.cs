@@ -85,8 +85,9 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 break;
         }
 
-        var leaveDuration = await ComputeLeaveDurationAsync(dto, applicantUserId);
-        var overtimeDuration = ComputeOvertimeDuration(dto);
+        var applicantGroupId = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();   // 饭点按考勤组
+        var leaveDuration = await ComputeLeaveDurationAsync(dto, applicantUserId, applicantGroupId);
+        var overtimeDuration = ComputeOvertimeDuration(dto, applicantGroupId);
         decimal? businessTripDuration = dto.BusinessTripStartTime.HasValue && dto.BusinessTripEndTime.HasValue
             ? (decimal)(dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays : null;
 
@@ -310,7 +311,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     }
 
     /// <summary>请假时长：逐日按班次累加，口径跟审批通过后的回写一致；没填请假时间返回 null。</summary>
-    private async Task<decimal?> ComputeLeaveDurationAsync(SubmitApprovalDto dto, int applicantUserId)
+    private async Task<decimal?> ComputeLeaveDurationAsync(SubmitApprovalDto dto, int applicantUserId, int? groupId)
     {
         // 请假时长：逐日按 ComputeLeaveHoursForDay 累加（跟审批通过后 UpdateAttendanceAfterApprovalAsync
         // 逐日回写用的是同一个函数），而不是直接拿整段起止时间套工时公式——直接套公式的话，跨天请假会把
@@ -337,7 +338,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 leaveShiftsInRange.TryGetValue(d, out var leaveShift);
                 if (skipNonWorkdays && AttendanceService.IsShiftWeeklyRestDay(d, leaveShift)) continue;
                 var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift);
+                total += AttendanceService.ComputeLeaveHoursForDay(d, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, dailyCap, leaveShift, groupId);
             }
             leaveDuration = total;
         }
@@ -345,7 +346,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     }
 
     /// <summary>加班时长：跟正班工时同一套公式，不足半小时直接拒绝；没填加班时间返回 null。</summary>
-    private static decimal? ComputeOvertimeDuration(SubmitApprovalDto dto)
+    private static decimal? ComputeOvertimeDuration(SubmitApprovalDto dto, int? groupId)
     {
         // 加班时长：跟正班工时同一套公式（AttendanceService.ComputeWorkHours）——申请的时间段压到公司统一
         // "不算钱"时段（午间/晚餐/宵夜/早餐）的那部分不算钱，最后按半小时向下取整。
@@ -354,7 +355,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         decimal? overtimeDuration = null;
         if (dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue)
         {
-            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value);
+            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value, groupId);
             if (overtimeDuration < 0.5m)
                 throw new BusinessException("加班时长不足 0.5 小时（按半小时为最小单位计算），请检查起止时间");
         }

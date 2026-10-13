@@ -730,7 +730,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260618023257_InitialCreate') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260618023257_InitialCreate', '9.0.9');
+    VALUES ('20260618023257_InitialCreate', '9.0.20');
 
     END IF;
 END //
@@ -759,7 +759,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260624010016_AddDingTalkUserId') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260624010016_AddDingTalkUserId', '9.0.9');
+    VALUES ('20260624010016_AddDingTalkUserId', '9.0.20');
 
     END IF;
 END //
@@ -802,7 +802,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260701120000_AddBlacklistAndDeptSort') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260701120000_AddBlacklistAndDeptSort', '9.0.9');
+    VALUES ('20260701120000_AddBlacklistAndDeptSort', '9.0.20');
 
     END IF;
 END //
@@ -831,7 +831,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260702200000_AddAttendanceGroupDepartmentId') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260702200000_AddAttendanceGroupDepartmentId', '9.0.9');
+    VALUES ('20260702200000_AddAttendanceGroupDepartmentId', '9.0.20');
 
     END IF;
 END //
@@ -902,7 +902,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260703120000_AddBusinessTrip') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260703120000_AddBusinessTrip', '9.0.9');
+    VALUES ('20260703120000_AddBusinessTrip', '9.0.20');
 
     END IF;
 END //
@@ -980,7 +980,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260707011708_AddGroupApproversRemoveApprovalFlow') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260707011708_AddGroupApproversRemoveApprovalFlow', '9.0.9');
+    VALUES ('20260707011708_AddGroupApproversRemoveApprovalFlow', '9.0.20');
 
     END IF;
 END //
@@ -1091,7 +1091,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260707013627_AddEmployeeRegistrationAndUserIdNumber') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260707013627_AddEmployeeRegistrationAndUserIdNumber', '9.0.9');
+    VALUES ('20260707013627_AddEmployeeRegistrationAndUserIdNumber', '9.0.20');
 
     END IF;
 END //
@@ -1120,7 +1120,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260707015933_AddUserContractCompany') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260707015933_AddUserContractCompany', '9.0.9');
+    VALUES ('20260707015933_AddUserContractCompany', '9.0.20');
 
     END IF;
 END //
@@ -1380,7 +1380,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260707022446_AddMultiLocationAndDeptGroupFollow') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260707022446_AddMultiLocationAndDeptGroupFollow', '9.0.9');
+    VALUES ('20260707022446_AddMultiLocationAndDeptGroupFollow', '9.0.20');
 
     END IF;
 END //
@@ -1440,7 +1440,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260707031659_AddShiftScheduleRestDaysOfWeek') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260707031659_AddShiftScheduleRestDaysOfWeek', '9.0.9');
+    VALUES ('20260707031659_AddShiftScheduleRestDaysOfWeek', '9.0.20');
 
     END IF;
 END //
@@ -1511,7 +1511,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260708062632_AddUserEmergencyContactAndAddress') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260708062632_AddUserEmergencyContactAndAddress', '9.0.9');
+    VALUES ('20260708062632_AddUserEmergencyContactAndAddress', '9.0.20');
 
     END IF;
 END //
@@ -1610,7 +1610,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260708065448_AddEmployeeRegistrationExtraFields') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260708065448_AddEmployeeRegistrationExtraFields', '9.0.9');
+    VALUES ('20260708065448_AddEmployeeRegistrationExtraFields', '9.0.20');
 
     END IF;
 END //
@@ -1684,7 +1684,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260714004037_AddMidCheckWindow') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260714004037_AddMidCheckWindow', '9.0.9');
+    VALUES ('20260714004037_AddMidCheckWindow', '9.0.20');
 
     END IF;
 END //
@@ -1713,7 +1713,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260714072048_AddApprovalLevelToAttendanceGroup') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260714072048_AddApprovalLevelToAttendanceGroup', '9.0.9');
+    VALUES ('20260714072048_AddApprovalLevelToAttendanceGroup', '9.0.20');
 
     END IF;
 END //
@@ -1759,7 +1759,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260720082555_AddDepartmentDingTalkDeptId') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260720082555_AddDepartmentDingTalkDeptId', '9.0.9');
+    VALUES ('20260720082555_AddDepartmentDingTalkDeptId', '9.0.20');
 
     END IF;
 END //
@@ -1897,7 +1897,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260727080508_AddMultiMidCheckWindows') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260727080508_AddMultiMidCheckWindows', '9.0.9');
+    VALUES ('20260727080508_AddMultiMidCheckWindows', '9.0.20');
 
     END IF;
 END //
@@ -2002,7 +2002,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260729091518_AddAnnouncement') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260729091518_AddAnnouncement', '9.0.9');
+    VALUES ('20260729091518_AddAnnouncement', '9.0.20');
 
     END IF;
 END //
@@ -2031,7 +2031,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260818094634_AddFaceReferencePhoto') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260818094634_AddFaceReferencePhoto', '9.0.9');
+    VALUES ('20260818094634_AddFaceReferencePhoto', '9.0.20');
 
     END IF;
 END //
@@ -2068,7 +2068,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260819025227_AddZKDeviceCommand') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260819025227_AddZKDeviceCommand', '9.0.9');
+    VALUES ('20260819025227_AddZKDeviceCommand', '9.0.20');
 
     END IF;
 END //
@@ -2119,7 +2119,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260820075658_AddZKDeviceTable') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260820075658_AddZKDeviceTable', '9.0.9');
+    VALUES ('20260820075658_AddZKDeviceTable', '9.0.20');
 
     END IF;
 END //
@@ -2162,7 +2162,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260820081908_RemoveDingTalkColumns') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260820081908_RemoveDingTalkColumns', '9.0.9');
+    VALUES ('20260820081908_RemoveDingTalkColumns', '9.0.20');
 
     END IF;
 END //
@@ -2268,7 +2268,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260821022210_AddCommandConfirmationAndPunchUniqueness') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260821022210_AddCommandConfirmationAndPunchUniqueness', '9.0.9');
+    VALUES ('20260821022210_AddCommandConfirmationAndPunchUniqueness', '9.0.20');
 
     END IF;
 END //
@@ -2333,7 +2333,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260821052338_AddRemotePunchFeature') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260821052338_AddRemotePunchFeature', '9.0.9');
+    VALUES ('20260821052338_AddRemotePunchFeature', '9.0.20');
 
     END IF;
 END //
@@ -2362,7 +2362,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260902014847_AddAttendanceRecordWorkDateIndex') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260902014847_AddAttendanceRecordWorkDateIndex', '9.0.9');
+    VALUES ('20260902014847_AddAttendanceRecordWorkDateIndex', '9.0.20');
 
     END IF;
 END //
@@ -2419,7 +2419,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260902060914_AddUserPasswordPolicyFields') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260902060914_AddUserPasswordPolicyFields', '9.0.9');
+    VALUES ('20260902060914_AddUserPasswordPolicyFields', '9.0.20');
 
     END IF;
 END //
@@ -2448,7 +2448,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260902061301_RemoveDeadZKDeviceCommandSentField') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260902061301_RemoveDeadZKDeviceCommandSentField', '9.0.9');
+    VALUES ('20260902061301_RemoveDeadZKDeviceCommandSentField', '9.0.20');
 
     END IF;
 END //
@@ -2491,7 +2491,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260902064259_AddZKDeviceCommandRetryTracking') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260902064259_AddZKDeviceCommandRetryTracking', '9.0.9');
+    VALUES ('20260902064259_AddZKDeviceCommandRetryTracking', '9.0.20');
 
     END IF;
 END //
@@ -2640,7 +2640,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260903011504_AddBranchScopingAndDeviceAssignment') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260903011504_AddBranchScopingAndDeviceAssignment', '9.0.9');
+    VALUES ('20260903011504_AddBranchScopingAndDeviceAssignment', '9.0.20');
 
     END IF;
 END //
@@ -2697,7 +2697,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260904064148_AddDepartmentToEmployeeRegistration') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260904064148_AddDepartmentToEmployeeRegistration', '9.0.9');
+    VALUES ('20260904064148_AddDepartmentToEmployeeRegistration', '9.0.20');
 
     END IF;
 END //
@@ -2726,7 +2726,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260911072745_AddFaceVerifyAttemptBlockedReason') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260911072745_AddFaceVerifyAttemptBlockedReason', '9.0.9');
+    VALUES ('20260911072745_AddFaceVerifyAttemptBlockedReason', '9.0.20');
 
     END IF;
 END //
@@ -2755,7 +2755,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260915082138_AddAttendanceRecordLeaveHours') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260915082138_AddAttendanceRecordLeaveHours', '9.0.9');
+    VALUES ('20260915082138_AddAttendanceRecordLeaveHours', '9.0.20');
 
     END IF;
 END //
@@ -2784,7 +2784,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260918075907_ChangeActualWorkdaysToDecimal') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260918075907_ChangeActualWorkdaysToDecimal', '9.0.9');
+    VALUES ('20260918075907_ChangeActualWorkdaysToDecimal', '9.0.20');
 
     END IF;
 END //
@@ -2827,7 +2827,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260921010735_AddApprovalStepApproverStatusIndex') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260921010735_AddApprovalStepApproverStatusIndex', '9.0.9');
+    VALUES ('20260921010735_AddApprovalStepApproverStatusIndex', '9.0.20');
 
     END IF;
 END //
@@ -2856,7 +2856,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260923091816_AddUserDeactivatedAt') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260923091816_AddUserDeactivatedAt', '9.0.9');
+    VALUES ('20260923091816_AddUserDeactivatedAt', '9.0.20');
 
     END IF;
 END //
@@ -2885,7 +2885,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260924074501_AddUserAttendanceExempt') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260924074501_AddUserAttendanceExempt', '9.0.9');
+    VALUES ('20260924074501_AddUserAttendanceExempt', '9.0.20');
 
     END IF;
 END //
@@ -3094,7 +3094,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260928082948_AddAgent') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260928082948_AddAgent', '9.0.9');
+    VALUES ('20260928082948_AddAgent', '9.0.20');
 
     END IF;
 END //
@@ -3123,7 +3123,108 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20260929073129_AddAnnouncementScopeRoles') THEN
 
     INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-    VALUES ('20260929073129_AddAnnouncementScopeRoles', '9.0.9');
+    VALUES ('20260929073129_AddAnnouncementScopeRoles', '9.0.20');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261013050236_AddPunchAdjustLog') THEN
+
+    CREATE TABLE `PunchAdjustLog` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `UserId` int NOT NULL,
+        `WorkDate` date NOT NULL,
+        `OperatorName` varchar(50) CHARACTER SET utf8mb4 NULL,
+        `AdjustType` varchar(20) CHARACTER SET utf8mb4 NOT NULL,
+        `Remark` varchar(200) CHARACTER SET utf8mb4 NULL,
+        `RecordExisted` tinyint(1) NOT NULL,
+        `PrevClockIn` datetime(6) NULL,
+        `PrevClockOut` datetime(6) NULL,
+        `PrevStatus` int NOT NULL,
+        `PrevActualWorkHours` decimal(65,30) NOT NULL,
+        `PrevLateMinutes` int NOT NULL,
+        `PrevEarlyLeaveMinutes` int NOT NULL,
+        `PrevMidCheckResults` varchar(500) CHARACTER SET utf8mb4 NULL,
+        `NewClockIn` datetime(6) NULL,
+        `NewClockOut` datetime(6) NULL,
+        `AddedMidCheckTime` datetime(6) NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        `RevertedAt` datetime(6) NULL,
+        `RevertedBy` varchar(50) CHARACTER SET utf8mb4 NULL,
+        CONSTRAINT `PK_PunchAdjustLog` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_PunchAdjustLog_User_UserId` FOREIGN KEY (`UserId`) REFERENCES `User` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261013050236_AddPunchAdjustLog') THEN
+
+    CREATE INDEX `IX_PunchAdjustLog_UserId_WorkDate` ON `PunchAdjustLog` (`UserId`, `WorkDate`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261013050236_AddPunchAdjustLog') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20261013050236_AddPunchAdjustLog', '9.0.20');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261013051755_AddSystemSetting') THEN
+
+    CREATE TABLE `SystemSetting` (
+        `Key` varchar(100) CHARACTER SET utf8mb4 NOT NULL,
+        `Value` varchar(2000) CHARACTER SET utf8mb4 NOT NULL,
+        `UpdatedAt` datetime(6) NOT NULL,
+        `UpdatedBy` varchar(50) CHARACTER SET utf8mb4 NULL,
+        CONSTRAINT `PK_SystemSetting` PRIMARY KEY (`Key`)
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261013051755_AddSystemSetting') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20261013051755_AddSystemSetting', '9.0.20');
 
     END IF;
 END //

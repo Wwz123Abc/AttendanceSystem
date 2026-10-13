@@ -79,6 +79,11 @@ public interface IAttendanceService
     /// 上班卡要比现有的更早、下班卡要比现有的更晚、午间卡必须落在还没命中的午间窗口里；不满足就抛 BusinessException 说明原因。
     /// <paramref name="allowOverwrite"/> = 勾了"强制覆盖"：上班/下班卡允许直接改掉已有时间。
     /// </summary>
+    /// <summary>
+    /// 撤回一次管理员手动补卡：把那天的上下班时间、状态、工时、午间命中恢复成补卡前的样子，补午间卡时新增的那条午间打卡一并删掉。
+    /// 只能撤回这天最近一次、还没撤回的补卡，而且这天的上下班时间不能在补卡之后又被别的操作改过；不满足就抛 BusinessException 说明原因。
+    /// </summary>
+    Task                           RevertAdminPunchAdjustAsync(int logId, string? operatorName);
     Task                           AdminReplenishPunchAsync(int userId, DateOnly workDate, PunchType type, DateTime punchAt, bool allowOverwrite, string? remark, string? operatorName);
     /// <summary>
     /// 生成"模板月度汇总表"（对照公司要求的外部模板文件列结构）。

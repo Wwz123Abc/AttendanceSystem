@@ -33,7 +33,10 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     public string? ErrorMessage   { get; set; }
 
     /// <summary>操作日志：最近一批"管理员手动补卡"改过的记录，供本页面下方列表展示，方便追溯是谁、什么时候、改了什么。</summary>
-    public record LogEntry(string RealName, string EmployeeNo, DateOnly WorkDate, string ClockInText, string ClockOutText, decimal WorkHours, string? Note, DateTime UpdatedAt);
+    /// <param name="RevertLogId">能撤回时是对应那次补卡的操作记录编号；不能撤回为空。</param>
+    /// <param name="RevertHint">不能撤回（旧记录没有补卡前的样子）或已经撤回时，列表里显示的说明。</param>
+    public record LogEntry(int UserId, string RealName, string EmployeeNo, DateOnly WorkDate, string ClockInText, string ClockOutText, decimal WorkHours, string? Note, DateTime UpdatedAt,
+        int? RevertLogId = null, string? RevertHint = null);
     public List<LogEntry> RecentLog { get; set; } = [];
 
     public async Task OnGetAsync() => await LoadRecentLogAsync();
@@ -80,6 +83,34 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
         return Page();
     }
 
+    /// <summary>撤回一次手动补卡：恢复成补卡前的样子（上下班时间、状态、工时、午间命中）。</summary>
+    public async Task<IActionResult> OnPostRevertAsync(int logId)
+    {
+        try
+        {
+            var log = await db.PunchAdjustLogs.FindAsync(logId) ?? throw new BusinessException("找不到这条补卡操作记录");
+            var user = await db.Users.FindAsync(log.UserId) ?? throw new BusinessException("员工不存在");
+            var cu = HttpContext.GetRequiredUser();
+            if (!await deptScopeService.CanAccessDeptAsync(cu, user.DepartmentId))
+                throw new BusinessException("无权撤回该员工的补卡");
+            if (!cu.CanManageAccount(user.Role, user.ScopedDepartmentId))
+                throw new BusinessException("无权撤回该账号的补卡，请联系总部管理员操作");
+
+            await attendanceService.RevertAdminPunchAdjustAsync(logId, User.FindFirstValue("RealName"));
+            logger.LogInformation("管理员 {Operator} 撤回了对 {EmployeeNo} {WorkDate} 的手动补卡（操作记录 {LogId}）",
+                User.FindFirstValue(ClaimTypes.Name) ?? "?", user.EmployeeNo, log.WorkDate, logId);
+            SuccessMessage = $"已撤回 {user.RealName}（{user.EmployeeNo}）{log.WorkDate:yyyy-MM-dd} 的{log.AdjustType}补卡，已恢复成补卡前的样子";
+        }
+        catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "撤回手动补卡失败，LogId={LogId}", logId);
+            ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "撤回失败，请稍后重试", HttpContext);
+        }
+        await LoadRecentLogAsync();
+        return Page();
+    }
+
     /// <summary>取最近 50 条"管理员手动补卡"改过的考勤记录（按更新时间倒序），供页面下方的操作记录列表用。</summary>
     private async Task LoadRecentLogAsync()
     {
@@ -92,11 +123,23 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
             .OrderByDescending(r => r.UpdatedAt)
             .Take(50)
             .Select(r => new LogEntry(
-                r.User.RealName, r.User.EmployeeNo, r.WorkDate,
+                r.UserId, r.User.RealName, r.User.EmployeeNo, r.WorkDate,
                 r.ClockInTime  != null ? r.ClockInTime.Value.ToString("MM-dd HH:mm")  : "--",
                 r.ClockOutTime != null ? r.ClockOutTime.Value.ToString("MM-dd HH:mm") : "--",
-                r.ActualWorkHours, r.ApprovalNote, r.UpdatedAt))
+                r.ActualWorkHours, r.ApprovalNote, r.UpdatedAt, null, null))
             .ToListAsync();
+
+        // 每一行配上"撤回"按钮：这天最近一次、还没撤回的手动补卡才有；没有操作记录的旧补卡（功能上线前做的）撤回不了
+        var userIds = RecentLog.Select(e => e.UserId).Distinct().ToList();
+        var logs = await db.PunchAdjustLogs.Where(l => userIds.Contains(l.UserId)).OrderBy(l => l.Id).ToListAsync();
+        var latest = logs.GroupBy(l => (l.UserId, l.WorkDate)).ToDictionary(g => g.Key, g => g.Last());
+        RecentLog = RecentLog.Select(e =>
+        {
+            if (!latest.TryGetValue((e.UserId, e.WorkDate), out var l)) return e with { RevertHint = "旧记录，不能撤回" };
+            return l.RevertedAt is not null
+                ? e with { RevertHint = $"已撤回（{l.RevertedAt:MM-dd HH:mm}）" }
+                : e with { RevertLogId = l.Id };
+        }).ToList();
     }
 
     /// <summary>员工搜索（AJAX）：按姓名/工号模糊匹配，最多返回 20 条，供前端搜索框用。</summary>

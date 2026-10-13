@@ -194,7 +194,8 @@ public class ZKDeviceSyncService(
         }
 
         // 4) 工时结算（见 SettleWorkHoursAsync）
-        await SettleWorkHoursAsync(touchedKeys, recordMap, shiftByUserDate, ct);
+        var groupByUser = matchedUsers.ToDictionary(u => u.Id, u => u.AttendanceGroupId);   // 饭点按考勤组
+        await SettleWorkHoursAsync(touchedKeys, recordMap, shiftByUserDate, groupByUser, ct);
 
         await db.SaveChangesAsync(ct);
 
@@ -325,6 +326,7 @@ public class ZKDeviceSyncService(
         HashSet<(int UserId, DateOnly WorkDate)> touchedKeys,
         Dictionary<(int, DateOnly), AttendanceRecord> recordMap,
         Dictionary<(int, DateOnly), ShiftSchedule> shiftByUserDate,
+        Dictionary<int, int?> groupByUser,
         CancellationToken ct)
     {
     // 4) 工时结算：每个这一批动过的 (人, 日期) 只结算一次（不放进上面的循环里，是因为同一人当天
@@ -383,7 +385,7 @@ public class ZKDeviceSyncService(
         {
             var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
             var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift, secondHalfAbsentBoundary);
-            var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut);
+            var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut, groupByUser.GetValueOrDefault(uid));
             // 半天假当天设备同步到打卡：按"标准工时 − 已批准的请假小时数"封顶，跟本地打卡/
             // 补卡重算是同一套口径（2026-09-17 支持半天请假）
             record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave

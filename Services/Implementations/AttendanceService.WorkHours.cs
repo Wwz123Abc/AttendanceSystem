@@ -54,7 +54,7 @@ public partial class AttendanceService
     }
 
     /// <summary>算实际工时（小时）：上下班时间差，扣掉压到公司统一"不算钱"时段的部分。</summary>
-    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut) => ComputeWorkHours(clockIn, clockOut);
+    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut, int? groupId) => ComputeWorkHours(clockIn, clockOut, groupId);
 
     /// <summary>
     /// 算某天的实际工时（正班），并处理"休息日自己打卡、没有批准的加班申请就不算工时"这条规则：
@@ -72,7 +72,7 @@ public partial class AttendanceService
         if (IsNonCompRestDay(workDate, shift))
             return 0;
         var effectiveClockOut = ClampEffectiveClockOut(workDate, clockOut, shift, secondHalfBoundary);
-        return CalcWorkHours(effectiveClockIn, effectiveClockOut);
+        return CalcWorkHours(effectiveClockIn, effectiveClockOut, groupId);
     }
 
     /// <summary>
@@ -280,23 +280,16 @@ public partial class AttendanceService
     /// 00:00-01:00（夜班宵夜，跨天班次里相当于"午间"的那顿）、05:30-06:00（早班/夜班交接前的早餐）
     /// （2026-09-29 用户确认，替换原来"原始在岗超过 6/9 小时才整段扣 60/30 分钟"的口径——那种"超过
     /// 阈值才扣整段"的算法会出现"6h00m 不扣、6h01m 反而倒扣近 1 小时"的悬崖，多干一分钟工时反而更少）。</summary>
-    private static readonly (TimeOnly Start, TimeOnly End)[] UnpaidBreakWindows =
-    [
-        (new TimeOnly(12, 0), new TimeOnly(13, 0)),
-        (new TimeOnly(17, 30), new TimeOnly(18, 0)),
-        (new TimeOnly(0, 0), new TimeOnly(1, 0)),
-        (new TimeOnly(5, 30), new TimeOnly(6, 0)),
-    ];
-
     /// <summary>算 [start, end) 这段时间里，落在 <see cref="UnpaidBreakWindows"/> 里的分钟数——不管这段
     /// 区间横跨几天、本身多长，只按实际重叠的分钟数算，没有"超过多久才触发"这种门槛，天然不会有悬崖。</summary>
-    internal static double ComputeUnpaidBreakOverlapMinutes(DateTime start, DateTime end)
+    internal static double ComputeUnpaidBreakOverlapMinutes(DateTime start, DateTime end, int? groupId = null)
     {
         if (end <= start) return 0;
         double total = 0;
+        var windows = UnpaidBreakSettings.WindowsFor(groupId);   // 这个考勤组的饭点；先取一份，算的过程中管理员刚好保存也不会前后不一致
         for (var day = DateOnly.FromDateTime(start.Date); day <= DateOnly.FromDateTime(end.Date); day = day.AddDays(1))
         {
-            foreach (var (winStart, winEnd) in UnpaidBreakWindows)
+            foreach (var (winStart, winEnd) in windows)
             {
                 var overlapStart = Max(day.ToDateTime(winStart), start);
                 var overlapEnd   = Min(day.ToDateTime(winEnd), end);
@@ -318,11 +311,11 @@ public partial class AttendanceService
     /// 半小时取整再累加"的口径不一致，同一份数据在"我的记录"页会出现日明细 8.37、月合计却按 8.0
     /// 累加，员工自己相加对不上（2026-09-17 复审发现，口径登记表 §2/§5 决定统一到半小时）。
     /// </summary>
-    public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut)
+    public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut, int? groupId = null)
     {
         var rawMinutes = (decimal)(clockOut - clockIn).TotalMinutes;   // 在岗总分钟（夜班下班在第二天也没问题）
         if (rawMinutes <= 0) return 0;
-        var minutes = rawMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(clockIn, clockOut);
+        var minutes = rawMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(clockIn, clockOut, groupId);
         return FloorToHalf(Math.Max(0, minutes / 60));
     }
 
@@ -336,13 +329,13 @@ public partial class AttendanceService
     /// 用标准工时封顶后，请一整天假最多算一天的标准工时，符合"请假时长"这个数字本来的业务含义。
     /// </summary>
     public static decimal ComputeLeaveHoursForDay(
-        DateOnly day, DateTime leaveStart, DateTime leaveEnd, decimal dailyCapHours, ShiftSchedule? shift = null)
+        DateOnly day, DateTime leaveStart, DateTime leaveEnd, decimal dailyCapHours, ShiftSchedule? shift = null, int? groupId = null)
     {
         var (winStart, winEnd) = ResolveLeaveWindow(day, shift);
         var segStart = leaveStart > winStart ? leaveStart : winStart;
         var segEnd   = leaveEnd   < winEnd   ? leaveEnd   : winEnd;
         if (segEnd <= segStart) return 0;
-        var raw = ComputeWorkHours(segStart, segEnd);
+        var raw = ComputeWorkHours(segStart, segEnd, groupId);
         return Math.Min(raw, dailyCapHours);
     }
 

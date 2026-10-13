@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Helpers;
+using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Options;
@@ -16,6 +17,7 @@ namespace AttendanceSystem.Pages.Approval;
 public class ApplySubmitModel(
     IApprovalService approvalService,
     IAttendanceService attendanceService,
+    AttendanceSystem.Data.AttendanceDbContext db,   // 查申请人的考勤组（饭点提示按考勤组）
     IWebHostEnvironment env,                    // 用来定位 wwwroot 目录存附件
     IOptions<AppSettingsOptions> appOptions,
     ILogger<ApplySubmitModel> logger) : AppPageModel
@@ -46,8 +48,18 @@ public class ApplySubmitModel(
     [BindProperty] public List<IFormFile> Attachments { get; set; } = [];  // 上传的附件文件
 
     /// <summary>打开页面：加载我提交过的申请、我可以选的审批人名单。</summary>
+    /// <summary>申请人所在考勤组的饭点时段说明（加班时长提示用）。</summary>
+    public string MealBreakText { get; set; } = UnpaidBreakSettings.Describe();
+
+    private async Task LoadMealBreakTextAsync()
+    {
+        var groupId = await db.Users.Where(u => u.Id == CurrentUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        MealBreakText = UnpaidBreakSettings.Describe(groupId);
+    }
+
     public async Task OnGetAsync()
     {
+        await LoadMealBreakTextAsync();
         MyApplications  = await approvalService.GetMyApprovalsAsync(CurrentUserId);
         ApproverOptions = await approvalService.GetAvailableApproversAsync(CurrentUserId);
     }
@@ -55,6 +67,7 @@ public class ApplySubmitModel(
     /// <summary>点“提交申请”时执行：存附件 → 按类型组装数据 → 提交。</summary>
     public async Task<IActionResult> OnPostAsync()
     {
+        await LoadMealBreakTextAsync();
         // 审批人名单要先查出来：一是校验员工选的人在不在名单里，二是提交失败时页面要重新显示这份名单
         ApproverOptions = await approvalService.GetAvailableApproversAsync(CurrentUserId);
 

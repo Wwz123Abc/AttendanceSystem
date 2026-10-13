@@ -154,8 +154,9 @@ public partial class AttendanceService
         // 加班时长按"申请的起止时间"重新算一遍再记：超过 6 小时扣午休、超过 9 小时再扣晚餐（跟提交时同一个函数）。
         // 不直接用单子上存的时长，是因为改规则之前提交、还没批的老单子存的是不扣饭点的总长度；
         // 算完顺手把单子上的时长也改成实际记入的数，审批列表/记录里看到的和考勤上记的一致
+        var otGroupId = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
         var otHours = approval.OvertimeEndTime.HasValue
-            ? ComputeWorkHours(otStart, approval.OvertimeEndTime.Value)
+            ? ComputeWorkHours(otStart, approval.OvertimeEndTime.Value, otGroupId)   // 按申请人所在考勤组的饭点扣
             : otDuration;
         approval.OvertimeDurationHours = otHours;
 
@@ -192,6 +193,7 @@ public partial class AttendanceService
                 .ToListAsync())
             .ToDictionary(a => a.WorkDate, a => a.ShiftSchedule);
         var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+        var leaveGroupId = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();   // 饭点按考勤组
         // 事假/病假/年假/调休：休息日不算请假
         var skipNonWorkdays = !LeaveCountsNaturalDays(approval.LeaveType);
 
@@ -213,7 +215,7 @@ public partial class AttendanceService
             if (skipNonWorkdays && IsShiftWeeklyRestDay(d, leaveShift)) continue;
 
             var dailyCap = leaveShift?.StandardWorkHours ?? defaultDailyHours;
-            var leaveHoursToday = ComputeLeaveHoursForDay(d, leaveStart, leaveEnd, dailyCap, leaveShift);
+            var leaveHoursToday = ComputeLeaveHoursForDay(d, leaveStart, leaveEnd, dailyCap, leaveShift, leaveGroupId);
 
             // 当天完全没有记录也要新建一条（比如请的是未来的假、这天还没产生任何打卡数据）——
             // 不然等到这天真过完，后台"旷工检查"任务会因为查不到记录，把已经批准的请假误标记成旷工。
@@ -253,7 +255,7 @@ public partial class AttendanceService
                 var leaveSegStart = leaveStart > dayStart ? leaveStart : dayStart;
                 if (workedCi < leaveSegStart)
                 {
-                    var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart);
+                    var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart, leaveGroupId);
                     record.ActualWorkHours = ApplyLeaveHoursCap(estimatedWork, record.LeaveHours, dailyCap);
                 }
             }
@@ -343,6 +345,8 @@ public partial class AttendanceService
             throw new BusinessException("下班时间必须晚于上班时间（夜班下班在第二天，请把日期选到第二天）");
 
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
+        var adjustLog = SnapshotBeforeAdjust(record, userId, workDate,
+            clockIn.HasValue && clockOut.HasValue ? "上班+下班" : clockIn.HasValue ? "上班" : "下班", operatorName, remark);
         if (record is null)
         {
             record = new AttendanceRecord { UserId = userId, WorkDate = workDate };
@@ -359,10 +363,76 @@ public partial class AttendanceService
         record.UpdatedAt    = clock.LocalNow();
 
         await RecalcWorkHoursAfterManualPunchAsync(record, userId);
+        adjustLog.NewClockIn  = record.ClockInTime;
+        adjustLog.NewClockOut = record.ClockOutTime;
+        db.PunchAdjustLogs.Add(adjustLog);
         await db.SaveChangesAsync();
 
         // 同步刷新这个月的月度汇总，道理和审批回写那边一样，不用等人工点"重新生成"
         await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
+    }
+
+    /// <summary>手动补卡之前，把这天考勤记录的样子存下来（撤回时恢复）。这天原来没有记录就只记"没有记录"。</summary>
+    private PunchAdjustLog SnapshotBeforeAdjust(AttendanceRecord? record, int userId, DateOnly workDate, string adjustType, string? operatorName, string? remark) => new()
+    {
+        UserId = userId, WorkDate = workDate, OperatorName = operatorName, AdjustType = adjustType,
+        Remark = string.IsNullOrWhiteSpace(remark) ? null : remark.Trim(),
+        RecordExisted = record is not null,
+        PrevClockIn = record?.ClockInTime, PrevClockOut = record?.ClockOutTime,
+        PrevStatus = record?.AttendanceStatus ?? default,
+        PrevActualWorkHours = record?.ActualWorkHours ?? 0,
+        PrevLateMinutes = record?.LateMinutes ?? 0, PrevEarlyLeaveMinutes = record?.EarlyLeaveMinutes ?? 0,
+        PrevMidCheckResults = record?.MidCheckResults,
+        CreatedAt = clock.LocalNow()
+    };
+
+    /// <summary>
+    /// 撤回一次管理员手动补卡，见 <see cref="IAttendanceService.RevertAdminPunchAdjustAsync"/>。
+    /// 只恢复补卡动过的那几项（上下班时间、状态、工时、迟到早退、午间命中、补午间卡新增的那条打卡）；
+    /// 加班时长、请假等其它信息不动，备注里保留原有内容并追加一句"已撤回"。
+    /// </summary>
+    public async Task RevertAdminPunchAdjustAsync(int logId, string? operatorName)
+    {
+        var log = await db.PunchAdjustLogs.FirstOrDefaultAsync(l => l.Id == logId)
+                  ?? throw new BusinessException("找不到这条补卡操作记录");
+        if (log.RevertedAt is not null) throw new BusinessException("这次补卡已经撤回过了");
+        if (await db.PunchAdjustLogs.AnyAsync(l => l.UserId == log.UserId && l.WorkDate == log.WorkDate && l.RevertedAt == null && l.Id > log.Id))
+            throw new BusinessException("这天后面还有更晚的一次补卡，请先撤回更晚的那次");
+
+        var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == log.UserId && r.WorkDate == log.WorkDate)
+                     ?? throw new BusinessException("这天的考勤记录已经不存在，没有可撤回的内容");
+        if (record.ClockInTime != log.NewClockIn || record.ClockOutTime != log.NewClockOut)
+            throw new BusinessException("这天的上班/下班时间在这次补卡之后又被别的操作改过，不能直接撤回，请人工处理");
+
+        if (log.AddedMidCheckTime is { } midTime)
+        {
+            var added = await db.AttendancePunches.Where(p => p.UserId == log.UserId && p.PunchType == PunchType.MidCheck
+                && p.PunchTime == midTime && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")).ToListAsync();
+            db.AttendancePunches.RemoveRange(added);
+        }
+
+        var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员" : operatorName;
+        if (!log.RecordExisted && record.OvertimeHours == 0 && record.LeaveHours == 0)
+        {
+            db.AttendanceRecords.Remove(record);   // 这天的记录就是这次补卡建出来的，撤回就是删掉
+        }
+        else
+        {
+            record.ClockInTime        = log.PrevClockIn;
+            record.ClockOutTime       = log.PrevClockOut;
+            record.AttendanceStatus   = log.RecordExisted ? log.PrevStatus : AttendanceStatus.NotPunched;
+            record.ActualWorkHours    = log.PrevActualWorkHours;
+            record.LateMinutes        = log.PrevLateMinutes;
+            record.EarlyLeaveMinutes  = log.PrevEarlyLeaveMinutes;
+            record.MidCheckResults    = log.PrevMidCheckResults;
+            AppendApprovalNote(record, $"管理员手动补卡已撤回（{log.AdjustType}卡，原操作人：{log.OperatorName}，撤回：{opText}）");
+            record.UpdatedAt = clock.LocalNow();
+        }
+
+        log.RevertedAt = clock.LocalNow();
+        log.RevertedBy = operatorName;
+        await db.SaveChangesAsync();
+        await GenerateMonthlySummaryAsync(log.WorkDate.Year, log.WorkDate.Month, [log.UserId]);
     }
 
     /// <summary>
@@ -390,6 +460,7 @@ public partial class AttendanceService
 
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
         var typeText = PunchReplenishmentRules.TypeText(type);
+        var adjustLog = SnapshotBeforeAdjust(record, userId, workDate, typeText, operatorName, remark);
         var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员手动补卡" : $"管理员手动补卡（操作人：{operatorName}）";
         var note = $"{opText}：补{typeText}卡 {punchAt:HH:mm}" + (string.IsNullOrWhiteSpace(remark) ? "" : $"，{remark.Trim()}");
 
@@ -402,6 +473,7 @@ public partial class AttendanceService
                     UserId = userId, PunchTime = punchAt, PunchType = PunchType.MidCheck, IsValid = true,
                     DeviceInfo = $"管理员补卡:{operatorName}", CreatedAt = clock.LocalNow()
                 });
+            adjustLog.AddedMidCheckTime = punchAt;
             await db.SaveChangesAsync();   // 先落库，下面重算午间命中要读到这条新打卡
             AppendApprovalNote(record, note);
             record.UpdatedAt = clock.LocalNow();
@@ -421,6 +493,9 @@ public partial class AttendanceService
         }
 
         await RecalcWorkHoursAfterManualPunchAsync(record, userId);
+        adjustLog.NewClockIn  = record.ClockInTime;
+        adjustLog.NewClockOut = record.ClockOutTime;
+        db.PunchAdjustLogs.Add(adjustLog);
         await db.SaveChangesAsync();
         await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
     }
