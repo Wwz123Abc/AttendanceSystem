@@ -25,7 +25,8 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     [BindProperty] public int      UserId       { get; set; }
     [BindProperty] public DateOnly WorkDate     { get; set; } = DateOnly.FromDateTime(DateTime.Today);
     [BindProperty] public int      PunchTypeValue { get; set; } = (int)PunchType.ClockIn;   // 补哪种卡：1 上班 / 2 下班 / 3 午间
-    [BindProperty] public string?  PunchAt        { get; set; }   // datetime-local 字符串，如 2026-08-13T20:05
+    [BindProperty] public string?  PunchTimeText  { get; set; }   // 只填钟点，如 20:05；日期用上面的"考勤日期"
+    [BindProperty] public bool     NextDay        { get; set; }   // 勾了 = 这个钟点在考勤日的第二天（夜班下班、过了零点的午间卡）
     [BindProperty] public bool     AllowOverwrite { get; set; }   // 强制覆盖：允许直接改掉已有的上班/下班时间
     [BindProperty] public string?  Remark         { get; set; }
 
@@ -66,8 +67,9 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
 
             if (!Enum.IsDefined(typeof(PunchType), PunchTypeValue)) throw new BusinessException("请选择补卡类型");
             var type = (PunchType)PunchTypeValue;
-            if (string.IsNullOrWhiteSpace(PunchAt) || !DateTime.TryParse(PunchAt, out var punchAt))
+            if (string.IsNullOrWhiteSpace(PunchTimeText) || !TimeOnly.TryParse(PunchTimeText, out var punchClock))
                 throw new BusinessException("请填写补卡的打卡时间");
+            var punchAt = WorkDate.ToDateTime(punchClock).AddDays(NextDay ? 1 : 0);   // 日期取上面选的考勤日期，不用再选一遍
 
             var operatorName = User.FindFirstValue("RealName");
             await attendanceService.AdminReplenishPunchAsync(UserId, WorkDate, type, punchAt, AllowOverwrite, Remark, operatorName);
@@ -163,6 +165,7 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     {
         null or "" => "",
         var s when s.StartsWith("ZKDevice") => "·考勤机",
+        var s when s.StartsWith("Mobile") => "·手机",
         var s when s.StartsWith("补卡") || s.StartsWith("管理员补卡") => "·补卡",
         _ => ""
     };
@@ -179,26 +182,42 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
         var shift = await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate == workDate)
             .Select(a => a.ShiftSchedule).FirstOrDefaultAsync();
         var from = workDate.ToDateTime(TimeOnly.MinValue);
+        // 只列这个考勤日的打卡：白班就是当天；夜班（跨天班次）再加上第二天中午之前（下班卡在那儿），别的日子的打卡不混进来
+        var to = shift is { IsCrossDay: true } ? from.AddDays(1).AddHours(12) : from.AddDays(1);
         var punches = (await db.AttendancePunches
-                .Where(p => p.UserId == userId && p.PunchTime >= from && p.PunchTime < from.AddDays(2))
+                .Where(p => p.UserId == userId && p.PunchTime >= from && p.PunchTime < to)
                 .OrderBy(p => p.PunchTime).Select(p => new { p.PunchTime, p.PunchType, p.DeviceInfo }).ToListAsync())
-            .Select(p => $"{p.PunchTime:MM-dd HH:mm}（{PunchReplenishmentRules.TypeText(p.PunchType)}{PunchSourceText(p.DeviceInfo)}）")
+            .Select(p => new
+            {
+                nextDay = DateOnly.FromDateTime(p.PunchTime) > workDate,
+                time = p.PunchTime.ToString("HH:mm"),
+                type = PunchReplenishmentRules.TypeText(p.PunchType),
+                source = PunchSourceText(p.DeviceInfo).TrimStart('·')
+            })
             .ToList();
+        // 备注是一条条用"；"连起来的，同样的话（比如反复手动补卡）合并成"×N"，拆成一行一条好读
+        var notes = (record?.ApprovalNote ?? "").Split('；', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .GroupBy(s => s).Select(g => new { text = g.Key, count = g.Count() }).ToList();
         var shiftText = shift is null ? "未排班"
             : $"{shift.ShiftName} {shift.WorkStartTime:HH\\:mm}-{shift.WorkEndTime:HH\\:mm}"
               + (string.IsNullOrWhiteSpace(shift.MidCheckWindows) ? "，无午间窗口" : $"，午间窗口 {shift.MidCheckWindows.Replace(",", "、")}");
-        if (record is null) return new JsonResult(new { exists = false, shift = shiftText, punches });
+        var crossDay = shift is { IsCrossDay: true };
+        var shiftStart = shift?.WorkStartTime.ToString("HH:mm");   // 夜班判断"第二天"用：钟点早于上班时间 = 已经过了零点
+        if (record is null) return new JsonResult(new { exists = false, shift = shiftText, punches, crossDay, shiftStart, notes });
         return new JsonResult(new
         {
             shift     = shiftText,
+            crossDay,
+            shiftStart,
             punches,
             midResult = record.MidCheckResults,
+            notes,
             exists    = true,
             clockIn   = record.ClockInTime?.ToString("yyyy-MM-ddTHH:mm"),
             clockOut  = record.ClockOutTime?.ToString("yyyy-MM-ddTHH:mm"),
             status    = AttendanceService.StatusText(record.AttendanceStatus),
             workHours = record.ActualWorkHours,
-            note      = record.ApprovalNote
+            note      = record.ApprovalNote   // 旧字段，页面改用 notes（已拆开去重）
         });
     }
 }

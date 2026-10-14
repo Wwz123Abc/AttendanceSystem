@@ -47,16 +47,29 @@ async function loadCurrentRecord() {
     try {
         const resp = await fetch(`?handler=Record&userId=${userId}&workDate=${workDate}`);
         const data = await resp.json();
-        const extra = `<br>班次：${escapeHtml(data.shift || '—')}`
-            + `<br>原始打卡：${(data.punches && data.punches.length) ? data.punches.map(escapeHtml).join('、') : '无'}`
-            + (data.midResult ? `<br>午间命中：${escapeHtml(data.midResult)}` : '');
-        if (!data.exists) {
-            box.innerHTML = '<i class="bi bi-info-circle me-1"></i>该员工这一天暂无考勤记录。' + extra;
+        // 夜班（跨天班次）：补下班卡时默认勾上"第二天"，管理员可以自己改
+        window.lastShiftCrossDay = !!data.crossDay;
+        window.lastShiftStart = data.shiftStart || null;
+        refreshPunchTypeUi();
+        const row = (label, html) => `<div class="row g-1 mb-1"><div class="col-3 col-md-2 text-muted">${label}</div><div class="col-9 col-md-10">${html}</div></div>`;
+        const t = s => s ? s.replace('T', ' ').slice(5) : '--';
+        const parts = [];
+        if (data.exists) {
+            parts.push(row('当前记录', `上班 <b>${t(data.clockIn)}</b> · 下班 <b>${t(data.clockOut)}</b> · 状态 <b>${escapeHtml(data.status)}</b> · 工时 <b>${data.workHours}</b> 小时`));
         } else {
-            box.innerHTML = `<i class="bi bi-info-circle me-1"></i>当前记录：上班 ${data.clockIn ? data.clockIn.replace('T', ' ') : '--'}，`
-                + `下班 ${data.clockOut ? data.clockOut.replace('T', ' ') : '--'}，状态 ${data.status}，工时 ${data.workHours} 小时`
-                + (data.note ? `，备注：${escapeHtml(data.note)}` : '') + extra;
+            parts.push(row('当前记录', '<span class="text-muted">这天暂无考勤记录</span>'));
         }
+        parts.push(row('班次', escapeHtml(data.shift || '—')));
+        const pun = data.punches || [];
+        const fmt = p => `<span class="text-nowrap me-3">${escapeHtml(p.time)} <span class="text-muted">${escapeHtml(p.type)}${p.source ? '·' + escapeHtml(p.source) : ''}</span></span>`;
+        const today = pun.filter(p => !p.nextDay), next = pun.filter(p => p.nextDay);
+        let punHtml = pun.length === 0 ? '<span class="text-muted">无</span>' : (today.length ? today.map(fmt).join('') : '<span class="text-muted">当天无</span>');
+        if (next.length) punHtml += `<div class="mt-1"><span class="text-muted me-2">次日</span>${next.map(fmt).join('')}</div>`;
+        parts.push(row('原始打卡', punHtml));
+        if (data.midResult) parts.push(row('午间命中', escapeHtml(data.midResult.replaceAll(';', '；'))));
+        if (data.notes && data.notes.length)
+            parts.push(row('备注', '<ul class="mb-0 ps-3">' + data.notes.map(n => `<li>${escapeHtml(n.text)}${n.count > 1 ? ` <span class="badge bg-secondary">×${n.count}</span>` : ''}</li>`).join('') + '</ul>'));
+        box.innerHTML = parts.join('');
         box.style.display = '';
     } catch (e) { alert('查询失败，请重试'); }
 }
@@ -75,6 +88,19 @@ function refreshPunchTypeUi() {
     const mid = v === '3';
     document.getElementById('fOverwriteBox').style.display = mid ? 'none' : '';
     if (mid) document.getElementById('fOverwrite').checked = false;
+    autoNextDay();
 }
 document.getElementById('fPunchType').addEventListener('change', refreshPunchTypeUi);
 refreshPunchTypeUi();
+
+// 夜班（跨天班次）：补下班卡/午间卡时，填的钟点早于班次上班时间（比如 08:00、00:30）就是已经过了零点，自动勾上"第二天"；
+// 上班卡不会是第二天。管理员之后可以自己改勾选框——只有换类型、改钟点、重新查询时才会重新判断。
+function autoNextDay() {
+    if (!window.lastShiftCrossDay || !window.lastShiftStart) return;
+    const type = document.getElementById('fPunchType').value;
+    const time = document.getElementById('fPunchTime').value;
+    const box = document.getElementById('fNextDay');
+    if (type === '1') { box.checked = false; return; }
+    if (time) box.checked = time < window.lastShiftStart;
+}
+document.getElementById('fPunchTime').addEventListener('input', autoNextDay);

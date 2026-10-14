@@ -55,8 +55,14 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">补的打卡时间 <span class="text-danger">*</span></label>
-                        <input asp-for="PunchAt" type="datetime-local" class="form-control" id="fPunchAt" required />
-                        <div class="form-text">夜班等跨天班次的下班卡，请把日期选到次日。</div>
+                        <div class="d-flex align-items-center gap-3">
+                            <input asp-for="PunchTimeText" type="time" class="form-control" id="fPunchTime" style="max-width:160px" required />
+                            <div class="form-check mb-0">
+                                <input asp-for="NextDay" type="checkbox" class="form-check-input" id="fNextDay" />
+                                <label class="form-check-label" for="fNextDay">第二天</label>
+                            </div>
+                        </div>
+                        <div class="form-text">只填钟点，日期就是上面的"考勤日期"。夜班的下班卡、过了零点的午间卡，请勾"第二天"。</div>
                     </div>
                     <div class="mb-3 form-check" id="fOverwriteBox">
                         <input asp-for="AllowOverwrite" type="checkbox" class="form-check-input" id="fOverwrite" />
