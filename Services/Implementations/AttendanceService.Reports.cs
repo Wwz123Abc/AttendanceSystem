@@ -272,6 +272,32 @@ public partial class AttendanceService
                 .ToListAsync(ct))
             .Select(ToDto).ToList();
         await MarkLateMidChecksAsync(list, ct);   // 午间窗口外才打的卡，导出里也写成"迟到 hh:mm"
+        await FillPayrollHoursAsync(list, start, end, ct);
         return list;
+    }
+
+    /// <summary>
+    /// 给打卡时间表的每一行算"发薪口径"的工时，跟发薪汇总表（<see cref="GenerateTemplateReportAsync"/>）每日格子同一个公式：
+    /// 正班 = 休息日 0，工作日最多算班次标准工时（没排班按默认），半小时向下取整；格子 = 正班 + 加班（各自取整）。
+    /// 不然"实际工时"列直接打印存库的在岗工时（可能超过标准工时，比如没排班时不封顶、或班次排上之前算的），
+    /// 两张表同一个人同一天对不上（2026-10-13 用户反映）。
+    /// </summary>
+    private async Task FillPayrollHoursAsync(List<AttendanceRecordDto> list, DateOnly start, DateOnly end, CancellationToken ct)
+    {
+        if (list.Count == 0) return;
+        var userIds = list.Select(r => r.UserId).Distinct().ToList();
+        var shifts = (await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+                .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end).ToListAsync(ct))
+            .ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+        var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+        foreach (var r in list)
+        {
+            shifts.TryGetValue((r.UserId, r.WorkDate), out var shift);
+            var std = shift?.StandardWorkHours ?? defaultDailyHours;
+            var regular = IsShiftWeeklyRestDay(r.WorkDate, shift) ? 0m : FloorToHalf(Math.Min(r.ActualWorkHours, std));
+            var ot = r.OvertimeHours > 0 ? FloorToHalf(r.OvertimeHours) : 0m;
+            r.PayrollRegularHours = regular;
+            r.PayrollDayHours = regular + ot;
+        }
     }
 }

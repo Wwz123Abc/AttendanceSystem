@@ -29,6 +29,13 @@ public class AttendanceRecordDto
     public DateTime? ClockInTime  { get; set; }
     public DateTime? ClockOutTime { get; set; }
 
+    /// <summary>发薪口径的正班工时（打卡时间表导出用）：休息日 0；工作日最多算班次标准工时（没排班按默认），半小时向下取整。
+    /// 跟发薪汇总表每日格子里的正班部分是同一个数；没算过（不是导出场景）时为空。</summary>
+    public decimal? PayrollRegularHours { get; set; }
+
+    /// <summary>发薪表每日格子的数 = 发薪口径正班 + 加班（各自半小时向下取整）；没算过为空。</summary>
+    public decimal? PayrollDayHours { get; set; }
+
     /// <summary>午间必打卡结果：每一段窗口各一条；班次没配置午间窗口的，这个列表是空的。</summary>
     public List<MidCheckWindowResult> MidCheckHits { get; set; } = [];
 

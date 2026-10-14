@@ -676,22 +676,22 @@ public static class ExcelExportHelper
         // 第 0 行：大标题（前 14 列合并）
         var titleRow = sheet.CreateRow(0);
         SetCell(titleRow, 0, $"员工打卡时间表 统计日期：{start:yyyy-MM-dd} 至 {end:yyyy-MM-dd}", titleStyle);
-        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 13));
+        sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 14));
         titleRow.HeightInPoints = 26;
 
         // 第 1 行：报表生成时间
         var genRow = sheet.CreateRow(1);
-        SetCell(genRow, 0, $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}", subTitleStyle);
-        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, 13));
+        SetCell(genRow, 0, $"报表生成时间：{DateTime.Now:yyyy-MM-dd HH:mm}　说明：实际工时 = 发薪口径的正班（休息日 0，工作日最多算班次标准工时）；发薪日工时 = 实际工时 + 加班，和发薪汇总表每日格子一致", subTitleStyle);
+        sheet.AddMergedRegion(new CellRangeAddress(1, 1, 0, 14));
 
         // 第 2 行：表头
-        string[] headers = ["工号", "姓名", "部门", "日期", "星期", "上班打卡", "午间打卡", "下班打卡", "考勤状态", "实际工时(h)", "加班(h)", "请假(h)", "迟到(分)", "备注/审批"];
+        string[] headers = ["工号", "姓名", "部门", "日期", "星期", "上班打卡", "午间打卡", "下班打卡", "考勤状态", "实际工时(h)", "加班(h)", "发薪日工时(h)", "请假(h)", "迟到(分)", "备注/审批"];
         var headerRow = sheet.CreateRow(2);
         headerRow.HeightInPoints = 20;
         for (var i = 0; i < headers.Length; i++)
         {
             SetCell(headerRow, i, headers[i], headerStyle);
-            sheet.SetColumnWidth(i, i switch { 2 => 16 * 256, 13 => 22 * 256, _ => 11 * 256 });
+            sheet.SetColumnWidth(i, i switch { 2 => 16 * 256, 14 => 22 * 256, _ => 11 * 256 });
         }
         ApplyLookAndFeel(sheet, freezeCols: 3, freezeRows: 3, repeatHeaderRows: 3);   // 冻结"工号/姓名/部门"这几列+表头
 
@@ -720,11 +720,14 @@ public static class ExcelExportHelper
             SetCell(row, 6,  rec.MidCheckTimeText, baseStyle);
             SetCell(row, 7,  rec.ClockOutText,     baseStyle);
             SetCell(row, 8,  rec.StatusText,       statusStyle);
-            SetCell(row, 9,  (double)AttendanceService.FloorToHalf(rec.ActualWorkHours), baseStyle);
-            SetCell(row, 10, (double)AttendanceService.FloorToHalf(rec.OvertimeHours),   baseStyle);
-            SetCell(row, 11, (double)AttendanceService.FloorToHalf(rec.LeaveHours),      baseStyle);
-            SetCell(row, 12, rec.LateMinutes, rec.LateMinutes > 0 ? (banded ? orangeBandedStyle : orangeStyle) : baseStyle);
-            SetCell(row, 13, rec.ApprovalNote ?? "", baseStyle);
+            var regularHours = rec.PayrollRegularHours ?? AttendanceService.FloorToHalf(rec.ActualWorkHours);   // 发薪口径的正班（没算过就退回存库的值）
+            var otHours      = AttendanceService.FloorToHalf(rec.OvertimeHours);
+            SetCell(row, 9,  (double)regularHours, baseStyle);
+            SetCell(row, 10, (double)otHours,      baseStyle);
+            SetCell(row, 11, (double)(rec.PayrollDayHours ?? regularHours + otHours), baseStyle);   // = 发薪表每日格子
+            SetCell(row, 12, (double)AttendanceService.FloorToHalf(rec.LeaveHours),   baseStyle);
+            SetCell(row, 13, rec.LateMinutes, rec.LateMinutes > 0 ? (banded ? orangeBandedStyle : orangeStyle) : baseStyle);
+            SetCell(row, 14, rec.ApprovalNote ?? "", baseStyle);
         }
 
         return ToBytes(wb);
