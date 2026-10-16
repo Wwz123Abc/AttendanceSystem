@@ -108,6 +108,29 @@ public class RevertAdminPunchAdjustTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 补卡之后这天又批了请假_撤回补卡_请假状态和请假小时不丢()
+    {
+        var uid = await SeedDayWithoutMidAsync();
+        using (var db = CreateContext())
+            await Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.MidCheck, At(12, 40), false, null, "管理员");
+        var logId = await LatestLogIdAsync(uid);
+        using (var db = CreateContext())   // 补卡之后批了半天假（效果同请假审批写回）
+        {
+            var r = await db.AttendanceRecords.SingleAsync(x => x.UserId == uid && x.WorkDate == Tue);
+            r.AttendanceStatus = AttendanceStatus.OnLeave; r.LeaveHours = 4m; r.ActualWorkHours = 4m;
+            await db.SaveChangesAsync();
+        }
+        using (var db = CreateContext())
+            await Svc(db).RevertAdminPunchAdjustAsync(logId, "管理员");
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(AttendanceStatus.OnLeave, rec.AttendanceStatus);
+        Assert.Equal(4m, rec.LeaveHours);
+        Assert.NotNull((await check.PunchAdjustLogs.SingleAsync(l => l.Id == logId)).RevertedAt);
+    }
+
+    [Fact]
     public async Task 撤回手动补卡建出来的记录_这天原来没有记录_撤回后记录删除()
     {
         var (uid, _) = SeedDayMidWorld();

@@ -408,22 +408,37 @@ public partial class AttendanceService
             var added = await db.AttendancePunches.Where(p => p.UserId == log.UserId && p.PunchType == PunchType.MidCheck
                 && p.PunchTime == midTime && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")).ToListAsync();
             db.AttendancePunches.RemoveRange(added);
-            await db.SaveChangesAsync();   // 先落库，下面重算工时、午间命中要读到删除之后的打卡
         }
 
         var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员" : operatorName;
-        if (!log.RecordExisted && record.OvertimeHours == 0 && record.LeaveHours == 0)
+        var deleteRecord = !log.RecordExisted && record.OvertimeHours == 0 && record.LeaveHours == 0;
+        if (deleteRecord)
         {
             db.AttendanceRecords.Remove(record);   // 这天的记录就是这次补卡建出来的，撤回就是删掉
         }
         else
         {
-            record.ClockInTime        = log.PrevClockIn;
-            record.ClockOutTime       = log.PrevClockOut;
-            record.AttendanceStatus   = log.RecordExisted ? log.PrevStatus : AttendanceStatus.NotPunched;
-            record.ActualWorkHours    = log.PrevActualWorkHours;
-            record.LateMinutes        = log.PrevLateMinutes;
-            record.EarlyLeaveMinutes  = log.PrevEarlyLeaveMinutes;
+            // 补卡之后这天如果又批了请假/出差/节假日，状态、工时、迟到早退是审批流程定的，不能被补卡前存的旧值换掉
+            var keepApprovalState = record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip;
+            record.ClockInTime  = log.PrevClockIn;
+            record.ClockOutTime = log.PrevClockOut;
+            if (!keepApprovalState)
+            {
+                record.AttendanceStatus   = log.RecordExisted ? log.PrevStatus : AttendanceStatus.NotPunched;
+                record.ActualWorkHours    = log.PrevActualWorkHours;
+                record.LateMinutes        = log.PrevLateMinutes;
+                record.EarlyLeaveMinutes  = log.PrevEarlyLeaveMinutes;
+            }
+        }
+
+        // 删掉补的午间卡、恢复上下班时间、标记"已撤回"一次落库，保证这几件事要么都做、要么都不做；
+        // 下面的重算要读到删除之后的打卡，所以必须先落库
+        log.RevertedAt = clock.LocalNow();
+        log.RevertedBy = operatorName;
+        await db.SaveChangesAsync();
+
+        if (!deleteRecord)
+        {
             // 补卡之后午间卡可能被别的途径（比如考勤机补传）改动过，这里不能把补卡前存的旧值整套写回去：
             // 午间命中按现在所有打卡重新读，上下班卡都在的话工时/状态也按现在的打卡重新算（2026-10-16 复审）
             var shift = (await GetShiftAssignmentAsync(log.UserId, log.WorkDate))?.ShiftSchedule;
@@ -431,11 +446,8 @@ public partial class AttendanceService
             await RecalcWorkHoursAfterManualPunchAsync(record, log.UserId);
             AppendApprovalNote(record, $"管理员手动补卡已撤回（{log.AdjustType}卡，原操作人：{log.OperatorName}，撤回：{opText}）");
             record.UpdatedAt = clock.LocalNow();
+            await db.SaveChangesAsync();
         }
-
-        log.RevertedAt = clock.LocalNow();
-        log.RevertedBy = operatorName;
-        await db.SaveChangesAsync();
         await GenerateMonthlySummaryAsync(log.WorkDate.Year, log.WorkDate.Month, [log.UserId]);
     }
 
