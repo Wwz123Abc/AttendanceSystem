@@ -261,9 +261,13 @@ builder.Services.AddRateLimiter(options =>
             _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })
         : RateLimitPartition.GetNoLimiter("login-get"));
 
-    options.AddPolicy("SelfRegisterPolicy", httpContext => RateLimitPartition.GetFixedWindowLimiter(
-        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    // 同登录页：只限制提交（POST），打开页面不计数——新员工集中入职时大家连同一个 Wi-Fi、出口 IP 相同，
+    // 打开页面也算的话每分钟只够 5 个人
+    options.AddPolicy("SelfRegisterPolicy", httpContext => HttpMethods.IsPost(httpContext.Request.Method)
+        ? RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })
+        : RateLimitPartition.GetNoLimiter("self-register-get"));
 
     // 提交审批申请：登录用户账号已经保证了身份，这里限流只是为了挡脚本刷单——每次提交都会触发一条
     // 给审批人的通知，30/分钟对正常手动操作足够宽松，只拦真正的批量脚本

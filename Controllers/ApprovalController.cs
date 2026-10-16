@@ -85,6 +85,9 @@ public class ApprovalController(IApprovalService approvalService, IDeptScopeServ
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> Query([FromQuery] ApprovalQueryDto query)
     {
+        // 页码/每页条数要钳制：PageIndex<=0 会让 Skip 传负数抛 500，PageSize 传很大的值能一次拉出全部审批单（同 /api/admin/users）
+        query.PageIndex = Math.Max(query.PageIndex, 1);
+        query.PageSize  = Math.Clamp(query.PageSize, 1, 200);
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var (items, total) = await approvalService.QueryApprovalsAsync(query, visibleIds);
         return Ok(ApiResponse.WithData(items, total));

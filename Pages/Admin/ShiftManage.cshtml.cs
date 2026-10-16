@@ -155,7 +155,9 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
     /// "漏排班天数"（方便一眼看出有没有人漏排）。休息日/法定节假日（非调班补班）不算漏排——
     /// 这两种"该不该算漏排"的判断口径跟 <see cref="AttendanceService.GenerateTemplateReportAsync"/>
     /// 里"没排班时按全局周末兜底"的逻辑保持一致：没有排班就不知道这个人具体哪天该休，
-    /// 只能退一步按公司通用的"周六周日 + 假期表"来判断，不是真的按每个人的班次休息日精确算。
+    /// 只能退一步按公司通用的"周六周日"来判断，不是真的按每个人的班次休息日精确算。
+    /// （假期表 Holiday 目前没有任何页面在维护、里面没有数据，系统别处也不读它，所以这里不看假期：
+    /// 国庆这类法定假期里没排班的格子会标成漏排，导出后请自行忽略；以后要用假期表，需要先做维护页面。）
     /// </summary>
     public async Task<IActionResult> OnGetExportAsync(int[]? groupIds, string? viewStart, string? viewEnd)
     {

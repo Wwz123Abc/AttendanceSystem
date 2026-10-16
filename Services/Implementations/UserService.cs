@@ -300,6 +300,7 @@ public class UserService(
         await EnsureCanManageAsync(actingUserId, existing.Role, existing.ScopedDepartmentId);
 
         ValidateEmployeeNoFormat(user.EmployeeNo);
+        user.EmployeeNo = user.EmployeeNo.Trim();   // 同新建：校验用的是去空格后的值，落库也必须一致（走接口改工号时页面不会替你去空格）
 
         // 直属上级不能是员工本人：设成本人的话，没配审批人名单的组里第一级审批会派给他自己、自己批自己的单
         // （2026-10-07 第 18 轮审查；页面、接口、智能助手都走这个方法，这里统一拦）

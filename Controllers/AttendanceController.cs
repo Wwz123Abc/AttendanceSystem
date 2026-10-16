@@ -37,6 +37,9 @@ public class AttendanceController(IAttendanceService attendanceService, IDeptSco
     [Authorize(Policy = "ManagePolicy")]
     public async Task<IActionResult> GetDepartment([FromQuery] DeptAttendanceQueryDto query)
     {
+        // 日期范围要限制，否则可以一次拉出几年的全部考勤记录
+        if (query.EndDate < query.StartDate) return BadRequest(ApiResponse.Failed("结束日期不能早于起始日期"));
+        if (query.EndDate.DayNumber - query.StartDate.DayNumber > 92) return BadRequest(ApiResponse.Failed("查询的日期范围不能超过 93 天"));
         var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         var list = await attendanceService.GetDeptAttendanceAsync(query, visibleIds, HttpContext.RequestAborted);
         return Ok(ApiResponse.WithData(list, list.Count));

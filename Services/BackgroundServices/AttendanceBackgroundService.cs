@@ -70,7 +70,7 @@ public class AttendanceBackgroundService(
                     var from = _lastAbsentDate == DateTime.MinValue ? yesterday : _lastAbsentDate.Date.AddDays(1);
                     for (var d = from; d <= yesterday; d = d.AddDays(1))
                         await MarkAbsentAsync(DateOnly.FromDateTime(d));
-                    _lastAbsentDate = now;
+                    _lastAbsentDate = yesterday;   // 补到的是"昨天"，不能记成今天，否则今天 23:55 会被当成已标记而漏标
                 }
 
                 // 每月 1 号 00:10 之后是首选执行时间点（留几分钟缓冲，给设备重传/网络延迟一点时间，
