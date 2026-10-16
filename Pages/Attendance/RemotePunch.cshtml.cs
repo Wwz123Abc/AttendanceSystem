@@ -47,6 +47,12 @@ public class RemotePunchModel(
     public string? ErrorMessage     { get; set; }
     public bool    ShowFallbackHint { get; set; }   // 人脸识别没通过时，提示可以改走补卡申请
 
+    // 打卡成功后的回显（页面上"打卡结果"那块用）：记成了什么卡、几点、离打卡点多远、考勤状态
+    public string? ResultTypeText     { get; set; }
+    public string? ResultTimeText     { get; set; }
+    public string? ResultLocationText { get; set; }
+    public string? ResultStatusText   { get; set; }
+
     /// <summary>人脸抓拍的 base64 字符串上限（约等于解码后 3.75MB 原始图片）——一帧摄像头截图正常情况下
     /// 远小于这个数，这里卡一个上限只是为了在真正调用 Convert.FromBase64String 解码（会一次性分配等大小
     /// 的内存缓冲区）之前挡掉恶意构造的超大字符串，避免有人直接绕过前端拿超大 payload 打这个接口刷内存。</summary>
@@ -57,6 +63,73 @@ public class RemotePunchModel(
         bytes.Length >= 1024 && bytes[0] == 0xFF && bytes[1] == 0xD8;
 
     public async Task OnGetAsync() => await LoadStateAsync();
+
+    /// <summary>
+    /// 页面拿到定位后就来问一次"这个位置在不在我考勤组的打卡范围内"（AJAX，不调人脸识别、不花钱），
+    /// 超出范围的话页面立刻红字提示，不用等员工点了打卡才被拒（点之前摄像头出问题时更看不到这条提示）。
+    /// 校验口径和真正打卡时是同一个 <see cref="IAttendanceService.ValidateLocationAsync"/>。
+    /// </summary>
+    public async Task<JsonResult> OnGetCheckLocationAsync(double? lat, double? lng, double? acc)
+    {
+        var groupId = await db.Users.Where(u => u.Id == CurrentUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        var (valid, message) = await attendanceService.ValidateLocationAsync(groupId, lat, lng, acc);
+        return new JsonResult(new { valid, message });
+    }
+
+    /// <summary>
+    /// 打卡前预览（AJAX，不调人脸识别、不花钱）：这次打卡系统会记成什么卡（上班 / 下班 / 午间），以及要提醒员工的事——
+    /// 比如"现在不在午间打卡时段，这次只留识别记录"、"上班卡被拦（刚打完下班卡又点了一次）"。
+    /// 类型判断和真正打卡时是同一个 <see cref="ResolvePunchTypeAsync"/>，不会预览一个、实际记成另一个。
+    /// </summary>
+    public async Task<JsonResult> OnGetPreviewAsync()
+    {
+        var (type, todayBeforePunch) = await ResolvePunchTypeAsync();
+        var workDate = todayBeforePunch?.WorkDate ?? DateOnly.FromDateTime(DateTime.Today);
+        var shift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;
+        var now = DateTime.Now;
+        string? hint = null;
+        var blocked = false;
+
+        switch (type)
+        {
+            case PunchType.ClockIn:
+                var rejection = await attendanceService.GetClockInRejectionAsync(CurrentUserId, now);
+                if (rejection is not null) { blocked = true; hint = rejection; }
+                else hint = shift is null
+                    ? "今天没有排班，按您实际打卡的时间记录上班时间"
+                    : $"班次：{shift.ShiftName}（{shift.WorkStartTime:HH\\:mm}-{shift.WorkEndTime:HH\\:mm}）";
+                break;
+            case PunchType.MidCheck:
+                var windows = shift?.ParseMidCheckWindows() ?? [];
+                if (windows.Count == 0)
+                    hint = "您的班次没有午间必打卡的要求，这次打卡只留识别记录，不会改动上班、下班时间";
+                else
+                {
+                    var inWindow = windows.Any(w => now >= AttendanceService.ResolveShiftTime(workDate, w.Start, shift!)
+                                                 && now <= AttendanceService.ResolveShiftTime(workDate, w.End, shift!));
+                    var text = string.Join("、", windows.Select(w => $"{w.Start:HH\\:mm}-{w.End:HH\\:mm}"));
+                    hint = inWindow
+                        ? $"现在在午间打卡时段（{text}）内，会计入午间打卡"
+                        : $"现在不在午间打卡时段（{text}）内，这次打卡只留识别记录，**不会计入午间打卡**；还没到下班时间，下班时再打才会记成下班卡";
+                }
+                break;
+            default:
+                hint = "这次会记成下班卡";
+                break;
+        }
+        return new JsonResult(new { type = PunchReplenishmentRules.TypeText(type), blocked, hint });
+    }
+
+    /// <summary>离员工所在考勤组最近的打卡点（名称、距离、有效半径），用来在打卡成功后告诉员工"您在哪个打卡点范围内"。</summary>
+    private async Task<string?> DescribeNearestLocationAsync(int? groupId, double? lat, double? lng)
+    {
+        if (!groupId.HasValue || !lat.HasValue || !lng.HasValue) return null;
+        var locs = await db.AttendanceGroupLocations.Where(l => l.AttendanceGroupId == groupId.Value).ToListAsync();
+        if (locs.Count == 0) return null;
+        var nearest = locs.Select(l => new { l.LocationName, l.RadiusMeters, D = AttendanceService.HaversineMeters(lat.Value, lng.Value, l.Latitude, l.Longitude) })
+            .OrderBy(x => x.D).First();
+        return $"距「{nearest.LocationName ?? "打卡点"}」{nearest.D:F0} 米（限 {nearest.RadiusMeters} 米内）";
+    }
 
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)
     {
@@ -128,6 +201,15 @@ public class RemotePunchModel(
                 Message     = punchResult.Message;
                 ShowMessage = true;
                 if (!IsSuccess) ErrorMessage = punchResult.Message;
+                else
+                {
+                    // 成功后的回显：记成了什么卡、几点、离打卡点多远、考勤状态
+                    ResultTypeText     = PunchReplenishmentRules.TypeText(type) + "卡";
+                    ResultTimeText     = (punchResult.PunchTime ?? DateTime.Now).ToString("MM-dd HH:mm:ss");
+                    ResultLocationText = await DescribeNearestLocationAsync(user.AttendanceGroupId, Latitude, Longitude);
+                    ResultStatusText   = punchResult.StatusText
+                        + (punchResult.LateMinutes is > 0 ? $"（迟到 {punchResult.LateMinutes} 分钟）" : "");
+                }
             }
         }
         catch (InvalidOperationException ex)

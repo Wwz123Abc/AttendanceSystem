@@ -39,6 +39,21 @@ else
     {
         <div class="alert @(Model.IsSuccess ? "alert-success" : "alert-danger") alert-dismissible fade show">
             <i class="bi @(Model.IsSuccess ? "bi-check-circle" : "bi-exclamation-circle") me-2"></i>@Model.Message
+            @if (Model.IsSuccess && !string.IsNullOrEmpty(Model.ResultTypeText))
+            {
+                <dl class="row mb-0 mt-2 small">
+                    <dt class="col-4 col-md-2 fw-normal">记成</dt><dd class="col-8 col-md-10 fw-semibold">@Model.ResultTypeText</dd>
+                    <dt class="col-4 col-md-2 fw-normal">打卡时间</dt><dd class="col-8 col-md-10">@Model.ResultTimeText</dd>
+                    @if (!string.IsNullOrEmpty(Model.ResultLocationText))
+                    {
+                        <dt class="col-4 col-md-2 fw-normal">位置</dt><dd class="col-8 col-md-10">@Model.ResultLocationText</dd>
+                    }
+                    @if (!string.IsNullOrEmpty(Model.ResultStatusText))
+                    {
+                        <dt class="col-4 col-md-2 fw-normal">考勤状态</dt><dd class="col-8 col-md-10">@Model.ResultStatusText</dd>
+                    }
+                </dl>
+            }
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
     }
@@ -57,11 +72,15 @@ else
         </div>
     }
 
+    <div id="clientAlert" class="alert alert-danger d-none" role="alert">
+        <i class="bi bi-exclamation-octagon me-2"></i><span id="clientAlertText"></span>
+    </div>
     <div id="locationAlert" class="alert alert-warning d-none">
         <i class="bi bi-geo-alt me-2"></i><span id="locationStatus">正在获取位置...</span>
     </div>
     <div id="cameraAlert" class="alert alert-warning d-none">
         <i class="bi bi-camera-video-off me-2"></i><span id="cameraStatus">正在打开摄像头...</span>
+        <button type="button" id="cameraRetry" class="btn btn-sm btn-outline-secondary ms-2 d-none" onclick="restartCamera()">重试摄像头</button>
     </div>
 
     <div class="row g-4">
@@ -80,13 +99,19 @@ else
                         <i class="bi bi-geo-alt-fill text-success me-1"></i>
                         <span id="locationText">位置已获取</span>
                     </div>
+                    <div id="locationWarn" class="alert alert-danger py-2 small d-none">
+                        <i class="bi bi-exclamation-triangle me-1"></i><span id="locationWarnText"></span>
+                    </div>
 
+                    <div id="cameraWait" class="alert alert-secondary py-2 small">
+                        <i class="bi bi-hourglass-split me-1"></i>正在核对您的位置；位置在打卡范围内才会打开摄像头…
+                    </div>
                     <div class="mb-3 position-relative d-inline-block">
                         <video id="cameraPreview" autoplay playsinline muted
                                style="width:220px;height:220px;object-fit:cover;border-radius:12px;background:#000;transform:scaleX(-1)"></video>
                         <canvas id="captureCanvas" style="display:none"></canvas>
                         <div id="cameraReadyBadge" class="badge bg-success position-absolute top-0 start-0 m-2 d-none">
-                            <i class="bi bi-camera-video"></i> 摄像头已就绪
+                            <i class="bi bi-camera-video"></i> 摄像头已出画面
                         </div>
                     </div>
                     <div class="text-muted small mb-3">点击下面的按钮打卡时会自动拍下当前画面识别，不用手动拍照</div>
@@ -97,9 +122,13 @@ else
                         <input type="hidden" asp-for="Accuracy" id="accuracy" />
                         <input type="hidden" asp-for="CapturedPhotoData" id="capturedPhotoData" />
 
+                        <div id="punchPreview" class="alert alert-info py-2 small mt-3 mb-0 d-none">
+                            <i class="bi bi-info-circle me-1"></i>本次打卡将记为：<strong id="punchPreviewType"></strong>
+                            <div id="punchPreviewHint" class="mt-1"></div>
+                        </div>
                         <div class="d-flex justify-content-center mt-3">
-                            <button type="button" id="punchBtn" class="btn btn-primary btn-lg px-5" onclick="submitPunch()">
-                                <i class="bi bi-fingerprint me-2"></i>打卡
+                            <button type="button" id="punchBtn" class="btn btn-primary btn-lg px-5" onclick="submitPunch()" disabled>
+                                <i class="bi bi-fingerprint me-2"></i><span id="punchBtnText">打卡</span>
                             </button>
                         </div>
                         <div class="text-muted small mt-2">
