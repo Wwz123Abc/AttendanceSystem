@@ -270,7 +270,14 @@ public class GroupManageModel(
             approvalLevel = Models.Enums.ApprovalLevelType.Level1;   // 数字串越界（如 "99"）也回落成默认值，不能落库成未定义枚举
         foreach (var loc in Locations)
         {
-            if (!loc.Latitude.HasValue || !loc.Longitude.HasValue) continue;   // 没填全经纬度的行本来就会被跳过，不用校验
+            if (!loc.Latitude.HasValue || !loc.Longitude.HasValue)
+            {
+                // 整行都空着的行（模板空行）可以跳过；填了名称或只填了一个坐标却没填全经纬度的行，保存时会被丢掉，
+                // 管理员以为配好了，员工却会因为"考勤组没有打卡地点"打不了卡，所以明确报错（2026-10-16 复审）
+                if (!string.IsNullOrWhiteSpace(loc.Name) || loc.Latitude.HasValue || loc.Longitude.HasValue)
+                    return $"打卡地点「{(string.IsNullOrWhiteSpace(loc.Name) ? "未命名" : loc.Name.Trim())}」没有填完整的经纬度，请补全，或者删掉这一行";
+                continue;
+            }
             if (loc.Latitude.Value is < -90 or > 90) return "打卡地点纬度不正确（应在 -90 到 90 之间）";
             if (loc.Longitude.Value is < -180 or > 180) return "打卡地点经度不正确（应在 -180 到 180 之间）";
             if (loc.Radius is < 0 or > 5000) return "打卡范围半径请填 0-5000 米之间";

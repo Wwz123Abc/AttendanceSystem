@@ -32,7 +32,7 @@ public partial class AgentToolExecutor
             q = q.Where(u => u.EmployeeNo.Contains(keyword) || u.RealName.Contains(keyword));
         if (visibleIds is not null)
             q = q.Where(u => u.DepartmentId != null && visibleIds.Contains(u.DepartmentId.Value));
-        else if (subtree is { Count: > 0 })
+        if (subtree is { Count: > 0 })
             q = q.Where(u => u.DepartmentId != null && subtree.Contains(u.DepartmentId.Value));
 
         q = status switch
@@ -137,7 +137,7 @@ public partial class AgentToolExecutor
                         && r.User.Role == UserRole.Employee && !r.User.IsAttendanceExempt);   // 免考勤的正式工不进异常清单
         if (visibleIds is not null)
             q = q.Where(r => r.User.DepartmentId != null && visibleIds.Contains(r.User.DepartmentId.Value));
-        else if (subtree is not null)
+        if (subtree is not null)
             q = q.Where(r => r.User.DepartmentId != null && subtree.Contains(r.User.DepartmentId.Value));
 
         var total = await q.CountAsync(ct);

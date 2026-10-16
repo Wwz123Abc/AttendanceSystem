@@ -104,10 +104,11 @@ public static class ExcelExportHelper
     }
 
     // ── 报表 2：个人每日考勤明细（一行一天）─────────────────────────────────────
-    public static byte[] ExportDailyStatusReport(MonthlySummaryDto summary)
+    public static byte[] ExportDailyStatusReport(MonthlySummaryDto summary, DateOnly? rangeStart = null, DateOnly? rangeEnd = null)
     {
         using var wb = new XSSFWorkbook();
-        var sheet = wb.CreateSheet($"{summary.RealName}_{summary.Year}年{summary.Month:D2}月");
+        var periodText = rangeStart is { } rs && rangeEnd is { } re ? $"{rs:yyyy-MM-dd}~{re:yyyy-MM-dd}" : $"{summary.Year}年{summary.Month:D2}月";
+        var sheet = wb.CreateSheet($"{summary.RealName}_{(rangeStart is null ? periodText : $"{rangeStart:MMdd}-{rangeEnd:MMdd}")}");
 
         var headerStyle = HeaderStyle(wb);
         var dataStyle   = DataStyle(wb);
@@ -119,7 +120,7 @@ public static class ExcelExportHelper
         // 标题（前 9 列合并）
         var titleRow = sheet.CreateRow(0);
         SetCell(titleRow, 0,
-            $"{summary.RealName}（{summary.EmployeeNo}）{summary.Year}年{summary.Month:D2}月每日考勤明细",
+            $"{summary.RealName}（{summary.EmployeeNo}）{periodText}每日考勤明细",
             TitleStyle(wb));
         sheet.AddMergedRegion(new CellRangeAddress(0, 0, 0, 8));
         titleRow.HeightInPoints = 28;

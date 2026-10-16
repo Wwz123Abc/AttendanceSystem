@@ -68,7 +68,7 @@ public partial class AttendanceService
 
         // 同步刷新受影响月份的月度汇总，不用再等人工点"重新生成"（GenerateMonthlySummaryAsync 本身是幂等的）
         foreach (var (y, m) in touchedMonths)
-            await GenerateMonthlySummaryAsync(y, m, [approval.ApplicantUserId]);
+            await RefreshMonthlySummarySafelyAsync(y, m, approval.ApplicantUserId);
     }
 
     /// <summary>
@@ -368,7 +368,7 @@ public partial class AttendanceService
         await db.SaveChangesAsync();
 
         // 同步刷新这个月的月度汇总，道理和审批回写那边一样，不用等人工点"重新生成"
-        await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
+        await RefreshMonthlySummarySafelyAsync(workDate.Year, workDate.Month, userId);
     }
 
     /// <summary>手动补卡之前，把这天考勤记录的样子存下来（撤回时恢复）。这天原来没有记录就只记"没有记录"。</summary>
@@ -451,7 +451,7 @@ public partial class AttendanceService
             record.UpdatedAt = clock.LocalNow();
             await db.SaveChangesAsync();
         }
-        await GenerateMonthlySummaryAsync(log.WorkDate.Year, log.WorkDate.Month, [log.UserId]);
+        await RefreshMonthlySummarySafelyAsync(log.WorkDate.Year, log.WorkDate.Month, log.UserId);
     }
 
     /// <summary>
@@ -518,7 +518,15 @@ public partial class AttendanceService
         adjustLog.NewClockOut = record.ClockOutTime;
         if (type != PunchType.MidCheck) db.PunchAdjustLogs.Add(adjustLog);   // 午间卡的操作记录前面已经和新打卡一起存了
         await db.SaveChangesAsync();
-        await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
+        await RefreshMonthlySummarySafelyAsync(workDate.Year, workDate.Month, userId);
+    }
+
+    /// <summary>补卡/撤回/审批回写落库之后顺手刷新月度汇总。打卡数据这时已经提交，汇总刷新失败不能让调用方以为"补卡失败"
+    /// （管理员会重复补、审批人会重复点）：只记日志，汇总是幂等的，后台任务/下次重新生成会补上（2026-10-16 复审）。</summary>
+    private async Task RefreshMonthlySummarySafelyAsync(int year, int month, int userId)
+    {
+        try { await GenerateMonthlySummaryAsync(year, month, [userId]); }
+        catch (Exception ex) { logger.LogError(ex, "考勤数据已保存，但刷新 {Year}-{Month} 月度汇总失败，UserId={UserId}", year, month, userId); }
     }
 
     // ── 私有计算方法（下面这些只在本服务内部使用）─────────────────────────────────

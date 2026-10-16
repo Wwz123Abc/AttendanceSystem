@@ -172,7 +172,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     }
 
     /// <summary>点某人”导出明细”时执行。</summary>
-    public async Task<IActionResult> OnGetExportDetailAsync(int userId, int year, int month)
+    public async Task<IActionResult> OnGetExportDetailAsync(int userId, int year, int month, DateOnly? start, DateOnly? end)
     {
         var rangeError = ValidateYearMonth(year, month);
         if (rangeError != null) return BadRequest(rangeError);
@@ -192,14 +192,17 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         // 补上这个人的每日明细（汇总列表里默认不带明细）。GetPersonalAttendanceAsync 默认按日期倒序
         // （给"我的记录"页面用的，最近的排前面），但这份导出要跟 API 的 ReportController.ExportDailyStatus
         // 保持同一个顺序（按日期正序），这里重新排一下，不改 GetPersonalAttendanceAsync 本身的默认顺序。
-        var records = (await attendanceService.GetPersonalAttendanceAsync(new PersonalAttendanceQueryDto
-        {
-            UserId = userId, Year = year, Month = month
-        })).OrderBy(r => r.WorkDate).ToList();
+        // 页面上选的是"起止日期"（默认 上月26日~本月25日），导出要和页面格子里看到的天数一致，
+        // 不能只导结束月那一个自然月（2026-10-16 复审）；老链接没带起止日期时仍按年月导出
+        var hasRange = start is not null && end is not null && start <= end && end.Value.DayNumber - start.Value.DayNumber <= 366;
+        var records = (await attendanceService.GetPersonalAttendanceAsync(hasRange
+            ? new PersonalAttendanceQueryDto { UserId = userId, StartDate = start, EndDate = end }
+            : new PersonalAttendanceQueryDto { UserId = userId, Year = year, Month = month })).OrderBy(r => r.WorkDate).ToList();
         target.DailyRecords = records;
 
-        var bytes = ExcelExportHelper.ExportDailyStatusReport(target);
-        return File(bytes, XlsxContentType, $"{target.RealName}_{year}年{month:D2}月考勤明细.xlsx");
+        var bytes = ExcelExportHelper.ExportDailyStatusReport(target, hasRange ? start : null, hasRange ? end : null);
+        var periodText = hasRange ? $"{start:yyyyMMdd}-{end:yyyyMMdd}" : $"{year}年{month:D2}月";
+        return File(bytes, XlsxContentType, $"{target.RealName}_{periodText}考勤明细.xlsx");
     }
 
     /// <summary>

@@ -254,9 +254,12 @@ builder.Services.AddRateLimiter(options =>
         return new ValueTask(ctx.HttpContext.Response.WriteAsync("请求过于频繁，请稍后再试"));
     };
 
-    options.AddPolicy("LoginPolicy", httpContext => RateLimitPartition.GetFixedWindowLimiter(
-        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    // 只给提交登录（POST）限流：打开登录页的 GET 不计数，否则分公司同一出口 IP 早高峰大家同时打开登录页就可能打不开
+    options.AddPolicy("LoginPolicy", httpContext => HttpMethods.IsPost(httpContext.Request.Method)
+        ? RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })
+        : RateLimitPartition.GetNoLimiter("login-get"));
 
     options.AddPolicy("SelfRegisterPolicy", httpContext => RateLimitPartition.GetFixedWindowLimiter(
         httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -395,7 +398,7 @@ app.UseExceptionHandler(errApp => errApp.Run(async context =>
         context.Response.ContentType = "text/html; charset=utf-8";
         await context.Response.WriteAsync(
             "<meta charset=\"utf-8\"><div style=\"text-align:center;margin-top:80px;font-family:'微软雅黑'\">" +
-            $"<h2>系统出错了</h2><p style=\"color:#888;white-space:pre-wrap;text-align:left;max-width:900px;margin:0 auto\">{System.Net.WebUtility.HtmlEncode(isDev ? message : "请稍后重试，或联系管理员。")}</p>" +
+            $"<h2>系统出错了</h2><p style=\"color:#888;white-space:pre-wrap;text-align:left;max-width:900px;margin:0 auto\">{System.Net.WebUtility.HtmlEncode(message)}</p>" +
             "<p><a href=\"/\">返回首页</a></p></div>");
     }
 }));

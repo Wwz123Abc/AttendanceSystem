@@ -320,10 +320,10 @@ public class ZKDeviceController(
         var ids = new List<int>();
         foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
-            var fields = line.TrimEnd('\r').Split('&')
-                .Select(p => p.Split('=', 2))
-                .Where(p => p.Length == 2)
-                .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
+            // 同一行里出现重复的键时后面的覆盖前面的；不能用 ToDictionary（重复键会抛异常，同一批里已经解析出的其它命令 ID 全部作废）
+            var fields = new Dictionary<string, string>();
+            foreach (var kv in line.TrimEnd('\r').Split('&').Select(p => p.Split('=', 2)).Where(p => p.Length == 2))
+                fields[kv[0].Trim()] = kv[1].Trim();
 
             if (fields.TryGetValue("ID", out var idStr) && int.TryParse(idStr, out var id) &&
                 fields.TryGetValue("Return", out var ret) && ret == "0")

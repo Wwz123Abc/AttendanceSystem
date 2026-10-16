@@ -199,7 +199,9 @@
                                    asp-route-userId="@row.UserId"
                                    asp-route-year="@Model.Year"
                                    asp-route-month="@Model.Month"
-                                   class="btn btn-outline-primary btn-sm" title="导出这个人的每日明细">
+                                   asp-route-start="@Model.Start.ToString("yyyy-MM-dd")"
+                                   asp-route-end="@Model.End.ToString("yyyy-MM-dd")"
+                                   class="btn btn-outline-primary btn-sm" title="导出这个人的每日明细（按页面上选的起止日期）">
                                     <i class="bi bi-download"></i>
                                 </a>
                             </td>

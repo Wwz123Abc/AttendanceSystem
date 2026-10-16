@@ -159,6 +159,7 @@ public class UserService(
     public async Task<User> CreateUserAsync(User user, string plainPassword)
     {
         ValidateEmployeeNoFormat(user.EmployeeNo);
+        user.EmployeeNo = user.EmployeeNo.Trim();   // 校验用的是去空格后的值，落库也必须是同一个，否则带空格的工号登录时（登录会去空格）永远对不上
 
         if (await IsEmployeeNoExistsAsync(user.EmployeeNo))
             throw new BusinessException($"工号 {user.EmployeeNo} 已存在");

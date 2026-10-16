@@ -230,6 +230,7 @@ public class UserManageModel(
         // （2026-09-24 审查修复；也正是"先提示成功、又冒出已被处理"那类重复提交的后遗症）
         var claimedByMe = false;
         string? newPhotoUrl = null;   // 这次请求新落盘的证件照，建号失败时要补偿删除，不留孤儿文件
+        var accountCreated = false;   // 员工账号已经建成：之后的步骤（设备、管理范围、标记登记）再失败，登记不能退回"待确认"
         try
         {
             ValidateContact(requirePhone: true, requireSupervisor: true, requireDept: true);
@@ -264,6 +265,7 @@ public class UserManageModel(
             // 口头告知新员工，不用再一个个抄随机密码。2026-09-24 业务决定：首次登录不再强制改密码。
             const string initialPwd = "123456";
             await userService.CreateUserAsync(newUser, initialPwd);
+            accountCreated = true;
             await userService.SetUserDevicesAsync(newUser.Id, DeviceIds);
             await ApplyScopeAfterSaveAsync(newUser.Id, isCreate: true);
 
@@ -276,13 +278,13 @@ public class UserManageModel(
         catch (InvalidOperationException ex)
         {
             ErrorMessage = ex.Message;
-            await CleanupAfterFailedCreateAsync(claimedByMe, newPhotoUrl);
+            await CleanupAfterFailedCreateAsync(claimedByMe, newPhotoUrl, accountCreated);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "新建员工失败，EmployeeNo={EmployeeNo}", EmployeeNo);
             ErrorMessage = AttendanceSystem.Helpers.ErrorReport.Describe(ex, "保存失败，请稍后重试", HttpContext);
-            await CleanupAfterFailedCreateAsync(claimedByMe, newPhotoUrl);
+            await CleanupAfterFailedCreateAsync(claimedByMe, newPhotoUrl, accountCreated);
         }
         await ReloadAsync();
         return Page();
@@ -291,8 +293,15 @@ public class UserManageModel(
     /// <summary>新建员工失败后的善后：① 这次请求自己认领了扫码登记的，把登记退回"待确认"——不然这条登记既没建成号、
     /// 状态又不再是 Pending，会从列表里消失，只能让员工重新扫码提交；② 这次新写盘的证件照删掉，不留孤儿文件。
     /// 没认领成功的请求（表单校验没过、没抢到认领）什么都不退，别人的认领不是我们的。</summary>
-    private async Task CleanupAfterFailedCreateAsync(bool claimedByMe, string? newPhotoUrl)
+    private async Task CleanupAfterFailedCreateAsync(bool claimedByMe, string? newPhotoUrl, bool accountCreated)
     {
+        // 账号已经建成时（失败发生在设备/管理范围/标记登记这几步）：登记不能退回"待确认"，否则同一个人会被再建一次
+        // （报"工号已存在"），照片也已经挂在账号上不能删；这时账号是好的，提示管理员去员工列表里补做没完成的设置
+        if (accountCreated)
+        {
+            ErrorMessage += "（注意：员工账号已经创建成功，请到员工列表里检查这位员工的考勤机、管理范围设置）";
+            return;
+        }
         if (claimedByMe && RegistrationId.HasValue)
             await registrationService.RevertClaimAsync(RegistrationId.Value);
         DeleteIdCardFile(newPhotoUrl);

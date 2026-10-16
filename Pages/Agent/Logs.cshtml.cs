@@ -42,9 +42,15 @@ public class LogsModel(AttendanceDbContext db) : PageModel
         if (Result == 2) q = q.Where(l => !l.Success);
 
         var keyword = Operator?.Trim();
-        // 若关键字是纯数字，也可直接按 OperatorUserId 精确过滤
-        if (keyword is not null && int.TryParse(keyword, out var kwId))
-            q = q.Where(l => l.OperatorUserId == kwId);
+        // 按提案人姓名/工号过滤要在取"最近 500 条"之前做：以前是取完 500 条再在内存里筛，
+        // 搜不到的人可能只是被挤出了最近 500 条；而且纯数字关键字（如工号 0040187）被当成了内部用户 Id（2026-10-16 复审）
+        if (!string.IsNullOrEmpty(keyword))
+        {
+            var matchedIds = await db.Users.AsNoTracking()
+                .Where(u => u.RealName.Contains(keyword) || u.EmployeeNo.Contains(keyword))
+                .Select(u => u.Id).ToListAsync();
+            q = q.Where(l => matchedIds.Contains(l.OperatorUserId));
+        }
 
         var raw = await q.OrderByDescending(l => l.Id).Take(500)
             .Select(l => new
@@ -82,10 +88,6 @@ public class LogsModel(AttendanceDbContext db) : PageModel
             Success          = l.Success,
             CreatedAtText    = l.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss")
         }).ToList();
-
-        // 提案人姓名/工号模糊过滤（上面若已按数字 id 精确过滤过就不再重复过滤）
-        if (!string.IsNullOrEmpty(keyword) && !int.TryParse(keyword, out _))
-            rows = rows.Where(r => r.OperatorName.Contains(keyword, StringComparison.OrdinalIgnoreCase)).ToList();
 
         Shown = rows.Count;
         Rows = rows;

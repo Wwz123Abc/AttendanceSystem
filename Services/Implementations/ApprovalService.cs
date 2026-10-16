@@ -156,6 +156,10 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     /// <summary>基础字段校验：申请原因、附件地址、出差目的地的长度和格式。直接调接口能绕开页面校验，这里是权威兜底。</summary>
     private void ValidateSubmitBasics(SubmitApprovalDto dto, int applicantUserId)
     {
+        // 申请类型不在枚举里（比如直接调接口传了 99）：回写考勤的几个分支都不匹配，审批通过后什么都不改，
+        // 单子却显示"已通过"，所以建单前先拦住
+        if (!Enum.IsDefined(dto.ApprovalType))
+            throw new BusinessException("请选择正确的申请类型");
         // 服务端校验：页面上虽然已经有相应的输入限制，但直接调接口能绕开页面校验——
         // 起止时间颠倒/缺关键字段这种非法申请，之前能照常建单、审批通过，只是回写考勤时
         // 因为区间是"负的"循环一次都不会跑，单子显示"已通过"但考勤记录完全没变化，
@@ -647,7 +651,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             .Include(a => a.Applicant).ThenInclude(u => u.Department)
             .Include(a => a.ApprovalSteps).ThenInclude(s => s.Approver)
             .Where(a => a.ApprovalSteps.Any(s => s.ApproverUserId == approverUserId
-                                               && s.ApprovalStatus != ApprovalStatus.Pending))
+                                               && (s.ApprovalStatus == ApprovalStatus.Approved || s.ApprovalStatus == ApprovalStatus.Rejected)))
             .ToListAsync();
 
         return items
@@ -655,7 +659,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             {
                 Request     = a,
                 MyHandledAt = a.ApprovalSteps
-                    .Where(s => s.ApproverUserId == approverUserId && s.ApprovalStatus != ApprovalStatus.Pending)
+                    .Where(s => s.ApproverUserId == approverUserId && (s.ApprovalStatus == ApprovalStatus.Approved || s.ApprovalStatus == ApprovalStatus.Rejected))
                     .Max(s => s.HandledAt)
             })
             .OrderByDescending(x => x.MyHandledAt)

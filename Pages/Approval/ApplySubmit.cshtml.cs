@@ -90,7 +90,7 @@ public class ApplySubmitModel(
                 return Page();
             }
 
-            if (!Enum.TryParse<Models.Enums.ApprovalType>(ApprovalType, out var approvalType))
+            if (!Enum.TryParse<Models.Enums.ApprovalType>(ApprovalType, out var approvalType) || !Enum.IsDefined(approvalType))
                 throw new BusinessException("请选择正确的申请类型");
             if (string.IsNullOrWhiteSpace(Reason))
                 throw new BusinessException("请填写申请原因");

@@ -278,6 +278,12 @@ public class DepartmentManageModel(AttendanceDbContext db, IDeptScopeService dep
                 && await db.ZKDevices.AnyAsync(dv => dv.DepartmentId != null && ids.Contains(dv.DepartmentId.Value)))
                 throw new BusinessException("要删除的部门下还有考勤机，请先把考勤机调到别的部门再删除（否则它们会掉出你的管理范围）");
 
+            // 待确认的扫码登记也是同理：登记的部门外键删除后会置空，分公司管理员的待确认列表是按部门过滤的，
+            // 这些登记会从列表里彻底消失
+            if (visibleIds is not null
+                && await db.EmployeeRegistrations.AnyAsync(r => r.Status == Models.Enums.RegistrationStatus.Pending && r.DepartmentId != null && ids.Contains(r.DepartmentId.Value)))
+                throw new BusinessException("要删除的部门下还有待确认的扫码登记，请先确认或驳回这些登记再删除（否则它们会从你的待确认列表里消失）");
+
             var depts = await db.Departments.Where(d => ids.Contains(d.Id)).ToListAsync();
 
             db.Departments.RemoveRange(depts);
