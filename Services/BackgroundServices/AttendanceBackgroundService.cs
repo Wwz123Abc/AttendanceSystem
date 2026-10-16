@@ -72,6 +72,17 @@ public class AttendanceBackgroundService(
                         await MarkAbsentAsync(DateOnly.FromDateTime(d));
                     _lastAbsentDate = yesterday;   // 补到的是"昨天"，不能记成今天，否则今天 23:55 会被当成已标记而漏标
                 }
+                // 启动补查：程序从昨天 23:55 之前一直停到凌晨 3 点以后才起来（比如夜里服务器重启、早上才拉起程序），
+                // 上面 0～3 点的补跑窗口已经过了，昨天就永远没人标。所以每次启动后（_lastAbsentDate 还是 MinValue）、
+                // 只要已经过了 3 点，就查一次库：昨天一条"旷工"都没有，说明很可能没标过，补标一次
+                // （MarkAbsentAsync 重复执行是幂等的，万一误判也只是重新标一遍，不会重复发提醒）。每次启动最多查一次。
+                else if (now.Hour is >= 3 and <= 23 && _lastAbsentDate == DateTime.MinValue)
+                {
+                    var yesterday = now.Date.AddDays(-1);
+                    if (!await HasAbsentMarkAsync(DateOnly.FromDateTime(yesterday)))
+                        await MarkAbsentAsync(DateOnly.FromDateTime(yesterday));
+                    _lastAbsentDate = yesterday;
+                }
 
                 // 每月 1 号 00:10 之后是首选执行时间点（留几分钟缓冲，给设备重传/网络延迟一点时间，
                 // 免得月末最后几分钟的打卡因为还没到账就被漏算进汇总）；如果这次因为异常/重启被错过，
@@ -113,6 +124,14 @@ public class AttendanceBackgroundService(
 
             await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);   // 歇 1 分钟再检查
         }
+    }
+
+    /// <summary>这一天库里有没有任何"旷工"记录（用来判断那天的旷工标记有没有跑过）。</summary>
+    private async Task<bool> HasAbsentMarkAsync(DateOnly day)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+        return await db.AttendanceRecords.AnyAsync(r => r.WorkDate == day && r.AttendanceStatus == AttendanceStatus.Absent);
     }
 
     /// <summary>
