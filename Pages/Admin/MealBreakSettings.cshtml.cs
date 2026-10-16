@@ -63,8 +63,8 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
 
         await SaveAsync(GroupId, windows);
         SuccessMessage = windows.Count == 0
-            ? "已保存：这个考勤组现在没有任何饭点时段，工时/加班按起止时间全额计算"
-            : $"已保存：{UnpaidBreakSettings.Describe(GroupId)}。这个考勤组之后新提交的加班申请、新的打卡结算和重新计算都会按这个算。";
+            ? "已保存：这个考勤组现在没有任何饭点时段，加班申请的时长按起止时间全额计算"
+            : $"已保存：{UnpaidBreakSettings.Describe(GroupId)}。这个考勤组之后新提交的加班申请会按这个算；正常上班工时和请假不受影响。";
         await LoadAsync();
         return Page();
     }

@@ -82,6 +82,32 @@ public class RevertAdminPunchAdjustTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 补卡之后考勤机又补传了午间卡_撤回补卡_午间命中和工时按现有打卡重算不回到旧值()
+    {
+        var uid = await SeedDayWithoutMidAsync();
+        decimal hoursNoMid;
+        using (var db = CreateContext())
+            hoursNoMid = (await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue)).ActualWorkHours;
+        using (var db = CreateContext())
+            await Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.ClockIn, At(8, 0), true, null, "管理员");   // 强制补上班卡 08:00
+        var logId = await LatestLogIdAsync(uid);
+        using (var db = CreateContext())   // 补卡之后，考勤机补传了一次午间卡
+        {
+            var att = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            var sync = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
+            await sync.ProcessAttLogAsync("SNM", [new ZKAttLogRow("M1", At(12, 40), 0, 15)]);
+        }
+        using (var db = CreateContext())
+            await Svc(db).RevertAdminPunchAdjustAsync(logId, "管理员");
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(new TimeOnly(8, 25), TimeOnly.FromDateTime(rec.ClockInTime!.Value));
+        Assert.Contains("12:40", rec.MidCheckResults ?? "");   // 午间卡还在，不能被改回"未打"
+        Assert.True(rec.ActualWorkHours > hoursNoMid, "午间卡已经补上，工时不能退回没有午间卡时的旧值");
+    }
+
+    [Fact]
     public async Task 撤回手动补卡建出来的记录_这天原来没有记录_撤回后记录删除()
     {
         var (uid, _) = SeedDayMidWorld();

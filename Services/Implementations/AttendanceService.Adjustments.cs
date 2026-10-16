@@ -408,6 +408,7 @@ public partial class AttendanceService
             var added = await db.AttendancePunches.Where(p => p.UserId == log.UserId && p.PunchType == PunchType.MidCheck
                 && p.PunchTime == midTime && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")).ToListAsync();
             db.AttendancePunches.RemoveRange(added);
+            await db.SaveChangesAsync();   // 先落库，下面重算工时、午间命中要读到删除之后的打卡
         }
 
         var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员" : operatorName;
@@ -423,7 +424,11 @@ public partial class AttendanceService
             record.ActualWorkHours    = log.PrevActualWorkHours;
             record.LateMinutes        = log.PrevLateMinutes;
             record.EarlyLeaveMinutes  = log.PrevEarlyLeaveMinutes;
-            record.MidCheckResults    = log.PrevMidCheckResults;
+            // 补卡之后午间卡可能被别的途径（比如考勤机补传）改动过，这里不能把补卡前存的旧值整套写回去：
+            // 午间命中按现在所有打卡重新读，上下班卡都在的话工时/状态也按现在的打卡重新算（2026-10-16 复审）
+            var shift = (await GetShiftAssignmentAsync(log.UserId, log.WorkDate))?.ShiftSchedule;
+            record.MidCheckResults = (await LoadMidCheckResultsAsync(log.UserId, log.WorkDate, shift))?.FormatMidCheckResults();
+            await RecalcWorkHoursAfterManualPunchAsync(record, log.UserId);
             AppendApprovalNote(record, $"管理员手动补卡已撤回（{log.AdjustType}卡，原操作人：{log.OperatorName}，撤回：{opText}）");
             record.UpdatedAt = clock.LocalNow();
         }
@@ -473,6 +478,8 @@ public partial class AttendanceService
                     DeviceInfo = $"管理员补卡:{operatorName}", CreatedAt = clock.LocalNow()
                 });
             adjustLog.AddedMidCheckTime = punchAt;
+            adjustLog.NewClockIn = record.ClockInTime; adjustLog.NewClockOut = record.ClockOutTime;   // 补午间卡不动上下班时间
+            db.PunchAdjustLogs.Add(adjustLog);   // 操作记录和新打卡必须一起落库，否则中途出错会留下撤回不掉的午间卡
             await db.SaveChangesAsync();   // 先落库，下面重算午间命中要读到这条新打卡
             AppendApprovalNote(record, note);
             record.UpdatedAt = clock.LocalNow();
@@ -494,7 +501,7 @@ public partial class AttendanceService
         await RecalcWorkHoursAfterManualPunchAsync(record, userId);
         adjustLog.NewClockIn  = record.ClockInTime;
         adjustLog.NewClockOut = record.ClockOutTime;
-        db.PunchAdjustLogs.Add(adjustLog);
+        if (type != PunchType.MidCheck) db.PunchAdjustLogs.Add(adjustLog);   // 午间卡的操作记录前面已经和新打卡一起存了
         await db.SaveChangesAsync();
         await GenerateMonthlySummaryAsync(workDate.Year, workDate.Month, [userId]);
     }
