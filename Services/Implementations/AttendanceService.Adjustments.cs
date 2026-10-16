@@ -418,13 +418,16 @@ public partial class AttendanceService
         }
         else
         {
-            // 补卡之后这天如果又批了请假/出差/节假日，状态、工时、迟到早退是审批流程定的，不能被补卡前存的旧值换掉
-            var keepApprovalState = record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip;
+            // 补卡之后这天如果才批了请假/出差/节假日，状态、工时、迟到早退是审批流程定的，不能被补卡前存的旧值换掉；
+            // 但如果这类状态在补卡之前就有了（补卡前的状态已经是请假等），现在的工时是补卡算出来的，要恢复成补卡前的值
+            static bool IsApprovalState(AttendanceStatus s) => s is AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip;
+            var approvalAddedAfter = IsApprovalState(record.AttendanceStatus) && !(log.RecordExisted && IsApprovalState(log.PrevStatus));
             record.ClockInTime  = log.PrevClockIn;
             record.ClockOutTime = log.PrevClockOut;
-            if (!keepApprovalState)
+            if (!IsApprovalState(record.AttendanceStatus))
+                record.AttendanceStatus = log.RecordExisted ? log.PrevStatus : AttendanceStatus.NotPunched;
+            if (!approvalAddedAfter)
             {
-                record.AttendanceStatus   = log.RecordExisted ? log.PrevStatus : AttendanceStatus.NotPunched;
                 record.ActualWorkHours    = log.PrevActualWorkHours;
                 record.LateMinutes        = log.PrevLateMinutes;
                 record.EarlyLeaveMinutes  = log.PrevEarlyLeaveMinutes;

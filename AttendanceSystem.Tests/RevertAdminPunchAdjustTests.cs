@@ -131,6 +131,26 @@ public class RevertAdminPunchAdjustTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 请假在补卡之前就批了_补上班卡后撤回_工时恢复成补卡前的值()
+    {
+        var (uid, _) = SeedDayMidWorld();
+        using (var db = CreateContext())   // 上午请了半天假，下午只打了下班卡 17:40，没有上班卡
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, ClockOutTime = At(17, 40),
+                AttendanceStatus = AttendanceStatus.OnLeave, LeaveHours = 4m, ActualWorkHours = 0m });
+        using (var db = CreateContext()) await db.SaveChangesAsync();
+        using (var db = CreateContext())
+            await Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.ClockIn, At(13, 0), false, null, "管理员");
+        using (var db = CreateContext())
+            await Svc(db).RevertAdminPunchAdjustAsync(await LatestLogIdAsync(uid), "管理员");
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Null(rec.ClockInTime);
+        Assert.Equal(AttendanceStatus.OnLeave, rec.AttendanceStatus);
+        Assert.Equal(0m, rec.ActualWorkHours);   // 补卡才算出来的工时要撤掉
+    }
+
+    [Fact]
     public async Task 撤回手动补卡建出来的记录_这天原来没有记录_撤回后记录删除()
     {
         var (uid, _) = SeedDayMidWorld();
