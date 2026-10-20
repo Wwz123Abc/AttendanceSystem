@@ -61,6 +61,7 @@ public class GroupManageModel(
     [BindProperty] public int     EditId         { get; set; }
     [BindProperty] public string  GroupName      { get; set; } = "";
     [BindProperty] public bool    EnableLocation { get; set; }
+    [BindProperty] public string? HourlyStart    { get; set; }   // 计时工模式起始日（yyyy-MM-dd），留空 = 不是计时工考勤组
     [BindProperty] public int     LunchBreak     { get; set; } = 60;
     [BindProperty] public int     DinnerBreak    { get; set; } = 30;
     /// <summary>本次勾选的审批人编号列表（必须至少选一个）</summary>
@@ -211,6 +212,7 @@ public class GroupManageModel(
                 {
                     GroupName           = GroupName.Trim(),
                     EnableLocationPunch = EnableLocation,
+                    HourlyWorkStartDate = ParseHourlyStart(),
                     // LunchBreakMinutes/DinnerBreakMinutes 不再从表单读取：字段已停用编辑（不影响工时计算，
                     // 见 2026-09-29 口径变更），新建考勤组就用实体自带的默认值，不用表单里那个恒为 0 的禁用输入框
                     ApprovalLevel       = approvalLevel,
@@ -229,6 +231,7 @@ public class GroupManageModel(
                 {
                     g.GroupName           = GroupName.Trim();
                     g.EnableLocationPunch = EnableLocation;
+                    g.HourlyWorkStartDate = ParseHourlyStart();
                     // LunchBreakMinutes/DinnerBreakMinutes 保持原值不动：字段已停用编辑，不能被禁用输入框
                     // 恒为 0 的提交值覆盖掉（虽然这两个值现在不影响任何计算，但也不该无声无息被清零）
                     g.ApprovalLevel       = approvalLevel;
@@ -258,6 +261,10 @@ public class GroupManageModel(
 
         return RedirectToPage();
     }
+
+    /// <summary>计时工模式起始日：表单里填了合法日期就用，留空/不合法当作没开。</summary>
+    private DateOnly? ParseHourlyStart() =>
+        !string.IsNullOrWhiteSpace(HourlyStart) && DateOnly.TryParse(HourlyStart, out var d) ? d : null;
 
     /// <summary>考勤组表单校验：名称、审批人、打卡地点经纬度/半径/名称；返回错误提示（没问题返回 null）和解析好的审批级别。</summary>
     private string? ValidateGroupForm(out Models.Enums.ApprovalLevelType approvalLevel)

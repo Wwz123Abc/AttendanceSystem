@@ -62,6 +62,7 @@ public partial class AttendanceService
         var dates = new List<DateOnly>();
         for (var d = start; d <= end; d = d.AddDays(1)) dates.Add(d);
         var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+        var hourlyStarts = await LoadHourlyGroupStartsAsync();   // 计时工考勤组：每天工时按实际打卡时长，不封顶
 
         // 范围 = 现在在职的人 ∪ 这段周期里有考勤记录的人——这份表是给发工资用的，
         // 如果只按"现在是否在职"筛选，员工在这个薪资周期里离职、导出报表时已经被停用，
@@ -144,6 +145,8 @@ public partial class AttendanceService
                 recByDate.TryGetValue(date, out var rec);
                 assignByDate.TryGetValue(date, out var assign);
                 var isShiftRest  = IsShiftWeeklyRestDay(date, assign?.ShiftSchedule);  // 排的班自己配置的每周休息日，或没排班时按周末兜底
+                var hourlyDay    = IsHourlyOn(hourlyStarts, user.AttendanceGroupId, date);
+                if (hourlyDay) isShiftRest = false;   // 计时工没有休息日：来打卡就算工时
 
                 // 当天是不是上的夜班：排班里配的是跨天班次/名字带"夜"就算；没排班时按打卡时间兜底
                 // （18 点后上班，或下班跨到了第二天），口径和 ComputeNightShiftDaysRangeAsync 保持一致。
@@ -164,7 +167,8 @@ public partial class AttendanceService
                     // 正班——休息日一律 0；工作日最多算班次标准工时（没排班按默认 8 小时）。超出的部分是晚上的加班，
                     // 只认加班单，不然没排班的人（正班不封顶、已含工作日加班）"正班+加班"会把同一段在岗时间算两遍；
                     // 同时也把 9/28 前"休息日既记正班又记加班"的旧记录挡在报表外。
-                    var regularHalf = isShiftRest ? 0m : FloorToHalf(Math.Min(rec.ActualWorkHours, dailyStdHours));
+                    var regularHalf = hourlyDay ? FloorToHalf(rec.ActualWorkHours)   // 计时工不封顶
+                                    : isShiftRest ? 0m : FloorToHalf(Math.Min(rec.ActualWorkHours, dailyStdHours));
                     var otHalf      = rec.OvertimeHours > 0 ? FloorToHalf(rec.OvertimeHours) : 0m;
                     if (regularHalf + otHalf > 0) dayHours = regularHalf + otHalf;   // 每日格子 = 正班 + 加班（半小时取整，不足舍去）
                     totalWork += regularHalf;                                          // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
@@ -290,11 +294,14 @@ public partial class AttendanceService
                 .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end).ToListAsync(ct))
             .ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
         var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+        var hourlyStarts = await LoadHourlyGroupStartsAsync();
+        var groupOfUser = await db.Users.Where(u => userIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.AttendanceGroupId, ct);
         foreach (var r in list)
         {
             shifts.TryGetValue((r.UserId, r.WorkDate), out var shift);
             var std = shift?.StandardWorkHours ?? defaultDailyHours;
-            var regular = IsShiftWeeklyRestDay(r.WorkDate, shift) ? 0m : FloorToHalf(Math.Min(r.ActualWorkHours, std));
+            var regular = IsHourlyOn(hourlyStarts, groupOfUser.GetValueOrDefault(r.UserId), r.WorkDate) ? FloorToHalf(r.ActualWorkHours)   // 计时工不封顶、没有休息日
+                        : IsShiftWeeklyRestDay(r.WorkDate, shift) ? 0m : FloorToHalf(Math.Min(r.ActualWorkHours, std));
             var ot = r.OvertimeHours > 0 ? FloorToHalf(r.OvertimeHours) : 0m;
             r.PayrollRegularHours = regular;
             r.PayrollDayHours = regular + ot;

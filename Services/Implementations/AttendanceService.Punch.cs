@@ -61,6 +61,12 @@ public partial class AttendanceService
         if (user.HireDate is null || user.HireDate.Value > today)
             return new PunchResponseDto { Success = false, Message = "您尚未办理入职（入职日期未设置或未到），暂不能打卡，请联系管理员" };
 
+        // 计时工模式（成都鹰诺深圳分公司临时工，2026-10-20 起）：没有夜班/跨天，打卡都归打卡当天；
+        // 00:00–07:00 的打卡无效，防止刷到凌晨被当成第二天的上班卡
+        var hourly = await IsHourlyOnAsync(user.AttendanceGroupId, today);
+        if (hourly && !IsHourlyPunchTimeValid(now))
+            return new PunchResponseDto { Success = false, Message = HourlyInvalidTimeMessage };
+
         // 打卡时间精确到分钟（把秒抹掉）。提前到这里算，是因为下面的去重判断需要用它。
         var punchTime = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0);
 
@@ -85,11 +91,13 @@ public partial class AttendanceService
             };
         }
 
-        var (workDate, openYesterdayRecord) = await ResolvePunchWorkDateAsync(userId, request.PunchType, today, now);
+        var (workDate, openYesterdayRecord) = hourly
+            ? (today, (AttendanceRecord?)null)   // 计时工：没有夜班续接，永远是当天
+            : await ResolvePunchWorkDateAsync(userId, request.PunchType, today, now);
 
         // 上班卡的合理性校验（夜班下班后重复刷、跨天班次打得太早）：远程打卡页面已经在调付费的人脸识别之前判过一次，
         // 这里是权威兜底，别的调用方也不会漏掉
-        if (request.PunchType == PunchType.ClockIn && await GetClockInRejectionAsync(userId, now) is { } rejection)
+        if (!hourly && request.PunchType == PunchType.ClockIn && await GetClockInRejectionAsync(userId, now) is { } rejection)
             return new PunchResponseDto { Success = false, Message = rejection };
 
         // 定位打卡校验：没分配考勤组、或考勤组没开定位打卡/没配打卡地点，都算不通过（见 ValidateLocationAsync 注释）。
@@ -158,7 +166,7 @@ public partial class AttendanceService
         {
             (status, lateMinutes, message) = ApplyClockIn(record, workDate, punchTime, shift, isRestDay);
         }
-        else if (request.PunchType == PunchType.MidCheck)   // ── 午间打卡 ──
+        else if (request.PunchType == PunchType.MidCheck && !hourly)   // ── 午间打卡 ──（计时工的午间卡也当"当天最晚一次打卡"更新下班时间，走下面的下班卡分支）
         {
             // 打卡流水已经在上面写好了；这里不改上下班时间/状态，工时结算在下班打卡时统一算（见 ResolveEffectiveClockInAsync）
             status  = record.AttendanceStatus;
@@ -167,6 +175,14 @@ public partial class AttendanceService
         else                                          // ── 下班卡 ──
         {
             (status, message) = await ApplyClockOutAsync(record, user, workDate, punchTime, shift, isRestDay);
+        }
+
+        // 计时工：照常判断迟到（只记录），没有早退/旷工
+        if (hourly)
+        {
+            NormalizeHourlyRecord(record);
+            status = record.AttendanceStatus;
+            if (request.PunchType == PunchType.MidCheck) message = "午间打卡成功";
         }
 
         // 午间必打卡的命中情况要在打完这张卡就写回记录：以前只有打下班卡算工时时才顺带写（ResolveEffectiveClockInAsync），
@@ -480,6 +496,10 @@ public partial class AttendanceService
     public async Task<string?> GetClockInRejectionAsync(int userId, DateTime now)
     {
         var today = DateOnly.FromDateTime(now);
+        // 计时工：没有夜班/重复刷/打得太早这些规则，只有"00:00–07:00 无效"这一条
+        var rejGroupId = await db.Users.Where(u => u.Id == userId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        if (await IsHourlyOnAsync(rejGroupId, today))
+            return IsHourlyPunchTimeValid(now) ? null : HourlyInvalidTimeMessage;
         // 今天已经有上班卡了，不是"新的上班卡"，不归这里管
         if (await db.AttendanceRecords.AnyAsync(r => r.UserId == userId && r.WorkDate == today && r.ClockInTime != null))
             return null;

@@ -7,6 +7,7 @@ function openAdd() {
     document.getElementById('fLunch').value = 60;
     document.getElementById('fDinner').value = 30;
     document.getElementById('fEnableLocation').checked = false;
+    document.getElementById('fHourlyStart').value = '';
     toggleLocation(false);
     setSelectedApprovers([]);
     setSelectedDepts([]);
@@ -15,13 +16,14 @@ function openAdd() {
     modal.show();
 }
 
-function openEdit(id, name, enableLoc, lunch, dinner, approverIdsJson, deptIdsJson, locationsJson, approvalLevel) {
+function openEdit(id, name, enableLoc, lunch, dinner, approverIdsJson, deptIdsJson, locationsJson, approvalLevel, hourlyStart) {
     document.getElementById('modalTitle').textContent = '编辑考勤组';
     document.getElementById('editId').value = id;
     document.getElementById('fGroupName').value = name;
     document.getElementById('fLunch').value = lunch;
     document.getElementById('fDinner').value = dinner;
     document.getElementById('fEnableLocation').checked = enableLoc;
+    document.getElementById('fHourlyStart').value = hourlyStart || '';
     toggleLocation(enableLoc);
     setSelectedApprovers(JSON.parse(approverIdsJson || '[]'));
     setSelectedDepts(JSON.parse(deptIdsJson || '[]'));

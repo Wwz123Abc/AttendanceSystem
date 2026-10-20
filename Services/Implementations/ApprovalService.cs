@@ -259,6 +259,12 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     {
         if (dto.OvertimeStartTime is null || dto.OvertimeEndTime is null)
             throw new BusinessException("请填写加班的起止时间");
+        // 计时工（成都鹰诺深圳分公司临时工）：工时按实际打卡时长直接算，没有加班，不需要也不能申请加班
+        var otGroupId = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        if (otGroupId is { } og
+            && await db.AttendanceGroups.Where(g => g.Id == og).Select(g => g.HourlyWorkStartDate).FirstOrDefaultAsync() is { } otHourlyFrom
+            && DateOnly.FromDateTime(dto.OvertimeStartTime.Value) >= otHourlyFrom)
+            throw new BusinessException("您所在的考勤组按实际打卡时长算工时（计时工），没有加班，不需要申请加班；下班请照常打下班卡，工时按最晚一次下班卡计算");
         if (DateOnly.FromDateTime(dto.OvertimeStartTime.Value) != DateOnly.FromDateTime(clock.LocalToday()))
             throw new BusinessException("加班申请必须是当天的加班，请在当天24点前提交当日申请");
         if (dto.OvertimeEndTime <= dto.OvertimeStartTime)

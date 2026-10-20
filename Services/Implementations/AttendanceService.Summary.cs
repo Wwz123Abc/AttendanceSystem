@@ -88,6 +88,7 @@ public partial class AttendanceService
             .ToDictionaryAsync(s => s.UserId);
 
         var defaultDailyHours = appOptions.Value.DefaultDailyWorkHours;
+        var hourlyStarts = await LoadHourlyGroupStartsAsync();   // 计时工考勤组：老数据补算工时也按实际打卡时长
 
         foreach (var user in users)
         {
@@ -127,7 +128,11 @@ public partial class AttendanceService
                     // （班次配置可能后来改过，用记录当时冻结下来的这份才准确）。
                     shiftByDate.TryGetValue(r.WorkDate, out var shift);
                     // 休息日不计正班工时（有没有批准的加班都一样：有加班的话只算加班）——跟本地打卡同一套规则
-                    if (IsNonCompRestDay(r.WorkDate, shift))
+                    if (IsHourlyOn(hourlyStarts, user.AttendanceGroupId, r.WorkDate))
+                    {
+                        r.ActualWorkHours = ComputeHourlyWorkHours(r.WorkDate, ci, co, shift, shift is not null ? r.MidCheckResults.ParseMidCheckResults() : []);
+                    }
+                    else if (IsNonCompRestDay(r.WorkDate, shift))
                     {
                         r.ActualWorkHours = 0;
                     }

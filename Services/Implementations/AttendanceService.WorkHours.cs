@@ -65,6 +65,13 @@ public partial class AttendanceService
     private async Task<decimal> ComputeDailyWorkHoursAsync(
         AttendanceRecord record, DateOnly workDate, DateTime clockIn, DateTime clockOut, ShiftSchedule? shift, int? groupId)
     {
+        // 计时工模式：按实际打卡时长算，不封顶、没有休息日（只有这个考勤组、起始日之后的考勤日才走这条）
+        if (await IsHourlyOnAsync(groupId, workDate))
+        {
+            var hourlyResults = await LoadMidCheckResultsAsync(record.UserId, workDate, shift);
+            record.MidCheckResults = hourlyResults?.FormatMidCheckResults();
+            return ComputeHourlyWorkHours(workDate, clockIn, clockOut, shift, hourlyResults);
+        }
         var (effectiveClockIn, secondHalfBoundary) = await ResolveEffectiveClockInAsync(record, workDate, clockIn, shift);
         // 休息日不计正班工时：没批加班的，打了卡也不算工时；批了加班的，只算加班（加班时长以审批单为准，
         // 由 OvertimeHours 单独记）。以前"有批准的加班就照常算正班工时"，休息日全天加班的人会被

@@ -118,16 +118,26 @@ public class ZKDeviceSyncService(
         // 3) 逐条处理
         var touchedKeys = new HashSet<(int UserId, DateOnly WorkDate)>();   // 这一批实际动过的 (人, 日期)，
                                                                              // 下面第 4 步只用重新算这些，不用整批全扫
+        // 计时工模式（成都鹰诺深圳分公司临时工，2026-10-20 起）：没有夜班续接，打卡都归打卡当天；00:00–07:00 的打卡无效
+        var hourlyStarts = await db.AttendanceGroups.Where(g => g.HourlyWorkStartDate != null)
+            .ToDictionaryAsync(g => g.Id, g => g.HourlyWorkStartDate!.Value, ct);
+        var groupOfUser = users.ToDictionary(u => u.Id, u => u.AttendanceGroupId);
         foreach (var r in rows.OrderBy(r => r.Time))   // 按时间顺序处理，保证"当天第一次算上班、之后都算下班"取值正确
         {
             if (!userByPin.TryGetValue(r.Pin, out var uid)) continue;
 
-            var workDate = ResolveWorkDate(uid, r.Time, recordMap, shiftByUserDate);
+            var hourlyRow = AttendanceService.IsHourlyOn(hourlyStarts, groupOfUser.GetValueOrDefault(uid), DateOnly.FromDateTime(r.Time));
+            if (hourlyRow && !AttendanceService.IsHourlyPunchTimeValid(r.Time))
+            {
+                logger.LogInformation("考勤机 {SN} 上计时工 {Pin} 在 {Time} 的打卡在 00:00–07:00 之间，无效，已忽略", sn, r.Pin, r.Time);
+                continue;
+            }
+            var workDate = hourlyRow ? DateOnly.FromDateTime(r.Time) : ResolveWorkDate(uid, r.Time, recordMap, shiftByUserDate);
 
             // 跨天班次的第一次打卡离应上班时间太早（比如 20:30 上班的晚班，中午/早上打的）：不当上班卡，也不为它建记录——
             // 不然真正晚上来上班的那次会被当成午间卡，整天上班卡丢失。考勤机没法给员工弹提示，只记日志；
             // 漏打上班卡的走补卡申请（2026-09-28）。已经有上班卡的不受影响（那是午间/下班卡）
-            if (shiftByUserDate.TryGetValue((uid, workDate), out var earlyCheckShift)
+            if (!hourlyRow && shiftByUserDate.TryGetValue((uid, workDate), out var earlyCheckShift)
                 && earlyCheckShift is not null
                 && !(recordMap.TryGetValue((uid, workDate), out var earlyCheckRec) && earlyCheckRec.ClockInTime != null)
                 && AttendanceService.IsTooEarlyForCrossDayClockIn(workDate, r.Time, earlyCheckShift))
@@ -158,7 +168,16 @@ public class ZKDeviceSyncService(
             // 时间窗口以内，才算下班候选。外出/外出返回（Status 2、3）设备上报明确，仍按设备说的走。
             // 另外：刚打完上班卡没多久（比如人脸识别失败、几十秒内又扫了一次）不能当成下班——
             // 必须离上班时间超过 MinMinutesBeforeClockOut 才有资格被当成"下班"候选。
-            var type = r.Status switch
+            PunchType type;
+            if (hourlyRow)
+            {
+                // 计时工：当天第一次是上班；落在午间窗口里是午间；其余都是下班（取最晚的一次）；
+                // 刚打完上班卡几分钟内又刷的算重复，仍当上班卡（不会变成"秒下班"）
+                type = r.Status is 2 or 3 ? PunchType.MidCheck
+                     : record.ClockInTime is { } hourlyIn && r.Time - hourlyIn < TimeSpan.FromMinutes(MinMinutesBeforeClockOut) ? PunchType.ClockIn
+                     : AttendanceService.ResolveHourlyPunchType(r.Time, workDate, shift, record.ClockInTime is not null);
+            }
+            else type = r.Status switch
             {
                 2 or 3 => PunchType.MidCheck,
                 _ => record.ClockInTime is null
@@ -187,7 +206,10 @@ public class ZKDeviceSyncService(
                 CreatedAt  = clock.LocalNow()
             });
 
-            ApplyDevicePunch(record, type, r.Time, workDate, shift, isRestDay);
+            // 计时工：没有下班卡时，当天最晚的一次打卡（包括午间卡）就是下班时间，所以午间卡也按"下班卡取更晚"更新下班时间
+            ApplyDevicePunch(record, hourlyRow && type == PunchType.MidCheck && record.ClockInTime is not null ? PunchType.ClockOut : type,
+                r.Time, workDate, shift, isRestDay);
+            if (hourlyRow) AttendanceService.NormalizeHourlyRecord(record);   // 计时工：迟到照常判断，没有早退/旷工
 
             record.Remark    = "熵基考勤机同步";
             record.UpdatedAt = clock.LocalNow();
@@ -331,6 +353,8 @@ public class ZKDeviceSyncService(
     {
     // 4) 工时结算：每个这一批动过的 (人, 日期) 只结算一次（不放进上面的循环里，是因为同一人当天
     // 可能有好几条打卡，放循环里会每条都重新查一遍全天打卡记录、重复算好几遍，浪费数据库查询）。
+    var hourlyStartsSettle = await db.AttendanceGroups.Where(g => g.HourlyWorkStartDate != null)
+        .ToDictionaryAsync(g => g.Id, g => g.HourlyWorkStartDate!.Value, ct);
     foreach (var (uid, workDate) in touchedKeys)
     {
         var record = recordMap[(uid, workDate)];
@@ -361,6 +385,20 @@ public class ZKDeviceSyncService(
             continue;
 
         shiftByUserDate.TryGetValue((uid, workDate), out var shift);
+
+        // 计时工：按实际打卡时长算（不封顶、没有休息日），午间窗口漏打只算窗口开始之前
+        if (AttendanceService.IsHourlyOn(hourlyStartsSettle, groupByUser.GetValueOrDefault(uid), workDate))
+        {
+            List<MidCheckWindowResult>? hourlyMid = null;
+            var hourlyWindows = shift?.ParseMidCheckWindows() ?? [];
+            if (shift is not null && hourlyWindows.Count > 0)
+            {
+                hourlyMid = await ResolveMidCheckResultsAsync(uid, workDate, shift, hourlyWindows, ct);
+                record.MidCheckResults = hourlyMid.FormatMidCheckResults();
+            }
+            record.ActualWorkHours = AttendanceService.ComputeHourlyWorkHours(workDate, ci, co, shift, hourlyMid);
+            continue;
+        }
 
         // 漏打"午间必打卡"窗口要顺延有效上班时间，跟本地打卡（ResolveEffectiveClockInAsync）
         // 走的是同一套算法，不然同样"漏打午间卡"这件事，考勤机同步和本地打卡算出来的工时会对不上；

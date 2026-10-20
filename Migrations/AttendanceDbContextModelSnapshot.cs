@@ -566,6 +566,10 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("varchar(100)")
                         .HasColumnName("GroupName");
 
+                    b.Property<DateOnly?>("HourlyWorkStartDate")
+                        .HasColumnType("date")
+                        .HasColumnName("HourlyWorkStartDate");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("tinyint(1)")
                         .HasColumnName("IsActive");

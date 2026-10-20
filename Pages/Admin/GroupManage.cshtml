@@ -107,7 +107,8 @@
                                              @J(J(approverIds)),
                                              @J(J(deptIds)),
                                              @J(J(locations.Select(l => new { name = l.LocationName, lat = l.Latitude, lng = l.Longitude, radius = l.RadiusMeters }))),
-                                             @J(g.ApprovalLevel.ToString()))">
+                                             @J(g.ApprovalLevel.ToString()),
+                                             @J(g.HourlyWorkStartDate?.ToString("yyyy-MM-dd") ?? ""))">
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <form method="post" asp-page-handler="Toggle" class="d-inline"
@@ -194,6 +195,16 @@
                             </div>
                         </div>
 
+                        <div class="col-12">
+                            <hr class="my-1" />
+                            <label class="form-label fw-semibold">计时工模式起始日 <small class="text-muted fw-normal">（留空 = 普通考勤组）</small></label>
+                            <input asp-for="HourlyStart" id="fHourlyStart" type="date" class="form-control" style="max-width:200px" />
+                            <div class="form-text">
+                                从这一天起，组内员工按<b>实际打卡时长</b>算工时：最后一次下班卡 − 第一次上班卡，扣午饭 1 小时、晚饭 0.5 小时，不封顶；
+                                没有加班（不能提交加班申请）、休息日、旷工、迟到早退；午间窗口漏打只算窗口开始之前的工时；00:00–07:00 的打卡无效。
+                                起始日之前的记录不变。班次只用来设置午间窗口，不跨天。
+                            </div>
+                        </div>
                         <div class="col-12">
                             <hr class="my-1" />
                             <div class="form-check form-switch">

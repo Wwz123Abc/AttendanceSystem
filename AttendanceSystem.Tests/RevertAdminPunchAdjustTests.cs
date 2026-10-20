@@ -135,9 +135,11 @@ public class RevertAdminPunchAdjustTests : SqliteTestBase
     {
         var (uid, _) = SeedDayMidWorld();
         using (var db = CreateContext())   // 上午请了半天假，下午只打了下班卡 17:40，没有上班卡
+        {
             db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, ClockOutTime = At(17, 40),
                 AttendanceStatus = AttendanceStatus.OnLeave, LeaveHours = 4m, ActualWorkHours = 0m });
-        using (var db = CreateContext()) await db.SaveChangesAsync();
+            await db.SaveChangesAsync();
+        }
         using (var db = CreateContext())
             await Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.ClockIn, At(13, 0), false, null, "管理员");
         using (var db = CreateContext())

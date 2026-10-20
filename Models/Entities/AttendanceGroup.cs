@@ -36,6 +36,14 @@ public class AttendanceGroup
     /// <summary>是否启用定位打卡（开启后，打卡要落在下面 Locations 里任意一个地点的有效半径内才算数）</summary>
     public bool EnableLocationPunch { get; set; } = false;
 
+    /// <summary>
+    /// 计时工模式的起始日（空 = 不是计时工考勤组）。从这一天起，组内员工按"实际打卡时长"算工时：
+    /// 当天最后一次下班卡 − 第一次上班卡，扣午饭（和 12:00–13:00 重叠的部分）和晚饭（和 17:30–18:00 重叠的部分），
+    /// 不按班次标准工时封顶；没有加班申请、休息日、旷工、迟到早退；午间窗口漏打只算窗口开始之前的工时；
+    /// 00:00–07:00 的打卡无效（2026-10-20，成都鹰诺深圳分公司临时工）。起始日之前的记录一律不变。
+    /// </summary>
+    public DateOnly? HourlyWorkStartDate { get; set; }
+
     /// <summary>午休时长（分钟）：算工时时自动扣掉</summary>
     public int LunchBreakMinutes { get; set; } = 60;
 

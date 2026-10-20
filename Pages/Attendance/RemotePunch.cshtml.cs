@@ -266,6 +266,17 @@ public class RemotePunchModel(
         // 打下班卡时，会续上昨天那条记录（WorkDate 仍是昨天）——这里判断"离下班时间够不够近"也要
         // 用同一个 workDate 去查排班，不然凌晨查"今天"的排班表查不到（跨天班次记在昨天），
         // 会被当成"没排班"直接判定成下班，跟考勤机同步那边刚修过的是同一个 bug。
+        // 计时工模式：没有夜班续接，类型只看当天——当天没上班卡 → 上班；落在午间窗口里 → 午间；其余都是下班（取最晚一次）
+        var hourlyGroupId = await db.Users.Where(u => u.Id == CurrentUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        var hourlyFrom = hourlyGroupId is { } hg
+            ? await db.AttendanceGroups.Where(g => g.Id == hg).Select(g => g.HourlyWorkStartDate).FirstOrDefaultAsync()
+            : null;
+        if (hourlyFrom is { } hourlyStart && today >= hourlyStart)
+        {
+            var hourlyShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
+            var todayHasIn = todayBeforePunch is { } tb && tb.WorkDate == today && tb.ClockInTime is not null;
+            return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, today, hourlyShift, todayHasIn), todayBeforePunch);
+        }
         var workDate = todayBeforePunch?.WorkDate ?? today;
         var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;
         var type = todayBeforePunch?.ClockInTime is null ? PunchType.ClockIn

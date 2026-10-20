@@ -147,6 +147,10 @@ public class AttendanceBackgroundService(
 
         // 免考勤的人（管理员/文员/办公室人员等不需要打卡的账号）不参与自动记旷工/未打卡
         var users = await db.Users.Where(u => u.IsActive).NeedingAttendance().ToListAsync();
+        // 计时工（成都鹰诺深圳分公司临时工，2026-10-20 起）没有旷工一说：来打卡就算工时，不来就没工时，不记旷工、不发漏打卡提醒
+        var hourlyStarts = await db.AttendanceGroups.Where(g => g.HourlyWorkStartDate != null)
+            .ToDictionaryAsync(g => g.Id, g => g.HourlyWorkStartDate!.Value);
+        users = users.Where(u => !AttendanceService.IsHourlyOn(hourlyStarts, u.AttendanceGroupId, today)).ToList();
 
         // 一次性把”今天已有的考勤记录””今天的排班”查出来放内存，循环里直接用，避免逐人查库（N+1）
         var recordByUser  = (await db.AttendanceRecords.Where(r => r.WorkDate == today).ToListAsync())

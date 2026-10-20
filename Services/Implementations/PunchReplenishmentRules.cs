@@ -12,8 +12,10 @@ namespace AttendanceSystem.Services.Implementations;
 /// <param name="PrevDayClockOut">前一天考勤记录里的下班时间（夜班的下班在这天早上）。</param>
 /// <param name="NextBoundary">下一个上班的边界：下一天已有的上班打卡；没有就取下一天排班的"最早可打上班卡"时刻；都没有为 null。</param>
 /// <param name="DayPunches">这天前后（前一天到后天）所有原始打卡时刻，用来判断午间窗口有没有命中。</param>
+/// <param name="Hourly">这天是不是按计时工模式算（考勤组开了计时工模式且考勤日不早于起始日）：计时工的补卡时间必须落在当天 07:00–23:59。</param>
 public sealed record ReplenishmentContext(
-    ShiftSchedule? Shift, DateTime? ClockIn, DateTime? ClockOut, DateTime? PrevDayClockOut, DateTime? NextBoundary, List<DateTime> DayPunches);
+    ShiftSchedule? Shift, DateTime? ClockIn, DateTime? ClockOut, DateTime? PrevDayClockOut, DateTime? NextBoundary, List<DateTime> DayPunches,
+    bool Hourly = false);
 
 /// <summary>
 /// 补卡（上班 / 下班 / 午间）的统一规则：提交申请时校验一遍，审批通过回写时再校验一遍，两边用同一份，口径不会各写各的。
@@ -76,7 +78,13 @@ public static class PunchReplenishmentRules
             .Where(p => p.UserId == userId && p.PunchTime >= from && p.PunchTime <= to)
             .Select(p => p.PunchTime).ToListAsync(ct);
 
-        return new ReplenishmentContext(shift, rec?.ClockInTime, rec?.ClockOutTime, prevOut, nextBoundary, punches);
+        var groupId = await db.Users.Where(u => u.Id == userId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(ct);
+        var hourlyFrom = groupId is { } gid
+            ? await db.AttendanceGroups.Where(g => g.Id == gid).Select(g => g.HourlyWorkStartDate).FirstOrDefaultAsync(ct)
+            : null;
+        var hourly = hourlyFrom is { } hf && date >= hf;
+
+        return new ReplenishmentContext(shift, rec?.ClockInTime, rec?.ClockOutTime, prevOut, nextBoundary, punches, hourly);
     }
 
     /// <summary>
@@ -87,6 +95,9 @@ public static class PunchReplenishmentRules
     /// （其余的位置检查——不能越过下班卡、前一天下班卡、下一个上班的边界——照样检查）；午间卡不受影响。</param>
     public static string? FindProblem(PunchType type, DateOnly date, DateTime punchAt, ReplenishmentContext ctx, bool allowOverwrite = false)
     {
+        // 计时工：没有夜班/跨天，补的时间必须在当天 07:00 到 23:59 之间（不能补到第二天凌晨）
+        if (ctx.Hourly && (DateOnly.FromDateTime(punchAt) != date || !AttendanceService.IsHourlyPunchTimeValid(punchAt)))
+            return $"计时工补卡的时间必须在当天 {AttendanceService.HourlyEarliestPunchHour:00}:00 到 23:59 之间，请重新选择时间（不能选第二天）";
         switch (type)
         {
             case PunchType.ClockIn:

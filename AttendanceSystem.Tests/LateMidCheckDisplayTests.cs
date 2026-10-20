@@ -51,7 +51,7 @@ public class LateMidCheckDisplayTests : SqliteTestBase
             var att = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
             var sync = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
             await sync.ProcessAttLogAsync("SNM", [
-                new ZKAttLogRow("M1", At(Tue, 13, 30), 0, 15),
+                new ZKAttLogRow("M1", At(Tue, 13, 45), 0, 15),
                 new ZKAttLogRow("M1", At(Tue, 17, 40), 0, 15)]);
         }
         using var db2 = CreateContext();
@@ -109,7 +109,7 @@ public class LateMidCheckDisplayTests : SqliteTestBase
             var sync = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
             await sync.ProcessAttLogAsync("SNM", [
                 new ZKAttLogRow("M1", At(Tue, 8, 25), 0, 15),
-                new ZKAttLogRow("M1", At(Tue, 13, 20), 0, 15),
+                new ZKAttLogRow("M1", At(Tue, 13, 40), 0, 15),
                 new ZKAttLogRow("M1", At(Tue, 17, 40), 0, 15)]);
         }
         using var db2 = CreateContext();
@@ -117,9 +117,9 @@ public class LateMidCheckDisplayTests : SqliteTestBase
         var rec = Assert.Single(await svc.GetPersonalAttendanceAsync(new PersonalAttendanceQueryDto { UserId = uid, StartDate = Tue, EndDate = Tue }));
         var hit = Assert.Single(rec.MidCheckHits);
         Assert.True(hit.IsLate);
-        Assert.Equal(new TimeOnly(13, 20), hit.LateTime);
-        Assert.Equal("迟到 13:20", rec.MidCheckTimeText);
-        Assert.Equal("12:00-13:00: 迟到 13:20", rec.MidCheckTexts.Single());
+        Assert.Equal(new TimeOnly(13, 40), hit.LateTime);
+        Assert.Equal("迟到 13:40", rec.MidCheckTimeText);
+        Assert.Equal("12:00-13:00: 迟到 13:40", rec.MidCheckTexts.Single());
         Assert.True(rec.ActualWorkHours < 8m);            // 工时口径没变：窗口没打上仍然只算半天
     }
 
@@ -133,14 +133,14 @@ public class LateMidCheckDisplayTests : SqliteTestBase
             var sync = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
             await sync.ProcessAttLogAsync("SNM", [
                 new ZKAttLogRow("M1", At(Tue, 8, 25), 0, 15),
-                new ZKAttLogRow("M1", At(Tue, 13, 20), 0, 15),
+                new ZKAttLogRow("M1", At(Tue, 13, 40), 0, 15),
                 new ZKAttLogRow("M1", At(Tue, 17, 40), 0, 15)]);
         }
         using var db2 = CreateContext();
         var svc = new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance);
         var sheet = Assert.Single(await svc.GetClockTimeSheetAsync(Tue, Tue, null));
-        Assert.Equal("迟到 13:20", sheet.MidCheckTimeText);
+        Assert.Equal("迟到 13:40", sheet.MidCheckTimeText);
         var dept = Assert.Single(await svc.GetDeptAttendanceAsync(new DeptAttendanceQueryDto { StartDate = Tue, EndDate = Tue }));
-        Assert.Equal("迟到 13:20", dept.MidCheckTimeText);
+        Assert.Equal("迟到 13:40", dept.MidCheckTimeText);
     }
 }
