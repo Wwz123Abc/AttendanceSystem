@@ -187,12 +187,15 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
 
         deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetRequiredUser(), deptIds);
-        var uq = db.Users.Where(u => u.IsActive).NeedingAttendance();
-        if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
-        var userIds = await uq.Select(u => u.Id).ToListAsync(HttpContext.RequestAborted);
-
         var from = start.Value.ToDateTime(TimeOnly.MinValue);
         var to   = end.Value.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        // 人员范围跟"导出打卡时间表"一样：在职的人 ∪ 这段时间里有打卡的人（期间离职的人也要能导出）
+        var relevantIds = await db.Users.Where(u => u.IsActive).Select(u => u.Id)
+            .Union(db.AttendancePunches.Where(p => p.PunchTime >= from && p.PunchTime < to).Select(p => p.UserId))
+            .Distinct().ToListAsync(HttpContext.RequestAborted);
+        var uq = db.Users.Where(u => relevantIds.Contains(u.Id)).NeedingAttendance();
+        if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
+        var userIds = await uq.Select(u => u.Id).ToListAsync(HttpContext.RequestAborted);
         var rows = await db.AttendancePunches
             .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= from && p.PunchTime < to)
             .OrderBy(p => p.User.EmployeeNo).ThenBy(p => p.PunchTime)

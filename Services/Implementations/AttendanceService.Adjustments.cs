@@ -269,7 +269,9 @@ public partial class AttendanceService
             // 占位值 0，上午真实工作的工时就永久丢失了、也没有任何自愈机制能补回来。
             // 这里用"上班卡 → 这天请假开始的时间点"估算这一段真实工作时长，按标准工时封顶
             // （发现于 2026-09-18 数据核查）。
-            if (record.ClockInTime is { } workedCi && record.ClockOutTime is null)
+            // 计时工不走这条估算：只有上班卡、没有下班卡的当天工时就是 0（跟计时工的统一规则一致）
+            if (record.ClockInTime is { } workedCi && record.ClockOutTime is null
+                && !await IsHourlyOnAsync(await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(), d))
             {
                 var dayStart      = d.ToDateTime(TimeOnly.MinValue);
                 var leaveSegStart = leaveStart > dayStart ? leaveStart : dayStart;
@@ -596,9 +598,7 @@ public partial class AttendanceService
         if (!blocksWorkHours)
         {
             var computedHours = await ComputeDailyWorkHoursAsync(record, record.WorkDate, ci, co, shift, applicant?.AttendanceGroupId);
-            record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
-                ? ApplyLeaveHoursCap(computedHours, record.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
-                : computedHours;
+            record.ActualWorkHours = await CapWorkHoursForLeaveAsync(record, computedHours, shift, applicant?.AttendanceGroupId);
         }
 
         // 迟到/早退分钟数和状态都要按补卡后的新时间重新算一遍，不能沿用改之前的旧值——

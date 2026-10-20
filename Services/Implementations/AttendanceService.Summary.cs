@@ -162,18 +162,22 @@ public partial class AttendanceService
             // 请假当天如果也有真实打卡（半天假），只算"1 − 请假占比"那一部分出勤，不再跟 LeaveDays
             // 重复记满整天——不然半天假的人会变成"出勤 1 天 + 请假 0.5 天"，一天算出 1.5 天（发现于
             // 2026-09-18 发工资前的数据核查）。跟 GenerateTemplateReportAsync 共用 ResolveAttendanceDayCredit。
+            // 计时工没有休息日（跟发薪表同一口径）：班次里配的休息日来上班，一样算出勤
             summary.ActualWorkdays = records.Sum(r =>
                 ResolveAttendanceDayCredit(r, ResolveDailyStandardHours(shiftByDate.GetValueOrDefault(r.WorkDate), defaultDailyHours),
-                    IsShiftWeeklyRestDay(r.WorkDate, shiftByDate.GetValueOrDefault(r.WorkDate))));
+                    !IsHourlyOn(hourlyStarts, user.AttendanceGroupId, r.WorkDate)
+                        && IsShiftWeeklyRestDay(r.WorkDate, shiftByDate.GetValueOrDefault(r.WorkDate))));
             // 迟到/早退按「状态」统计（钉钉同步只写状态、不写分钟数，按分钟数会漏算）
             summary.LateCount         = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);
             summary.EarlyLeaveCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.EarlyLeave);
             summary.AbsentDays        = user.IsExemptFromAttendance() ? 0 : records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent);   // 免考勤的人不统计旷工
             // 缺卡：状态=未打卡，或“只打了上/下班其中一次”（这样钉钉数据的缺卡也能识别；出差本就不用打卡，排除）
-            summary.NotPunchedCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.NotPunched
+            // 计时工没有缺卡（只打了一次卡的日子工时按规则算，不算缺卡），跟发薪表同一口径
+            summary.NotPunchedCount   = records.Count(r => !IsHourlyOn(hourlyStarts, user.AttendanceGroupId, r.WorkDate)
+                && (r.AttendanceStatus == AttendanceStatus.NotPunched
                 || ((r.ClockInTime.HasValue ^ r.ClockOutTime.HasValue)
                     && r.AttendanceStatus is not AttendanceStatus.Absent and not AttendanceStatus.OnLeave
-                                          and not AttendanceStatus.Holiday and not AttendanceStatus.BusinessTrip));
+                                          and not AttendanceStatus.Holiday and not AttendanceStatus.BusinessTrip)));
             // 请假天数：按小时折算，不再是"这天状态是请假就算一整天"——半天假只占 0.5 天
             // （2026-09-17 支持半天请假）。
             summary.LeaveDays = records.Where(r => r.AttendanceStatus == AttendanceStatus.OnLeave)

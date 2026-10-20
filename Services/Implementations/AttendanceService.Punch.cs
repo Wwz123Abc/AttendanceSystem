@@ -377,9 +377,7 @@ public partial class AttendanceService
             {
                 var computedHours = await ComputeDailyWorkHoursAsync(
                     record, workDate, record.ClockInTime.Value, punchTime, shift, user.AttendanceGroupId);
-                record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
-                    ? ApplyLeaveHoursCap(computedHours, record.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
-                    : computedHours;
+                record.ActualWorkHours = await CapWorkHoursForLeaveAsync(record, computedHours, shift, user.AttendanceGroupId);
             }
         }
         else

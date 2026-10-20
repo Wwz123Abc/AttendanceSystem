@@ -45,9 +45,7 @@ public partial class AttendanceService
 
             var oldHours = record.ActualWorkHours;
             var computed = await ComputeDailyWorkHoursAsync(record, record.WorkDate, ci, co, shift, groupByUser.GetValueOrDefault(record.UserId));
-            record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
-                ? ApplyLeaveHoursCap(computed, record.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
-                : computed;
+            record.ActualWorkHours = await CapWorkHoursForLeaveAsync(record, computed, shift, groupByUser.GetValueOrDefault(record.UserId));
             if (record.ActualWorkHours != oldHours)
             {
                 AppendApprovalNote(record, $"班次设置已改，工时已按新设置重算（{oldHours:0.##}→{record.ActualWorkHours:0.##}）");

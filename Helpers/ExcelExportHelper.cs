@@ -720,6 +720,7 @@ public static class ExcelExportHelper
         if (deviceInfo.StartsWith("ZKDevice:", StringComparison.OrdinalIgnoreCase)) return "考勤机";
         if (deviceInfo.StartsWith("MobileFace", StringComparison.OrdinalIgnoreCase)) return "手机人脸";
         if (deviceInfo.StartsWith("管理员补卡", StringComparison.Ordinal)) return "管理员补卡";
+        if (deviceInfo.StartsWith("补卡审批", StringComparison.Ordinal)) return "员工补卡";
         return "其他";
     }
 

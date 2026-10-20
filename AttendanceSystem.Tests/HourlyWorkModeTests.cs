@@ -139,6 +139,66 @@ public class HourlyWorkModeTests : SqliteTestBase
         Assert.Equal(11m, row!.DailyHours[0]);   // 11.08 向下取整到 0.5，不是被封顶的 8
     }
 
+    /// <summary>把当天这条记录改成"请假 2 小时"（模拟请假审批通过后的状态），再走"修改班次时重算历史工时"这条结算路径。</summary>
+    private async Task<decimal> HoursAfterLeaveRecalcAsync(int uid, int groupId)
+    {
+        using (var db = CreateContext())
+        {
+            var r = await db.AttendanceRecords.SingleAsync(x => x.UserId == uid && x.WorkDate == Tue);
+            r.AttendanceStatus = AttendanceStatus.OnLeave;
+            r.LeaveHours = 2m;
+            await db.SaveChangesAsync();
+        }
+        using (var db = CreateContext())
+        {
+            var shiftId = await db.ShiftSchedules.Where(s => s.AttendanceGroupId == groupId).Select(s => s.Id).SingleAsync();
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).RecalcShiftHistoryAsync(shiftId, Tue);
+        }
+        return (await TueRecordAsync(uid)).ActualWorkHours;
+    }
+
+    [Fact]
+    public async Task 计时工请假当天_重算工时不按标准工时减请假小时封顶()
+    {
+        var (uid, gid) = SeedHourly();
+        await SyncAsync(At(8, 25), At(12, 20), At(18, 10), At(21, 30));   // 考勤机直接同步：08:25–21:30 扣 1.5 小时 ≈ 11.5
+        var before = (await TueRecordAsync(uid)).ActualWorkHours;
+        Assert.InRange(before, 11.5m, 11.6m);
+        Assert.Equal(before, await HoursAfterLeaveRecalcAsync(uid, gid));   // 请假审批/补卡/改班次重算之后工时不能掉到 6
+    }
+
+    [Fact]
+    public async Task 普通考勤组请假当天_重算工时仍按标准工时减请假小时封顶()
+    {
+        var (uid, gid) = SeedHourly(hourlyOn: false);
+        await SyncAsync(At(8, 25), At(12, 20), At(18, 10), At(21, 30));
+        Assert.True(await HoursAfterLeaveRecalcAsync(uid, gid) <= 6m);   // 8 小时标准工时 − 2 小时请假
+    }
+
+    [Fact]
+    public async Task 月度汇总_计时工只打一次卡不算缺卡_休息日来上班算出勤()
+    {
+        var (uid, gid) = SeedHourly();
+        await SyncAsync(At(8, 25));   // 只有一张上班卡
+        var sat = Tue.AddDays(4);     // 班次配置的休息日（周六）
+        using (var db = CreateContext())
+        {
+            var shiftId = await db.ShiftSchedules.Where(s => s.AttendanceGroupId == gid).Select(s => s.Id).SingleAsync();
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = uid, WorkDate = sat, ShiftScheduleId = shiftId });
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = uid, WorkDate = sat, ClockInTime = sat.ToDateTime(new TimeOnly(8, 30)), ClockOutTime = sat.ToDateTime(new TimeOnly(17, 30)),
+                ActualWorkHours = 8m, AttendanceStatus = AttendanceStatus.Normal
+            });
+            await db.SaveChangesAsync();
+        }
+        using var db2 = CreateContext();
+        await new AttendanceService(db2, AppOptions, NullLogger<AttendanceService>.Instance).GenerateMonthlySummaryAsync(Tue.Year, Tue.Month, [uid]);
+        var s = await db2.MonthlyAttendanceSummaries.SingleAsync(x => x.UserId == uid);
+        Assert.Equal(0, s.NotPunchedCount);                 // 计时工没有缺卡
+        Assert.Equal(2m, (decimal)s.ActualWorkdays);        // 周二 + 休息日周六都算出勤
+    }
+
     [Fact]
     public async Task 计时工提交加班申请被拦住()
     {

@@ -409,6 +409,19 @@ public partial class AttendanceService
         shift?.StandardWorkHours ?? defaultDailyHours;
 
     /// <summary>
+    /// 请假当天的工时封顶（各条结算路径共用这一个入口，口径才一致）：普通考勤组按 <see cref="ApplyLeaveHoursCap"/> 封顶；
+    /// 计时工（<see cref="IsHourlyOnAsync"/>）不封顶——他们的工时就是实际打卡时长，请假只记录在 LeaveHours 里，
+    /// 不从工时里扣（2026-10-20 审查：同样的打卡，考勤机同步算 11.5、请假审批重算后却掉成 6，几条路径口径不一）。
+    /// 非请假状态原样返回。
+    /// </summary>
+    private async Task<decimal> CapWorkHoursForLeaveAsync(AttendanceRecord record, decimal computedHours, ShiftSchedule? shift, int? groupId)
+    {
+        if (record.AttendanceStatus != AttendanceStatus.OnLeave) return computedHours;
+        if (await IsHourlyOnAsync(groupId, record.WorkDate)) return computedHours;
+        return ApplyLeaveHoursCap(computedHours, record.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours));
+    }
+
+    /// <summary>
     /// 请假当天如果还有真实打卡（半天假、或先打卡后来才补批的假），按"这天标准工时 − 已经批准的
     /// 请假小时数"封顶后结算实际工时——不能超过这个上限，否则会出现"半天假 + 全天工时"这种既算
     /// 请假又重复计酬的情况；如果这天请的是全天假（<paramref name="leaveHours"/> ≥ 标准工时），
