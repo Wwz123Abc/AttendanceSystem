@@ -88,7 +88,7 @@
                             <label class="form-label">加班结束</label>
                             <input asp-for="OvertimeEnd" type="datetime-local" class="form-control" id="fOvertimeEnd" required />
                         </div>
-                        <div class="form-text mb-3">只能申请当天的加班，需在当天24点前提交，<strong>一次申请只对应一天的加班，结束时间最晚只能选到明天24点前</strong>（允许跨半夜，但不能一次选出好几天）。<strong>工作日的加班时间不能和当天班次的上下班时间重叠，请只填下班后（或上班前）的加班时段</strong>（休息日、节假日不受此限制）。加班时长按申请的起止时间计算：压到公司统一的饭点时段（@Model.MealBreakText）就扣掉重叠的那部分，按半小时向下取整；不足 0.5 小时不能提交。</div>
+                        <div class="form-text mb-3"><strong>加班当天24点前必须提交，不能事后补报；夜班员工（加班那天排的是跨天班次）可以提前一天提交</strong>，比如周五上夜班时就能把"周六20:00～周日08:00"的加班先交了，白班只能当天提交。<strong>一次申请只对应一天的加班，结束时间最晚只能选到开始日期的第二天24点前</strong>（允许跨半夜，但不能一次选出好几天）。<strong>工作日的加班时间不能和当天班次的上下班时间重叠，请只填下班后（或上班前）的加班时段</strong>（休息日、节假日不受此限制）。加班时长按申请的起止时间计算：压到公司统一的饭点时段（@Model.MealBreakText）就扣掉重叠的那部分，按半小时向下取整；不足 0.5 小时不能提交。</div>
                     </div>
 
                     <!-- 出差字段 -->

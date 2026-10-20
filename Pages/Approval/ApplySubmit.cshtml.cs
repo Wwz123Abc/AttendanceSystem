@@ -174,7 +174,7 @@ public class ApplySubmitModel(
     /// 校验各类申请的时间是否合理：
     /// 请假——开始时间最早只能选到“现在往前推 24 小时”，结束必须晚于开始；
     /// 补卡——补的是过去漏打的卡，日期不能选未来；
-    /// 加班——必须是当天的加班（当天 24 点前提交当日申请，不能提前申请也不能事后跨天补报），结束必须晚于开始；
+    /// 加班——当天 24 点前必须交、不能事后补报，最多提前一天（夜班才行，是不是夜班由服务端按排班判断），结束必须晚于开始；
     /// 出差——开始不能选过去、结束必须晚于开始（出差是提前申请的，不允许补报过去的出差）。
     /// 不合理就返回一句中文提示，合理则返回 null。
     /// </summary>
@@ -240,8 +240,12 @@ public class ApplySubmitModel(
                 return "请选择加班的开始和结束时间";
             if (!DateTime.TryParse(OvertimeStart, out var start) || !DateTime.TryParse(OvertimeEnd, out var end))
                 return "加班时间格式不正确";
-            if (DateOnly.FromDateTime(start) != DateOnly.FromDateTime(DateTime.Today))
-                return "加班申请必须是当天的加班，请在当天24点前提交当日申请";
+            var otDay = DateOnly.FromDateTime(start);
+            var todayD = DateOnly.FromDateTime(DateTime.Today);
+            if (otDay < todayD)
+                return "加班申请不能事后补报，请在加班当天24点前提交（夜班员工可以提前一天提交）";
+            if (otDay > todayD.AddDays(1))
+                return "加班申请最早只能提前一天提交（仅夜班员工），请在加班前一天或当天提交";
             if (end <= start)
                 return "加班结束时间必须晚于开始时间";
         }

@@ -69,13 +69,22 @@ fLeaveStart.addEventListener('change', function () {
 // 补卡：补的是过去漏打的卡，日期不能选未来
 fPunchDate.max = todayStr;
 
-// 加班：必须是当天的加班，当天24点前提交当日申请；结束时间不能早于开始时间，
-// 最晚只能选到明天23:59（允许夜班/晚上加班跨过午夜，但不能一次选出好几天，一次申请只对应一天的加班）
+// 加班：加班当天24点前必须提交，不能事后补报；夜班员工可以提前一天提交（能不能提前由后端按排班判断，这里只放宽到明天）；
+// 结束时间不能早于开始时间，最晚只能选到"开始日期的第二天"23:59（允许夜班/晚上加班跨过午夜，但不能一次选出好几天）
+const dayAfterTomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
+const dayAfterTomorrowEndStr = toDateInputValue(dayAfterTomorrow) + 'T23:59';
+function overtimeEndMax(startValue) {
+    if (!startValue) return dayAfterTomorrowEndStr;
+    const d = new Date(startValue.slice(0, 10) + 'T00:00');
+    d.setDate(d.getDate() + 1);
+    return toDateInputValue(d) + 'T23:59';   // 开始日期的第二天 23:59
+}
 fOvertimeStart.min = todayStartStr;
-fOvertimeStart.max = todayEndStr;
-fOvertimeEnd.max    = tomorrowEndStr;
+fOvertimeStart.max = tomorrowEndStr;
+fOvertimeEnd.max    = dayAfterTomorrowEndStr;
 fOvertimeStart.addEventListener('change', function () {
     fOvertimeEnd.min = this.value;
+    fOvertimeEnd.max = overtimeEndMax(this.value);
     if (fOvertimeEnd.value && fOvertimeEnd.value <= this.value) fOvertimeEnd.value = '';
 });
 
@@ -98,9 +107,10 @@ document.querySelector('form[enctype]').addEventListener('submit', function (e) 
     } else if (type === 'PunchReplenishment') {
         if (fPunchDate.value && fPunchDate.value > todayStr) msg = '补卡日期不能晚于今天';
     } else if (type === 'Overtime') {
-        if (fOvertimeStart.value && fOvertimeStart.value.slice(0, 10) !== todayStr) msg = '加班申请必须是当天的加班，请在当天24点前提交当日申请';
+        if (fOvertimeStart.value && fOvertimeStart.value.slice(0, 10) < todayStr) msg = '加班申请不能事后补报，请在加班当天24点前提交（夜班员工可以提前一天提交）';
+        else if (fOvertimeStart.value && fOvertimeStart.value > tomorrowEndStr) msg = '加班申请最早只能提前一天提交（仅夜班员工），请在加班前一天或当天提交';
         else if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value <= fOvertimeStart.value) msg = '加班结束时间必须晚于开始时间';
-        else if (fOvertimeEnd.value && fOvertimeEnd.value > tomorrowEndStr) msg = '加班结束时间最晚只能选到明天24点前，一次申请只对应一天的加班（跨夜的加班如果确实超过这个范围，请分开提交）';
+        else if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value > overtimeEndMax(fOvertimeStart.value)) msg = '加班结束时间最晚只能选到开始日期的第二天24点前，一次申请只对应一天的加班（跨夜的加班如果确实超过这个范围，请分开提交）';
     } else if (type === 'BusinessTrip') {
         if (fTripStart.value && fTripStart.value < todayStartStr) msg = '出差开始时间不能早于今天0点';
         else if (fTripStart.value && fTripStart.value > maxAdvanceStr) msg = '出差开始时间最多只能提前3个月申请';

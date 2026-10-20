@@ -254,6 +254,20 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             "如果是婚假、产假、丧假这类按自然日计算的假别，请选对应的假别");
     }
 
+    /// <summary>
+    /// 这一天算不算"夜班"：看这天排的班次是不是跨天班次；这天没有排班，就看前一天排的班次是不是跨天班次。
+    /// 用来决定加班申请能不能提前一天提交（夜班可以，白班不行）。
+    /// </summary>
+    private async Task<bool> IsNightShiftDayAsync(int userId, DateOnly day)
+    {
+        var shift = await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate == day)
+            .Select(a => a.ShiftSchedule).FirstOrDefaultAsync();
+        if (shift is null)
+            shift = await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate == day.AddDays(-1))
+                .Select(a => a.ShiftSchedule).FirstOrDefaultAsync();
+        return shift is { IsCrossDay: true };
+    }
+
     /// <summary>加班申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>
     private async Task ValidateOvertimeRequestAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
     {
@@ -265,8 +279,18 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             && await db.AttendanceGroups.Where(g => g.Id == og).Select(g => g.HourlyWorkStartDate).FirstOrDefaultAsync() is { } otHourlyFrom
             && DateOnly.FromDateTime(dto.OvertimeStartTime.Value) >= otHourlyFrom)
             throw new BusinessException("您所在的考勤组按实际打卡时长算工时（计时工），没有加班，不需要申请加班；下班请照常打下班卡，工时按最晚一次下班卡计算");
-        if (DateOnly.FromDateTime(dto.OvertimeStartTime.Value) != DateOnly.FromDateTime(clock.LocalToday()))
-            throw new BusinessException("加班申请必须是当天的加班，请在当天24点前提交当日申请");
+        // 提交时间窗（2026-10-20）：加班当天 24 点前必须交，过了不能事后补报；夜班（加班开始那天排的是跨天班次，
+        // 那天没排班就看前一天排的班次）可以提前一天交，最早前一天 0 点起；白班只能当天交。
+        var submitToday = DateOnly.FromDateTime(clock.LocalToday());
+        var submitOtDate = DateOnly.FromDateTime(dto.OvertimeStartTime.Value);
+        if (submitOtDate < submitToday)
+            throw new BusinessException("加班申请不能事后补报，请在加班当天24点前提交（夜班员工可以提前一天提交）");
+        if (submitOtDate > submitToday.AddDays(1))
+            throw new BusinessException("加班申请最早只能提前一天提交（仅夜班员工），请在加班前一天或当天提交");
+        if (submitOtDate == submitToday.AddDays(1) && !await IsNightShiftDayAsync(applicantUserId, submitOtDate))
+            throw new BusinessException("只有夜班员工可以提前一天提交加班申请；白班请在加班当天提交");
+        if (dto.OvertimeEndTime > submitOtDate.AddDays(2).ToDateTime(TimeOnly.MinValue))
+            throw new BusinessException("加班结束时间最晚只能选到开始日期的第二天24点前，一次申请只对应一天的加班（跨夜的加班如果确实超过这个范围，请分开提交）");
         if (dto.OvertimeEndTime <= dto.OvertimeStartTime)
             throw new BusinessException("加班结束时间必须晚于开始时间");
         if ((dto.OvertimeEndTime.Value - dto.OvertimeStartTime.Value).TotalHours > MaxOvertimeHours)
