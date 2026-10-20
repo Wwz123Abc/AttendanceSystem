@@ -84,6 +84,7 @@ public interface IAttendanceService
     /// 只能撤回这天最近一次、还没撤回的补卡，而且这天的上下班时间不能在补卡之后又被别的操作改过；不满足就抛 BusinessException 说明原因。
     /// </summary>
     Task                           RevertAdminPunchAdjustAsync(int logId, string? operatorName);
+    Task<(int Checked, int HoursChanged)> RecalcShiftHistoryAsync(int shiftId, DateOnly from);
     Task                           AdminReplenishPunchAsync(int userId, DateOnly workDate, PunchType type, DateTime punchAt, bool allowOverwrite, string? remark, string? operatorName);
     /// <summary>
     /// 生成"模板月度汇总表"（对照公司要求的外部模板文件列结构）。

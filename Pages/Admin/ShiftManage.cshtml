@@ -354,6 +354,18 @@
                         </div>
                     </div>
                 </div>
+                <div class="px-3 pb-2" id="recalcRow" style="display:none">
+                    <div class="form-check">
+                        <input asp-for="RecalcHistory" id="fRecalc" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" for="fRecalc">同时重算这个班次的历史工时</label>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-1">
+                        <span class="small text-muted">从</span>
+                        <input asp-for="RecalcFrom" id="fRecalcFrom" type="date" class="form-control form-control-sm" style="max-width:160px" />
+                        <span class="small text-muted">起（最多往前 93 天）</span>
+                    </div>
+                    <div class="form-text">改了午间窗口或上下班时间后建议勾上：只重算工时和午间命中，不动考勤状态、迟到早退、加班、请假。不勾的话，旧记录的工时还是按旧设置算的。</div>
+                </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="submit" class="btn btn-primary">保存</button>

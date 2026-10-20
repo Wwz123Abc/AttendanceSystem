@@ -74,7 +74,7 @@ public class UserManageModel(
         $"{Request.Scheme}://{Request.Host}/Employee/SelfRegister" + (deptId.HasValue ? $"?deptId={deptId}" : "");
 
     /// <summary>部门树的一个节点。</summary>
-    public record DeptNode(int Id, int? ParentId, string Name, int Depth, int MemberCount, bool HasChildren, bool IsActive);
+    public record DeptNode(int Id, int? ParentId, string Name, int Depth, int MemberCount, bool HasChildren, bool IsActive, int? FollowGroupId = null);
 
     // ── 员工表单 ──────────────────────────────────────────────────────────────
     [BindProperty] public string  EmployeeNo     { get; set; } = string.Empty;
@@ -884,7 +884,7 @@ public class UserManageModel(
         void Walk(int parentKey, int depth)
         {
             if (!byParent.TryGetValue(parentKey, out var kids)) return;
-            foreach (var d in kids) { DeptTree.Add(new DeptNode(d.Id, d.ParentId, d.DeptName, depth, total.GetValueOrDefault(d.Id), byParent.ContainsKey(d.Id), d.IsActive)); Walk(d.Id, depth + 1); }
+            foreach (var d in kids) { DeptTree.Add(new DeptNode(d.Id, d.ParentId, d.DeptName, depth, total.GetValueOrDefault(d.Id), byParent.ContainsKey(d.Id), d.IsActive, d.AttendanceGroupId)); Walk(d.Id, depth + 1); }
         }
         if (cu.IsScoped)
         {
@@ -893,7 +893,7 @@ public class UserManageModel(
             if (rootDept is not null)
             {
                 DeptTree.Add(new DeptNode(rootDept.Id, rootDept.ParentId, rootDept.DeptName, 0,
-                    total.GetValueOrDefault(rootDept.Id), byParent.ContainsKey(rootDept.Id), rootDept.IsActive));
+                    total.GetValueOrDefault(rootDept.Id), byParent.ContainsKey(rootDept.Id), rootDept.IsActive, rootDept.AttendanceGroupId));
                 Walk(rootDept.Id, 1);
             }
         }
@@ -924,7 +924,7 @@ public class UserManageModel(
             var shift = await db.ShiftSchedules.FirstOrDefaultAsync(s => s.Id == ShiftId.Value && s.IsActive);
             if (shift is null) return "；班次不存在或已停用，没有排班，请到「排班管理」里排";
             if (user.AttendanceGroupId != shift.AttendanceGroupId)
-                return "；所选班次不属于该员工的考勤组（部门会自动归入它跟随的考勤组），没有排班，请到「排班管理」里排";
+                return "；【注意：没有排班】所选班次不属于该员工最终归入的考勤组（部门跟随了别的考勤组），请到「排班管理」里给他排班";
             if (ShiftDays is < 1 or > 366) return "；排班天数要在 1～366 之间，没有排班，请到「排班管理」里排";
             if (!DateOnly.TryParse(HireDate, out var hire))
                 return "；没有填入职日期，没有排班（排班要从入职日开始），请填入职日期后到「排班管理」里排";

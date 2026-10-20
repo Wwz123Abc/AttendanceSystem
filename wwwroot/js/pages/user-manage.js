@@ -77,6 +77,7 @@ document.getElementById('fDeptId').addEventListener('change', function () {
     fillEmployeeNoForDept(this.value);
     suggestSupervisorForDept(this.value);
     autoFillScopedDept();
+    syncGroupFromDept();
 });
 
 // ── 管理范围默认跟着"部门"走：这两个字段本来就经常设成同一个值（详见 CanAccessDeptAsync/
@@ -201,6 +202,7 @@ function openAdd() {
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
     setShiftRowVisible(true);
+    syncGroupFromDept();
     setSuperId('');
     setDeviceIds([]);
     setScopedDeptId(null);
@@ -273,6 +275,7 @@ function openConfirm(data) {
     document.getElementById('fDeptId').value     = data.deptId != null ? data.deptId : (SELECTED_DEPT !== null ? SELECTED_DEPT : '');
     document.getElementById('fGroupId').value    = '';
     setShiftRowVisible(true);
+    syncGroupFromDept();
     setSuperId('');
     setDeviceIds([]);
     setScopedDeptId(null);
@@ -307,10 +310,29 @@ function onShiftChange() {
     const opt = sel.options[sel.selectedIndex];
     document.getElementById('fShiftDays').value = opt && opt.value ? (opt.dataset.days || 30) : '';
 }
+// 部门跟随了某个考勤组时，保存会自动把员工归入那个组（不管下拉选的是什么）：新建/确认录入时选部门就把
+// "考勤组"下拉直接带成那个组，班次下拉就能按它列出来；提示一句让管理员知道这个组是部门决定的
+function syncGroupFromDept() {
+    const hint = document.getElementById('fGroupFollowHint');
+    if (!hint || document.getElementById('fEditUserId').value !== '0') return;
+    const dept = document.getElementById('fDeptId');
+    const opt = dept.options[dept.selectedIndex];
+    const gid = opt && opt.dataset.group;
+    const groupSel = document.getElementById('fGroupId');
+    if (gid && Array.from(groupSel.options).some(o => o.value === gid)) {
+        groupSel.value = gid;
+        hint.textContent = '该部门固定跟随这个考勤组，保存时会自动归入';
+        hint.classList.remove('d-none');
+    } else {
+        hint.classList.add('d-none');
+    }
+    refreshShiftOptions();
+}
 function setShiftRowVisible(visible) {
     const row = document.getElementById('shiftRow');
     if (!row) return;
     row.style.display = visible ? '' : 'none';
+    if (!visible) document.getElementById('fGroupFollowHint')?.classList.add('d-none');
     document.getElementById('fShiftId').value = '';
     document.getElementById('fShiftDays').value = '';
     refreshShiftOptions();

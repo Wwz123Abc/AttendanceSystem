@@ -447,7 +447,7 @@
                             <select asp-for="DeptId" class="form-select" id="fDeptId" data-dept-picker>
                                 <option value="">请选择</option>
                                 @foreach (var d in Model.DeptTree.Where(x => x.IsActive))
-                                { <option value="@d.Id">@(new string('　', d.Depth))@d.Name</option> }
+                                { <option value="@d.Id" data-group="@d.FollowGroupId">@(new string('　', d.Depth))@d.Name</option> }
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -457,6 +457,7 @@
                                 @foreach (var g in Model.Groups)
                                 { <option value="@g.Id">@g.GroupName</option> }
                             </select>
+                            <div class="form-text text-primary d-none" id="fGroupFollowHint"></div>
                         </div>
                         <div class="col-md-12" id="shiftRow">
                             <div class="row g-3">

@@ -17,7 +17,7 @@ namespace AttendanceSystem.Pages.Admin;
 /// 分公司管理员只能选自己范围内的考勤组。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService, ILogger<ShiftManageModel> logger) : PageModel
+public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScopeService, IAttendanceService attendanceService, ILogger<ShiftManageModel> logger) : PageModel
 {
     public List<AttendanceGroup> Groups           { get; set; } = [];   // 所有考勤组（多选用）
     public List<int>             SelectedGroupIds  { get; set; } = [];   // 当前选中的考勤组
@@ -58,6 +58,8 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
     [BindProperty] public bool    CrossDay   { get; set; }
     [BindProperty] public decimal StdHours   { get; set; } = 8;
     [BindProperty] public string  ShiftColor { get; set; } = "#1890ff";
+    [BindProperty] public bool    RecalcHistory { get; set; }     // 修改班次时，同时重算该班次的历史工时
+    [BindProperty] public string? RecalcFrom    { get; set; }     // 从哪天起重算
     /// <summary>每周休息日（勾选的星期几，0=周日...6=周六）</summary>
     [BindProperty] public List<int> RestDays { get; set; } = [];
 
@@ -252,6 +254,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
         try
         {
             await EnsureShiftWritableAsync();
+            int? recalcShiftId = null;
             var (ws, we, midCheckWindowsCsv) = ValidateShiftForm();
 
             // 把勾选的星期几（0=周日...6=周六）拼成逗号分隔的字符串存起来
@@ -300,6 +303,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                     s.MidCheckWindows            = midCheckWindowsCsv;
                     s.UpdatedAt                  = DateTime.Now;
                     SuccessMessage = $"班次「{ShiftName}」已更新";
+                    recalcShiftId = s.Id;
                 }
                 else
                 {
@@ -307,6 +311,18 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                 }
             }
             await db.SaveChangesAsync();
+
+            // 改班次不会回头动历史记录；管理员勾了"同时重算历史工时"才重算（班次已经保存成功，重算失败不影响保存）
+            if (recalcShiftId.HasValue && RecalcHistory)
+            {
+                if (!DateOnly.TryParse(RecalcFrom, out var recalcFrom))
+                    SuccessMessage += "；没有填重算起始日期，历史工时没有重算";
+                else
+                {
+                    var (checkedCount, hoursChanged) = await attendanceService.RecalcShiftHistoryAsync(recalcShiftId.Value, recalcFrom);
+                    SuccessMessage += $"；已重算 {recalcFrom:MM/dd} 起的历史工时：检查 {checkedCount} 条，其中 {hoursChanged} 条工时有变化";
+                }
+            }
         }
         // 这个方法里前面一大段校验用的都是 throw new Exception("中文提示")（不是 InvalidOperationException），
         // 所以不能像别的页面那样按异常类型拆分；这里改成只单独拦截 DbUpdateException（真正的数据库层面

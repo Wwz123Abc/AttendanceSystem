@@ -18,7 +18,18 @@ function openAddShift() {
     document.getElementById('fSColor').value = '#1890ff';
     setMidCheckWindows([]);
     setRestDays([0, 6]);   // 新建默认周六周日休息，和后台的默认值保持一致
+    showRecalcRow(false);
     shiftModal.show();
+}
+
+// 编辑班次时才显示"同时重算历史工时"，默认不勾；起始日期默认是当前发薪周期的开始（上个 26 号）
+function showRecalcRow(visible) {
+    document.getElementById('recalcRow').style.display = visible ? '' : 'none';
+    document.getElementById('fRecalc').checked = false;
+    const d = new Date();
+    const start = new Date(d.getFullYear(), d.getDate() >= 26 ? d.getMonth() : d.getMonth() - 1, 26);
+    const pad = n => String(n).padStart(2, '0');
+    document.getElementById('fRecalcFrom').value = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
 }
 
 // 点某个班次的"编辑"：把这个班次现有的各项值填进弹窗表单，方便直接在原有基础上改
@@ -38,6 +49,7 @@ function openEditShift(id, gid, name, ws, we, lt, et, ei, ot, cross, sh, color, 
     document.getElementById('fSColor').value = color;
     setMidCheckWindows(JSON.parse(midWindowsJson || '[]'));
     setRestDays(JSON.parse(restDaysJson || '[]'));
+    showRecalcRow(true);
     shiftModal.show();
 }
 
