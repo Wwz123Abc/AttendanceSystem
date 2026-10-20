@@ -116,15 +116,35 @@ public partial class AttendanceService
         return ResolveMidCheckResults(workDate, shift, windows, dayPunches.Distinct().ToList());
     }
 
-    /// <summary>按班次配置的每一段午间窗口，从给定的打卡时刻列表里找出每一段命中的那次打卡（没命中就是 null）。</summary>
+    /// <summary>午间打卡的宽限：窗口结束之后 30 分钟内才打卡，仍然算命中、不扣工时；超过 30 分钟就算没打，
+    /// 按"午间漏打"只算下午（2026-10-20 业务口径：迟到 30 分钟内不扣钱，超过扣半天）。</summary>
+    public const int MidCheckGraceMinutes = 30;
+
+    /// <summary>午间窗口算命中的最晚时刻 = 窗口结束 + 宽限；宽限不能越过下一段窗口的开始（相邻窗口各算各的）。</summary>
+    public static DateTime MidCheckEffectiveEnd(DateTime windowEnd, DateTime? nextWindowStart)
+    {
+        var end = windowEnd.AddMinutes(MidCheckGraceMinutes);
+        return nextWindowStart is { } n && n > windowEnd && n <= end ? n.AddSeconds(-1) : end;
+    }
+
+    /// <summary>某一段午间窗口（按下标）命中的最晚时刻，把"下一段窗口的开始"也算进去。</summary>
+    public static DateTime MidCheckEffectiveEnd(DateOnly workDate, ShiftSchedule shift, List<(TimeOnly Start, TimeOnly End)> windows, int index)
+    {
+        DateTime? next = index + 1 < windows.Count ? ResolveShiftTime(workDate, windows[index + 1].Start, shift) : null;
+        return MidCheckEffectiveEnd(ResolveShiftTime(workDate, windows[index].End, shift), next);
+    }
+
+    /// <summary>按班次配置的每一段午间窗口，从给定的打卡时刻列表里找出每一段命中的那次打卡（没命中就是 null）。
+    /// 窗口结束后 <see cref="MidCheckGraceMinutes"/> 分钟内的打卡也算命中。</summary>
     public static List<MidCheckWindowResult> ResolveMidCheckResults(
         DateOnly workDate, ShiftSchedule shift, List<(TimeOnly Start, TimeOnly End)> windows, List<DateTime> punchTimes)
     {
         var results = new List<MidCheckWindowResult>();
-        foreach (var w in windows)
+        for (var i = 0; i < windows.Count; i++)
         {
+            var w = windows[i];
             var windowStart = ResolveShiftTime(workDate, w.Start, shift);
-            var windowEnd   = ResolveShiftTime(workDate, w.End, shift);
+            var windowEnd   = MidCheckEffectiveEnd(workDate, shift, windows, i);
             var hit = punchTimes.Where(t => t >= windowStart && t <= windowEnd)
                 .OrderBy(t => t).Cast<DateTime?>().FirstOrDefault();
             results.Add(new MidCheckWindowResult(w.Start, w.End, hit.HasValue ? TimeOnly.FromDateTime(hit.Value) : null));

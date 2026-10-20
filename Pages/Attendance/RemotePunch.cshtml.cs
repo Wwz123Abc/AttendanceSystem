@@ -105,12 +105,13 @@ public class RemotePunchModel(
                     hint = "您的班次没有午间必打卡的要求，这次打卡只留识别记录，不会改动上班、下班时间";
                 else
                 {
-                    var inWindow = windows.Any(w => now >= AttendanceService.ResolveShiftTime(workDate, w.Start, shift!)
-                                                 && now <= AttendanceService.ResolveShiftTime(workDate, w.End, shift!));
+                    var inWindow = windows.Select((w, i) => (w, i)).Any(x =>
+                        now >= AttendanceService.ResolveShiftTime(workDate, x.w.Start, shift!)
+                        && now <= AttendanceService.MidCheckEffectiveEnd(workDate, shift!, windows, x.i));   // 含窗口结束后 30 分钟的宽限
                     var text = string.Join("、", windows.Select(w => $"{w.Start:HH\\:mm}-{w.End:HH\\:mm}"));
                     hint = inWindow
-                        ? $"现在在午间打卡时段（{text}）内，会计入午间打卡"
-                        : $"现在不在午间打卡时段（{text}）内，这次打卡只留识别记录，**不会计入午间打卡**；还没到下班时间，下班时再打才会记成下班卡";
+                        ? $"现在在午间打卡时段（{text}，结束后 {AttendanceService.MidCheckGraceMinutes} 分钟内也算）内，会计入午间打卡"
+                        : $"现在不在午间打卡时段（{text}，结束后 {AttendanceService.MidCheckGraceMinutes} 分钟内也算）内，这次打卡只留识别记录，**不会计入午间打卡**；还没到下班时间，下班时再打才会记成下班卡";
                 }
                 break;
             default:

@@ -26,3 +26,7 @@ graphify-out/
 # 数据库备份文件（含真实员工数据），不能上传
 db_backups/
 
+
+# 本地导出的员工数据/临时发布目录，不要提交到公开仓库
+docs/导出/
+publish_out/

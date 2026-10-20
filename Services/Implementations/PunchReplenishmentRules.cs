@@ -136,13 +136,13 @@ public static class PunchReplenishmentRules
         {
             var w = windows[i];
             var start = AttendanceService.ResolveShiftTime(date, w.Start, ctx.Shift);
-            var end   = AttendanceService.ResolveShiftTime(date, w.End, ctx.Shift);
+            var end   = AttendanceService.MidCheckEffectiveEnd(date, ctx.Shift, windows, i);   // 含窗口结束后 30 分钟的宽限
             if (punchAt < start || punchAt > end) continue;
             return results[i].HitTime is { } hit
                 ? $"这个时段（{w.Start:HH\\:mm}–{w.End:HH\\:mm}）已经有午间打卡（{hit:HH\\:mm}），不需要补"
                 : null;   // 落在一个还没命中的窗口里，可以补
         }
         var text = string.Join("、", windows.Select(w => $"{w.Start:HH\\:mm}–{w.End:HH\\:mm}"));
-        return $"午间打卡时间必须落在班次设置的午间窗口内（{text}）";
+        return $"午间打卡时间必须落在班次设置的午间窗口内（{text}，窗口结束后 {AttendanceService.MidCheckGraceMinutes} 分钟内也算）";
     }
 }

@@ -88,9 +88,9 @@ public class PunchReplenishmentTests : SqliteTestBase
     public void 午间补卡_必须落在没命中的窗口里_夹在上班卡和下班卡之间()
     {
         var shift = DayWithWindow("12:00-13:00");
-        var ctx = Ctx(shift, ci: At(Tue, 8, 25), co: At(Tue, 17, 40), punches: At(Tue, 13, 20));   // 13:20 在窗口外，窗口还是空的
+        var ctx = Ctx(shift, ci: At(Tue, 8, 25), co: At(Tue, 17, 40), punches: At(Tue, 13, 40));   // 13:40 在窗口外，窗口还是空的
         Assert.Null(PunchReplenishmentRules.FindProblem(PunchType.MidCheck, Tue, At(Tue, 12, 30), ctx));
-        Assert.Contains("午间窗口内", PunchReplenishmentRules.FindProblem(PunchType.MidCheck, Tue, At(Tue, 13, 30), ctx));   // 不在窗口内
+        Assert.Contains("午间窗口内", PunchReplenishmentRules.FindProblem(PunchType.MidCheck, Tue, At(Tue, 13, 45), ctx));   // 不在窗口内（窗口结束后 30 分钟的宽限也过了）
         Assert.Contains("要晚于这天的上班卡", PunchReplenishmentRules.FindProblem(PunchType.MidCheck, Tue, At(Tue, 8, 0), Ctx(shift, ci: At(Tue, 8, 25))));
         Assert.Contains("要早于这天的下班卡", PunchReplenishmentRules.FindProblem(PunchType.MidCheck, Tue, At(Tue, 12, 30), Ctx(shift, ci: At(Tue, 8, 25), co: At(Tue, 12, 10))));
 
@@ -112,7 +112,7 @@ public class PunchReplenishmentTests : SqliteTestBase
 
     // ── 端到端：审批通过后的回写 ─────────────────────────────────────────
 
-    /// <summary>白班（午间窗口 12:00–13:00）：08:25 上班、13:20 午间（超出窗口）、17:40 下班，走真实的考勤机同步。</summary>
+    /// <summary>白班（午间窗口 12:00–13:00）：08:25 上班、13:40 午间（超出窗口）、17:40 下班，走真实的考勤机同步。</summary>
     private async Task<(int uid, int supervisorId)> SeedMissedWindowDay()
     {
         var (uid, _) = SeedDayMidWorld();
@@ -132,7 +132,7 @@ public class PunchReplenishmentTests : SqliteTestBase
             var svc = new ZKDeviceSyncService(db, NullLogger<ZKDeviceSyncService>.Instance, AppOptions, att);
             await svc.ProcessAttLogAsync("SNM", [
                 new ZKAttLogRow("M1", At(Tue, 8, 25), 0, 15),
-                new ZKAttLogRow("M1", At(Tue, 13, 20), 0, 15),
+                new ZKAttLogRow("M1", At(Tue, 13, 40), 0, 15),
                 new ZKAttLogRow("M1", At(Tue, 17, 40), 0, 15)]);
         }
         return (uid, supId);
@@ -163,7 +163,7 @@ public class PunchReplenishmentTests : SqliteTestBase
             var before = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
             Assert.Equal(At(Tue, 8, 25), before.ClockInTime);
             Assert.Equal(At(Tue, 17, 40), before.ClockOutTime);
-            Assert.Null(before.MidCheckResults.ParseMidCheckResults().Single().HitTime);   // 13:20 超出窗口：午间漏打
+            Assert.Null(before.MidCheckResults.ParseMidCheckResults().Single().HitTime);   // 13:40 超出窗口：午间漏打
             Assert.True(before.ActualWorkHours < 8m);                                      // 漏打午间，只算半天
         }
         var punchesBefore = await CreateContext().AttendancePunches.CountAsync(p => p.UserId == uid);
