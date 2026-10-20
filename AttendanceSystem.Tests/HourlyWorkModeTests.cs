@@ -221,4 +221,17 @@ public class HourlyWorkModeTests : SqliteTestBase
             Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.ClockOut, Tue.AddDays(1).ToDateTime(new TimeOnly(0, 30)), false, null, "管理员"));
         Assert.Contains("23:59", ex.Message);
     }
+
+    [Fact]
+    public async Task 午间漏打扣下午_补了午间卡后正常算全天工时()
+    {
+        var (uid, _) = SeedHourly();
+        await SyncAsync(At(8, 25), At(21, 0));   // 没打午间卡：只算 08:25–12:00
+        Assert.InRange((await TueRecordAsync(uid)).ActualWorkHours, 3.5m, 3.6m);
+        using (var db = CreateContext())
+            await Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.MidCheck, At(12, 20), false, null, "管理员");
+        var rec = await TueRecordAsync(uid);
+        Assert.Equal(At(21, 0), rec.ClockOutTime);
+        Assert.InRange(rec.ActualWorkHours, 11m, 11.1m);   // 补了午间卡：08:25–21:00 扣 1.5 小时，全天工时
+    }
 }

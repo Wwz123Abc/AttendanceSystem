@@ -6,6 +6,7 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
+using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Report;
@@ -169,6 +170,44 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         var records = await attendanceService.GetClockTimeSheetAsync(start.Value, end.Value, deptIds, HttpContext.RequestAborted);
         var bytes   = ExcelExportHelper.ExportClockTimeSheet(records, start.Value, end.Value);
         return File(bytes, XlsxContentType, $"打卡时间表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
+    }
+
+    /// <summary>每次导出原始打卡记录最多多少行（Excel 一个工作表最多 104 万行，留足余量；再多就让管理员缩小范围）。</summary>
+    private const int MaxRawPunchRows = 200_000;
+
+    /// <summary>
+    /// 点"导出员工原始打卡记录"时执行：范围和"导出打卡时间表"一样，按当前起止日期/部门勾选（不受关键字搜索影响，
+    /// 分公司管理员只能导出自己范围内的人）；内容是一次打卡一行的原始流水，用来核对某人某天到底几点打了几次卡。
+    /// 日期按"打卡发生的日历日"算：起始日 00:00 到结束日 23:59:59。
+    /// </summary>
+    public async Task<IActionResult> OnGetExportRawPunchesAsync(DateOnly? start, DateOnly? end, List<int>? deptIds)
+    {
+        if (start is null || end is null) return BadRequest("请选择起止日期");
+        if (end < start) return BadRequest("结束日期不能早于开始日期");
+        if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
+
+        deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetRequiredUser(), deptIds);
+        var uq = db.Users.Where(u => u.IsActive).NeedingAttendance();
+        if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
+        var userIds = await uq.Select(u => u.Id).ToListAsync(HttpContext.RequestAborted);
+
+        var from = start.Value.ToDateTime(TimeOnly.MinValue);
+        var to   = end.Value.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var rows = await db.AttendancePunches
+            .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= from && p.PunchTime < to)
+            .OrderBy(p => p.User.EmployeeNo).ThenBy(p => p.PunchTime)
+            .Take(MaxRawPunchRows + 1)
+            .Select(p => new RawPunchExportRow(
+                p.User.EmployeeNo, p.User.RealName,
+                p.User.Department != null ? p.User.Department.DeptName : null,
+                p.User.AttendanceGroup != null ? p.User.AttendanceGroup.GroupName : null,
+                p.PunchTime, (int)p.PunchType, p.DeviceInfo, p.Address, p.Latitude, p.Longitude, p.LocationValid, p.IsValid, p.CreatedAt))
+            .ToListAsync(HttpContext.RequestAborted);
+        if (rows.Count > MaxRawPunchRows)
+            return BadRequest($"导出的原始打卡记录超过 {MaxRawPunchRows} 条，请缩小日期范围或部门范围后再导出");
+
+        var bytes = ExcelExportHelper.ExportRawPunches(rows, start.Value, end.Value);
+        return File(bytes, XlsxContentType, $"员工原始打卡记录_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
 
     /// <summary>点某人”导出明细”时执行。</summary>

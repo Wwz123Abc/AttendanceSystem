@@ -658,6 +658,71 @@ public static class ExcelExportHelper
     }
 
     // ── 报表 3.5：打卡时间表（月度报表页，按部门范围导出多个人的每日打卡明细，一行一人一天）──
+    /// <summary>
+    /// 员工原始打卡记录：一次打卡一行（考勤机同步、手机人脸、管理员补卡的原始流水都在里面），
+    /// 不做合并，也不判断上班/下班有效与否，用来核对某个人某天到底打了几次卡、几点打的、在哪打的。
+    /// </summary>
+    public static byte[] ExportRawPunches(List<RawPunchExportRow> rows, DateOnly start, DateOnly end)
+    {
+        using var wb = new XSSFWorkbook();
+        var sheet = wb.CreateSheet("原始打卡记录");
+        var headerStyle = HeaderStyle(wb);
+        var dataStyle   = DataStyle(wb);
+        var bandedStyle = BandedStyle(wb);
+
+        string[] headers = ["工号", "姓名", "部门", "考勤组", "打卡日期", "星期", "打卡时间", "打卡类型", "来源", "设备/备注", "打卡地址", "纬度", "经度", "定位是否有效", "记录是否有效", "入库时间"];
+        var headerRow = sheet.CreateRow(0);
+        headerRow.HeightInPoints = 22;
+        for (var i = 0; i < headers.Length; i++)
+        {
+            SetCell(headerRow, i, headers[i], headerStyle);
+            sheet.SetColumnWidth(i, i switch { 2 or 3 => 18 * 256, 9 => 24 * 256, 10 => 34 * 256, 15 => 19 * 256, 4 or 6 => 12 * 256, _ => 11 * 256 });
+        }
+        sheet.CreateFreezePane(2, 1);
+        sheet.SetAutoFilter(new CellRangeAddress(0, 0, 0, headers.Length - 1));
+
+        string[] weekNames = ["日", "一", "二", "三", "四", "五", "六"];
+        string lastNo = "";
+        var banded = false;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            if (r.EmployeeNo != lastNo) { banded = !banded; lastNo = r.EmployeeNo; }   // 换人换一次底色，一个人的几次打卡看起来是一组
+            var style = banded ? bandedStyle : dataStyle;
+            var row = sheet.CreateRow(i + 1);
+            SetCell(row, 0, r.EmployeeNo, style);
+            SetCell(row, 1, r.RealName, style);
+            SetCell(row, 2, r.DeptName ?? "", style);
+            SetCell(row, 3, r.GroupName ?? "", style);
+            SetCell(row, 4, r.PunchTime.ToString("yyyy-MM-dd"), style);
+            SetCell(row, 5, "周" + weekNames[(int)r.PunchTime.DayOfWeek], style);
+            SetCell(row, 6, r.PunchTime.ToString("HH:mm:ss"), style);
+            SetCell(row, 7, r.PunchType switch { 1 => "上班", 2 => "下班", 3 => "午间", _ => "未知" }, style);
+            SetCell(row, 8, RawPunchSourceText(r.DeviceInfo), style);
+            SetCell(row, 9, r.DeviceInfo ?? "", style);
+            SetCell(row, 10, r.Address ?? "", style);
+            SetCell(row, 11, r.Latitude.HasValue ? r.Latitude.Value.ToString("0.000000") : "", style);
+            SetCell(row, 12, r.Longitude.HasValue ? r.Longitude.Value.ToString("0.000000") : "", style);
+            SetCell(row, 13, r.LocationValid is null ? "" : r.LocationValid.Value ? "是" : "否", style);
+            SetCell(row, 14, r.IsValid ? "有效" : "无效", style);
+            SetCell(row, 15, r.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"), style);
+        }
+
+        using var ms = new MemoryStream();
+        wb.Write(ms, leaveOpen: true);
+        return ms.ToArray();
+    }
+
+    /// <summary>从打卡流水的"设备信息"字段判断这次打卡是从哪来的。</summary>
+    private static string RawPunchSourceText(string? deviceInfo)
+    {
+        if (string.IsNullOrWhiteSpace(deviceInfo)) return "";
+        if (deviceInfo.StartsWith("ZKDevice:", StringComparison.OrdinalIgnoreCase)) return "考勤机";
+        if (deviceInfo.StartsWith("MobileFace", StringComparison.OrdinalIgnoreCase)) return "手机人脸";
+        if (deviceInfo.StartsWith("管理员补卡", StringComparison.Ordinal)) return "管理员补卡";
+        return "其他";
+    }
+
     public static byte[] ExportClockTimeSheet(List<AttendanceRecordDto> records, DateOnly start, DateOnly end)
     {
         using var wb = new XSSFWorkbook();
