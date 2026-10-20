@@ -234,4 +234,45 @@ public class HourlyWorkModeTests : SqliteTestBase
         Assert.Equal(At(21, 0), rec.ClockOutTime);
         Assert.InRange(rec.ActualWorkHours, 11m, 11.1m);   // 补了午间卡：08:25–21:00 扣 1.5 小时，全天工时
     }
+
+    [Fact]
+    public async Task 历史重建_按原始打卡重算_加班清零_旷工改正常_补卡时间保留_先预览不写库()
+    {
+        var (uid, gid) = SeedHourly();
+        var mon = Tue.AddDays(-1);
+        using (var db = CreateContext())
+        {
+            // 周二：原来按班次封顶 8 小时 + 加班 3，下班时间被记到第二天凌晨；真实打卡 08:25 / 12:20 / 21:00
+            db.AttendancePunches.AddRange(
+                new AttendancePunch { UserId = uid, PunchTime = At(8, 25), PunchType = PunchType.ClockIn, IsValid = true },
+                new AttendancePunch { UserId = uid, PunchTime = At(12, 20), PunchType = PunchType.MidCheck, IsValid = true },
+                new AttendancePunch { UserId = uid, PunchTime = At(21, 0), PunchType = PunchType.ClockOut, IsValid = true });
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, ClockInTime = At(8, 25), ClockOutTime = Tue.AddDays(1).ToDateTime(new TimeOnly(0, 30)),
+                AttendanceStatus = AttendanceStatus.EarlyLeave, ActualWorkHours = 8m, OvertimeHours = 3m, MidCheckResults = "12:00-13:00=12:20" });
+            // 周一：没有任何打卡，被记旷工，还挂着加班
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = mon, AttendanceStatus = AttendanceStatus.Absent, OvertimeHours = 2m });
+            db.SaveChanges();
+        }
+
+        using (var db = CreateContext())   // 预览：不写库
+        {
+            var rows = await Svc(db).RebuildHourlyRecordsAsync([gid], mon, Tue, dryRun: true);
+            Assert.Equal(2, rows.Count);
+            Assert.InRange(rows.Single(r => r.WorkDate == Tue).NewHours, 11m, 11.1m);
+        }
+        Assert.Equal(8m, (await TueRecordAsync(uid)).ActualWorkHours);   // 还是旧的
+
+        using (var db = CreateContext())
+            await Svc(db).RebuildHourlyRecordsAsync([gid], mon, Tue, dryRun: false);
+        var rec = await TueRecordAsync(uid);
+        Assert.Equal(At(21, 0), rec.ClockOutTime);                       // 凌晨 00:30 那个无效，改成真实最晚打卡
+        Assert.InRange(rec.ActualWorkHours, 11m, 11.1m);                // 不封顶
+        Assert.Equal(0m, rec.OvertimeHours);                            // 计时工没有加班
+        Assert.Equal("12:00-13:00=12:20", rec.MidCheckResults);
+        using var chk = CreateContext();
+        var m = await chk.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == mon);
+        Assert.Equal(AttendanceStatus.Normal, m.AttendanceStatus);      // 没有旷工一说
+        Assert.Equal(0m, m.OvertimeHours);
+        Assert.Equal(0m, m.ActualWorkHours);
+    }
 }

@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 
@@ -79,5 +80,117 @@ public partial class AttendanceService
         record.EarlyLeaveMinutes = 0;
         if (record.AttendanceStatus is AttendanceStatus.EarlyLeave or AttendanceStatus.Absent or AttendanceStatus.NotPunched)
             record.AttendanceStatus = AttendanceStatus.Normal;
+    }
+
+    /// <summary>计时工历史重建的结果行（一个人一天一行）：新旧对比，给管理员核对用。</summary>
+    public sealed record HourlyRebuildRow(
+        int UserId, string EmployeeNo, string RealName, DateOnly WorkDate, string ShiftName,
+        DateTime? OldIn, DateTime? OldOut, decimal OldHours, decimal OldOvertime, AttendanceStatus? OldStatus,
+        DateTime? NewIn, DateTime? NewOut, decimal NewHours, decimal NewOvertime, AttendanceStatus NewStatus, bool Created)
+    {
+        public bool Changed => Created || OldIn != NewIn || OldOut != NewOut || OldHours != NewHours || OldOvertime != NewOvertime || OldStatus != NewStatus;
+    }
+
+    /// <summary>
+    /// 一次性维护：把某几个考勤组在 [from, to] 这段历史，按计时工规则从原始打卡重建考勤记录
+    /// （2026-10-20 用户要求：成都鹰诺深圳分公司 9/25–10/19 的记录也按计时工口径重算）。不属于常规流程，由维护工具调用。
+    /// 每个人每一天：有效打卡 = 当天 07:00 到 23:59 之间的原始打卡，加上记录里已有的上下班时间（补卡补出来的）
+    /// 只要也落在这个时段；上班 = 最早一次，下班 = 最晚一次（只有一次则没有下班）；工时按 <see cref="ComputeHourlyWorkHours"/>
+    /// 算（午间窗口取记录里当时冻结的窗口，多段只取第一段）；加班一律清零（计时工没有加班，在岗时间已经全部算进工时）；
+    /// 旷工/未打卡/早退的状态改成正常、迟到照常判断；请假/出差/节假日状态和请假小时不动。
+    /// <paramref name="dryRun"/>=true 只计算不写库。幂等：重复跑结果一样。
+    /// </summary>
+    public async Task<List<HourlyRebuildRow>> RebuildHourlyRecordsAsync(
+        IReadOnlyCollection<int> groupIds, DateOnly from, DateOnly to, bool dryRun, CancellationToken ct = default)
+    {
+        var users = await db.Users.Where(u => u.AttendanceGroupId != null && groupIds.Contains(u.AttendanceGroupId.Value))
+            .Select(u => new { u.Id, u.EmployeeNo, u.RealName }).ToListAsync(ct);
+        var userIds = users.Select(u => u.Id).ToList();
+        var fromDt = from.ToDateTime(TimeOnly.MinValue);
+        var toDt   = to.AddDays(1).ToDateTime(TimeOnly.MinValue);
+
+        var records = (await db.AttendanceRecords.Where(r => userIds.Contains(r.UserId) && r.WorkDate >= from && r.WorkDate <= to).ToListAsync(ct))
+            .ToDictionary(r => (r.UserId, r.WorkDate));
+        var punchesByUserDay = (await db.AttendancePunches
+                .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= fromDt && p.PunchTime < toDt && p.IsValid)
+                .Select(p => new { p.UserId, p.PunchTime }).ToListAsync(ct))
+            .GroupBy(p => (p.UserId, DateOnly.FromDateTime(p.PunchTime)))
+            .ToDictionary(g => g.Key, g => g.Select(x => x.PunchTime).Distinct().OrderBy(x => x).ToList());
+        var shifts = (await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+                .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= from && a.WorkDate <= to).ToListAsync(ct))
+            .ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+
+        var result = new List<HourlyRebuildRow>();
+        foreach (var u in users)
+        for (var d = from; d <= to; d = d.AddDays(1))
+        {
+            records.TryGetValue((u.Id, d), out var rec);
+            punchesByUserDay.TryGetValue((u.Id, d), out var rawPunches);
+            var punches = (rawPunches ?? []).Where(IsHourlyPunchTimeValid).ToList();
+            var cands = new List<DateTime>(punches);
+            if (rec?.ClockInTime is { } rci && DateOnly.FromDateTime(rci) == d && IsHourlyPunchTimeValid(rci)) cands.Add(rci);
+            if (rec?.ClockOutTime is { } rco && DateOnly.FromDateTime(rco) == d && IsHourlyPunchTimeValid(rco)) cands.Add(rco);
+            if (rec is null && cands.Count == 0) continue;
+
+            shifts.TryGetValue((u.Id, d), out var shift);
+            DateTime? newIn = null, newOut = null;
+            if (cands.Count > 0)
+            {
+                newIn = cands.Min();
+                var latest = cands.Max();
+                if (latest > newIn) newOut = latest;
+            }
+
+            // 午间窗口：用记录里当时冻结的窗口（班次后来可能改过/停用），多段只取第一段（新规则只有一个午间窗口）
+            List<(TimeOnly Start, TimeOnly End)> windows = rec?.MidCheckResults.ParseMidCheckResults()
+                    .Select(w => (w.WindowStart, w.WindowEnd)).ToList()
+                ?? [];
+            if (windows.Count == 0 && shift is not null) windows = shift.ParseMidCheckWindows();
+            if (windows.Count > 1) windows = [windows.OrderBy(w => w.Start).First()];
+            List<MidCheckWindowResult>? mid = shift is not null && windows.Count > 0
+                ? ResolveMidCheckResults(d, shift, windows, punches)
+                : null;
+
+            var newHours = newIn is { } i && newOut is { } o ? ComputeHourlyWorkHours(d, i, o, shift, mid) : 0m;
+
+            var oldStatus = rec?.AttendanceStatus;
+            var newStatus = oldStatus ?? AttendanceStatus.Normal;
+            var newLate = 0;
+            if (oldStatus is AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip)
+                newLate = rec!.LateMinutes;   // 审批定的状态不动
+            else if (newIn is { } inT && shift is not null)
+            {
+                var st = CalcClockInStatus(d, inT, shift, false, out newLate);
+                newStatus = st == AttendanceStatus.Late ? AttendanceStatus.Late : AttendanceStatus.Normal;
+            }
+            else newStatus = AttendanceStatus.Normal;
+
+            var row = new HourlyRebuildRow(u.Id, u.EmployeeNo, u.RealName, d, shift?.ShiftName ?? "",
+                rec?.ClockInTime, rec?.ClockOutTime, rec?.ActualWorkHours ?? 0m, rec?.OvertimeHours ?? 0m, oldStatus,
+                newIn, newOut, newHours, 0m, newStatus, rec is null);
+            result.Add(row);
+            if (dryRun || !row.Changed) continue;
+
+            if (rec is null)
+            {
+                rec = new AttendanceRecord { UserId = u.Id, WorkDate = d };
+                db.AttendanceRecords.Add(rec);
+                records[(u.Id, d)] = rec;
+            }
+            rec.ClockInTime = newIn; rec.ClockOutTime = newOut;
+            rec.ActualWorkHours = newHours; rec.OvertimeHours = 0;
+            rec.AttendanceStatus = newStatus; rec.LateMinutes = newLate; rec.EarlyLeaveMinutes = 0;
+            rec.MidCheckResults = mid?.FormatMidCheckResults();
+            AppendApprovalNote(rec, "已按计时工规则重算（2026-10-20）");
+            rec.UpdatedAt = clock.LocalNow();
+        }
+
+        if (!dryRun)
+        {
+            await db.SaveChangesAsync(ct);
+            foreach (var g in result.Where(r => r.Changed).GroupBy(r => (r.WorkDate.Year, r.WorkDate.Month)))
+                await GenerateMonthlySummaryAsync(g.Key.Year, g.Key.Month, g.Select(r => r.UserId).Distinct().ToList());
+        }
+        return result;
     }
 }
