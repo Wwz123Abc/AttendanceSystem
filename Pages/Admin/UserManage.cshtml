@@ -458,6 +458,24 @@
                                 { <option value="@g.Id">@g.GroupName</option> }
                             </select>
                         </div>
+                        <div class="col-md-12" id="shiftRow">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">班次（直接排班，可不选）</label>
+                                    <select asp-for="ShiftId" class="form-select" id="fShiftId">
+                                        <option value="">不排班（之后到「排班管理」里排）</option>
+                                        @foreach (var s in Model.ShiftOptions)
+                                        { <option value="@s.Id" data-group="@s.GroupId" data-days="@s.DefaultDays">@s.Text</option> }
+                                    </select>
+                                    <div class="form-text">只列出上面所选「考勤组」的班次；先选考勤组再选班次。</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">排班天数</label>
+                                    <input asp-for="ShiftDays" type="number" min="1" max="366" class="form-control" id="fShiftDays" />
+                                    <div class="form-text">默认和这个班次现有员工排到的天数一样；从入职日（入职日已过则从今天）起排，需要先填入职日期。</div>
+                                </div>
+                            </div>
+                        </div>
                         <div class="col-md-6 position-relative">
                             <label class="form-label">直属上级 <span class="text-danger" id="fSuperIdReq">*</span></label>
                             <input type="text" class="form-control" id="fSuperIdSearch" placeholder="输入姓名或工号搜索" autocomplete="off" />

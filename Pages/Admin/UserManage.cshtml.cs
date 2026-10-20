@@ -31,6 +31,9 @@ public class UserManageModel(
 {
     public List<User>            Users       { get; set; } = [];
     public List<AttendanceGroup> Groups      { get; set; } = [];
+    /// <summary>新建/确认录入时"直接排班"可选的班次（启用中、属于可见考勤组的），连同该班次现有员工已经排到多少天以后，当默认排班天数。</summary>
+    public List<ShiftOption>     ShiftOptions { get; set; } = [];
+    public record ShiftOption(int Id, int GroupId, string Text, int DefaultDays);
     public List<User>            Supervisors { get; set; } = [];
     public List<ZKDevice>        AssignableDevices { get; set; } = [];   // 建档/编辑表单里"推送到哪些考勤机"多选框的候选列表，全公司启用中的设备都在内，不按管理范围过滤
     /// <summary>当前这一页员工，每个人已经被指定推送到哪些设备（编辑弹窗回填用，key=UserId）。</summary>
@@ -79,6 +82,8 @@ public class UserManageModel(
     [BindProperty] public string  Role           { get; set; } = "Employee";
     [BindProperty] public int?    DeptId         { get; set; }
     [BindProperty] public int?    GroupId        { get; set; }
+    [BindProperty] public int?    ShiftId        { get; set; }   // 新建时顺便排的班次（不选=不排班）
+    [BindProperty] public int     ShiftDays      { get; set; }   // 排多少天，从入职日（入职日早于今天则从今天）起算
     [BindProperty] public int?    SuperId        { get; set; }
     [BindProperty] public string? Position       { get; set; }
 
@@ -268,12 +273,13 @@ public class UserManageModel(
             accountCreated = true;
             await userService.SetUserDevicesAsync(newUser.Id, DeviceIds);
             await ApplyScopeAfterSaveAsync(newUser.Id, isCreate: true);
+            var shiftNote = await AssignInitialShiftAsync(newUser);
 
             // 如果这次新建是在确认某条扫码登记，顺带把那条登记标记为「已确认」，关联上新建好的账号
             if (RegistrationId.HasValue)
                 await registrationService.MarkConfirmedAsync(RegistrationId.Value, newUser.Id);
 
-            SuccessMessage = $"员工 {RealName} 创建成功！初始密码：{initialPwd}";
+            SuccessMessage = $"员工 {RealName} 创建成功！初始密码：{initialPwd}" + shiftNote;
         }
         catch (InvalidOperationException ex)
         {
@@ -908,6 +914,40 @@ public class UserManageModel(
         }
     }
 
+    /// <summary>新建员工时顺便排班：只在管理员选了班次时才做。账号已经建成，排班失败不能让整个新建失败，
+    /// 只在成功提示后面追加一句说明，让管理员去「排班管理」里补排。</summary>
+    private async Task<string> AssignInitialShiftAsync(User user)
+    {
+        if (!ShiftId.HasValue) return "";
+        try
+        {
+            var shift = await db.ShiftSchedules.FirstOrDefaultAsync(s => s.Id == ShiftId.Value && s.IsActive);
+            if (shift is null) return "；班次不存在或已停用，没有排班，请到「排班管理」里排";
+            if (user.AttendanceGroupId != shift.AttendanceGroupId)
+                return "；所选班次不属于该员工的考勤组（部门会自动归入它跟随的考勤组），没有排班，请到「排班管理」里排";
+            if (ShiftDays is < 1 or > 366) return "；排班天数要在 1～366 之间，没有排班，请到「排班管理」里排";
+            if (!DateOnly.TryParse(HireDate, out var hire))
+                return "；没有填入职日期，没有排班（排班要从入职日开始），请填入职日期后到「排班管理」里排";
+
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var start = hire > today ? hire : today;   // 入职日已经过去的，只排从今天起的班
+            for (var i = 0; i < ShiftDays; i++)
+                db.ShiftAssignments.Add(new ShiftAssignment
+                {
+                    UserId = user.Id, ShiftScheduleId = shift.Id, WorkDate = start.AddDays(i),
+                    IsAutoAssigned = false, CreatedAt = DateTime.Now
+                });
+            await db.SaveChangesAsync();
+            return $"；已排班「{shift.ShiftName}」{start:MM/dd} 起共 {ShiftDays} 天";
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "新建员工后排班失败，UserId={UserId}", user.Id);
+            db.ChangeTracker.Clear();
+            return "；排班没有成功，请到「排班管理」里给他排班";
+        }
+    }
+
     private async Task LoadDropdownsAsync()
     {
         var cu = HttpContext.GetRequiredUser();
@@ -921,6 +961,20 @@ public class UserManageModel(
         Groups = visibleIds is null
             ? allGroups
             : allGroups.Where(g => g.Departments.Count == 0 || g.Departments.Any(d => visibleIds.Contains(d.Id))).ToList();
+
+        // 可选班次 + 默认排班天数：默认天数 = 这个班次现有员工已经排到的最远日期离今天还有几天，
+        // 新员工排得和老员工一样长；这个班次还没人排过就默认 30 天
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var groupIds = Groups.Select(g => g.Id).ToList();
+        var farthest = (await db.ShiftAssignments.Where(a => a.WorkDate >= today)
+                .GroupBy(a => a.ShiftScheduleId).Select(g => new { ShiftId = g.Key, Last = g.Max(a => a.WorkDate) }).ToListAsync())
+            .ToDictionary(x => x.ShiftId, x => x.Last);
+        ShiftOptions = (await db.ShiftSchedules.Where(s => s.IsActive && groupIds.Contains(s.AttendanceGroupId))
+                .OrderBy(s => s.ShiftName).ToListAsync())
+            .Select(s => new ShiftOption(s.Id, s.AttendanceGroupId,
+                $"{s.ShiftName}（{s.WorkStartTime.ToString("HH:mm")}-{s.WorkEndTime.ToString("HH:mm")}）",
+                farthest.TryGetValue(s.Id, out var last) ? Math.Clamp(last.DayNumber - today.DayNumber + 1, 1, 366) : 30))
+            .ToList();
 
         var supervisorQuery = db.Users.Where(u => u.IsActive && u.Role != UserRole.Employee);
         if (visibleIds is not null)

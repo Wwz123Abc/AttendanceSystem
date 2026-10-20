@@ -200,6 +200,7 @@ function openAdd() {
     document.getElementById('fRole').value = 'Employee';
     document.getElementById('fDeptId').value  = SELECTED_DEPT !== null ? SELECTED_DEPT : '';  // 默认=左侧选中的部门
     document.getElementById('fGroupId').value = '';
+    setShiftRowVisible(true);
     setSuperId('');
     setDeviceIds([]);
     setScopedDeptId(null);
@@ -271,6 +272,7 @@ function openConfirm(data) {
     // 才退回到当前左侧筛选树选中的部门，跟原来的兜底逻辑一致
     document.getElementById('fDeptId').value     = data.deptId != null ? data.deptId : (SELECTED_DEPT !== null ? SELECTED_DEPT : '');
     document.getElementById('fGroupId').value    = '';
+    setShiftRowVisible(true);
     setSuperId('');
     setDeviceIds([]);
     setScopedDeptId(null);
@@ -285,6 +287,39 @@ function openConfirm(data) {
     suggestSupervisorForDept(document.getElementById('fDeptId').value);
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
+
+// ── 新建/确认录入时"直接排班"：班次下拉只显示所选考勤组的班次；选了班次就带出默认排班天数 ──
+function refreshShiftOptions() {
+    const sel = document.getElementById('fShiftId');
+    if (!sel) return;
+    const groupId = document.getElementById('fGroupId').value;
+    let currentStillValid = false;
+    Array.from(sel.options).forEach(o => {
+        if (!o.value) return;
+        const ok = groupId !== '' && o.dataset.group === groupId;
+        o.hidden = !ok; o.disabled = !ok;
+        if (ok && o.value === sel.value) currentStillValid = true;
+    });
+    if (!currentStillValid) { sel.value = ''; document.getElementById('fShiftDays').value = ''; }
+}
+function onShiftChange() {
+    const sel = document.getElementById('fShiftId');
+    const opt = sel.options[sel.selectedIndex];
+    document.getElementById('fShiftDays').value = opt && opt.value ? (opt.dataset.days || 30) : '';
+}
+function setShiftRowVisible(visible) {
+    const row = document.getElementById('shiftRow');
+    if (!row) return;
+    row.style.display = visible ? '' : 'none';
+    document.getElementById('fShiftId').value = '';
+    document.getElementById('fShiftDays').value = '';
+    refreshShiftOptions();
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const g = document.getElementById('fGroupId'), s = document.getElementById('fShiftId');
+    if (g) g.addEventListener('change', refreshShiftOptions);
+    if (s) s.addEventListener('change', onShiftChange);
+});
 
 // 重置密码：弹窗填写（留空=随机生成，和以前的行为一致）
 function openResetPwd(id, name) {
@@ -309,6 +344,7 @@ function openEdit(data) {
     document.getElementById('fRole').value       = data.role;
     document.getElementById('fDeptId').value     = data.deptId || '';
     document.getElementById('fGroupId').value    = data.groupId || '';
+    setShiftRowVisible(false);   // 编辑老员工不在这里排班，排班去「排班管理」
     setSuperId(data.superId || '');
     setDeviceIds(data.deviceIds);
     setScopedDeptId(data.scopedDeptId);
