@@ -140,9 +140,30 @@ public partial class AttendanceService
     }
 
     /// <summary>加班审批通过后回写：按审批单时长累加当天加班工时（加班时长只认审批单）。</summary>
+    /// <summary>
+    /// 加班单该记到哪个考勤日。默认是加班开始时间所在的日历日；但夜班过了零点之后接着干的加班（比如晚班 20:30–次日 05:30，
+    /// 次日 06:30–09:00 的加班）是前一个考勤日那个夜班的延续，要记到前一天，不能记到"开始时间那个日历日"——
+    /// 以前一律记到日历日，夜班凌晨的加班全被记到后一天，后一天出现没有打卡的空记录、前一天缺加班
+    /// （2026-10-20 反馈赵子祥 10/19 夜班的加班被记到 10/20，查出 9/27 起共 482 张单受影响）。
+    /// 判断：开始时间在上午；前一天排的是跨天班次，且开始时间还在它应下班时间后的续接窗口内
+    /// （<see cref="NightShiftCarryOverHours"/> 小时，跟夜班下班卡归属用同一个口径）；今天自己的班次如果已经开始了
+    /// （开始时间不早于今天班次的上班时间）则算今天的。
+    /// </summary>
+    public async Task<DateOnly> ResolveOvertimeWorkDateAsync(int userId, DateTime otStart)
+    {
+        var calendarDay = DateOnly.FromDateTime(otStart);
+        if (otStart.Hour >= 12) return calendarDay;
+        var yesterday = calendarDay.AddDays(-1);
+        var yShift = (await GetShiftAssignmentAsync(userId, yesterday))?.ShiftSchedule;
+        if (yShift is not { IsCrossDay: true } || !IsWithinNightCarryOver(yesterday, yShift, otStart)) return calendarDay;
+        var todayShift = (await GetShiftAssignmentAsync(userId, calendarDay))?.ShiftSchedule;
+        if (todayShift is { IsCrossDay: false } && TimeOnly.FromDateTime(otStart) >= todayShift.WorkStartTime) return calendarDay;
+        return yesterday;
+    }
+
     private async Task ApplyApprovedOvertimeAsync(ApprovalRequest approval, DateTime otStart, decimal otDuration, HashSet<(int Year, int Month)> touchedMonths)
     {
-        var workDate = DateOnly.FromDateTime(otStart);
+        var workDate = await ResolveOvertimeWorkDateAsync(approval.ApplicantUserId, otStart);
         var record = await db.AttendanceRecords
             .FirstOrDefaultAsync(r => r.UserId == approval.ApplicantUserId && r.WorkDate == workDate);
         if (record is null)
