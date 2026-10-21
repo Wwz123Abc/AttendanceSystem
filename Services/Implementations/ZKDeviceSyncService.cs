@@ -127,12 +127,21 @@ public class ZKDeviceSyncService(
             if (!userByPin.TryGetValue(r.Pin, out var uid)) continue;
 
             var hourlyRow = AttendanceService.IsHourlyOn(hourlyStarts, groupOfUser.GetValueOrDefault(uid), DateOnly.FromDateTime(r.Time));
-            if (hourlyRow && !AttendanceService.IsHourlyPunchTimeValid(r.Time))
+            DateOnly workDate;
+            if (hourlyRow)
             {
-                logger.LogInformation("考勤机 {SN} 上计时工 {Pin} 在 {Time} 的打卡在 00:00–07:00 之间，无效，已忽略", sn, r.Pin, r.Time);
-                continue;
+                // 计时工：白班 07:00 起有效；夜班（跨天班次）上班日 19:00 到次日 10:00 有效，次日早上的下班卡归上班那天
+                var rowDay = DateOnly.FromDateTime(r.Time);
+                shiftByUserDate.TryGetValue((uid, rowDay), out var hTodayShift);
+                shiftByUserDate.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevShift);
+                if (AttendanceService.ResolveHourlyWorkDate(r.Time, hTodayShift, hPrevShift) is not { } hourlyDate)
+                {
+                    logger.LogInformation("考勤机 {SN} 上计时工 {Pin} 在 {Time} 的打卡不在有效打卡时间内，无效，已忽略", sn, r.Pin, r.Time);
+                    continue;
+                }
+                workDate = hourlyDate;
             }
-            var workDate = hourlyRow ? DateOnly.FromDateTime(r.Time) : ResolveWorkDate(uid, r.Time, recordMap, shiftByUserDate);
+            else workDate = ResolveWorkDate(uid, r.Time, recordMap, shiftByUserDate);
 
             // 跨天班次的第一次打卡离应上班时间太早（比如 20:30 上班的晚班，中午/早上打的）：不当上班卡，也不为它建记录——
             // 不然真正晚上来上班的那次会被当成午间卡，整天上班卡丢失。考勤机没法给员工弹提示，只记日志；

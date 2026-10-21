@@ -16,6 +16,30 @@ public partial class AttendanceService
 
     public const string HourlyInvalidTimeMessage = "计时工 00:00 到 07:00 之间的打卡无效，请 07:00 以后再打卡";
 
+    /// <summary>计时工夜班（排的是跨天班次）：上班日这个钟点（含）之后才有效。</summary>
+    public const int HourlyNightEarliestHour = 19;
+    /// <summary>计时工夜班：次日这个钟点（不含）之前才有效，下班卡最晚算到这里，再晚的时间不计入工时。</summary>
+    public const int HourlyNightLatestHour = 10;
+
+    public const string HourlyNightInvalidTimeMessage = "夜班计时工的有效打卡时间是上班日 19:00 到次日 10:00，现在不在这个时间范围内";
+
+    /// <summary>
+    /// 计时工的一次打卡归属哪个考勤日；返回 null 表示这次打卡无效（2026-10-21 起支持夜班）。
+    /// 昨天排的是跨天班次（夜班）→ 次日 10:00 之前的打卡算昨天的延续；今天排的是跨天班次 → 19:00 起才有效；
+    /// 其余（白班/没排班）按原规则：当天 07:00 起有效，00:00–07:00 无效。
+    /// </summary>
+    public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift)
+    {
+        var d = DateOnly.FromDateTime(punchTime);
+        if (prevShift is { IsCrossDay: true } && punchTime.Hour < HourlyNightLatestHour) return d.AddDays(-1);
+        if (todayShift is { IsCrossDay: true }) return punchTime.Hour >= HourlyNightEarliestHour ? d : null;
+        return IsHourlyPunchTimeValid(punchTime) ? d : null;
+    }
+
+    /// <summary>打卡无效时给员工看的提示：夜班员工和白班员工的有效时间不一样。</summary>
+    public static string HourlyInvalidMessageFor(ShiftSchedule? todayShift, ShiftSchedule? prevShift) =>
+        todayShift is { IsCrossDay: true } || prevShift is { IsCrossDay: true } ? HourlyNightInvalidTimeMessage : HourlyInvalidTimeMessage;
+
     /// <summary>所有开启了计时工模式的考勤组：考勤组 Id → 起始日。</summary>
     public async Task<Dictionary<int, DateOnly>> LoadHourlyGroupStartsAsync() =>
         await db.AttendanceGroups.Where(g => g.HourlyWorkStartDate != null)
@@ -65,6 +89,21 @@ public partial class AttendanceService
                 if (missedEnd > effIn) effIn = missedEnd;
             if (ResolveSecondHalfAbsentBoundary(workDate, shift, midResults) is { } boundary && boundary < effOut)
                 effOut = boundary;
+        }
+        // 夜班（跨天班次）：下班卡最晚算到次日 10:00；只扣次日 00:00–01:00 这一个小时的饭（2026-10-21 用户确认），
+        // 不再按白班的 12:00–13:00、17:30–18:00 和系统默认的 05:30–06:00 扣；不封顶。
+        // 班次配了午间窗口（比如 00:00–01:00）的话，漏打也按计时工统一规则：只算窗口开始之前的工时（上面已经处理）
+        if (shift is { IsCrossDay: true })
+        {
+            var nightLatest = workDate.AddDays(1).ToDateTime(new TimeOnly(HourlyNightLatestHour, 0));
+            if (effOut > nightLatest) effOut = nightLatest;
+            if (effOut <= effIn) return 0;
+            var mealStart = workDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+            var mealEnd   = mealStart.AddHours(1);
+            var overlapStart = effIn > mealStart ? effIn : mealStart;
+            var overlapEnd   = effOut < mealEnd ? effOut : mealEnd;
+            var mealMinutes = overlapEnd > overlapStart ? (decimal)(overlapEnd - overlapStart).TotalMinutes : 0m;
+            return FloorToHalf(Math.Max(0m, ((decimal)(effOut - effIn).TotalMinutes - mealMinutes) / 60m));
         }
         var dayEnd = workDate.ToDateTime(new TimeOnly(23, 59, 59));
         if (effOut > dayEnd) effOut = dayEnd;

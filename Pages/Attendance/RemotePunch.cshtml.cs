@@ -273,9 +273,13 @@ public class RemotePunchModel(
             : null;
         if (hourlyFrom is { } hourlyStart && today >= hourlyStart)
         {
-            var hourlyShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
-            var todayHasIn = todayBeforePunch is { } tb && tb.WorkDate == today && tb.ClockInTime is not null;
-            return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, today, hourlyShift, todayHasIn), todayBeforePunch);
+            // 夜班计时工：次日早上的卡归上班那天，这天的班次、有没有上班卡都要按"考勤日"去查，不是日历上的今天
+            var hTodayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
+            var hPrevShift  = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today.AddDays(-1)))?.ShiftSchedule;
+            var hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift) ?? today;
+            var hourlyShift = hourlyWorkDate == today ? hTodayShift : hPrevShift;
+            var hourlyRec = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == CurrentUserId && r.WorkDate == hourlyWorkDate);
+            return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, hourlyWorkDate, hourlyShift, hourlyRec?.ClockInTime is not null), todayBeforePunch);
         }
         var workDate = todayBeforePunch?.WorkDate ?? today;
         var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;

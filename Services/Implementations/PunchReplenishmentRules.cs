@@ -96,7 +96,15 @@ public static class PunchReplenishmentRules
     public static string? FindProblem(PunchType type, DateOnly date, DateTime punchAt, ReplenishmentContext ctx, bool allowOverwrite = false)
     {
         // 计时工：没有夜班/跨天，补的时间必须在当天 07:00 到 23:59 之间（不能补到第二天凌晨）
-        if (ctx.Hourly && (DateOnly.FromDateTime(punchAt) != date || !AttendanceService.IsHourlyPunchTimeValid(punchAt)))
+        if (ctx.Hourly && ctx.Shift is { IsCrossDay: true })
+        {
+            // 夜班计时工：补的时间必须在上班日 19:00 到次日 10:00 之间
+            var nightFrom = date.ToDateTime(new TimeOnly(AttendanceService.HourlyNightEarliestHour, 0));
+            var nightTo   = date.AddDays(1).ToDateTime(new TimeOnly(AttendanceService.HourlyNightLatestHour, 0));
+            if (punchAt < nightFrom || punchAt >= nightTo)
+                return $"夜班计时工补卡的时间必须在上班日 {AttendanceService.HourlyNightEarliestHour:00}:00 到次日 {AttendanceService.HourlyNightLatestHour:00}:00 之间，请重新选择时间";
+        }
+        else if (ctx.Hourly && (DateOnly.FromDateTime(punchAt) != date || !AttendanceService.IsHourlyPunchTimeValid(punchAt)))
             return $"计时工补卡的时间必须在当天 {AttendanceService.HourlyEarliestPunchHour:00}:00 到 23:59 之间，请重新选择时间（不能选第二天）";
         switch (type)
         {

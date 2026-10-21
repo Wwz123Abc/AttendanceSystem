@@ -64,8 +64,16 @@ public partial class AttendanceService
         // 计时工模式（成都鹰诺深圳分公司临时工，2026-10-20 起）：没有夜班/跨天，打卡都归打卡当天；
         // 00:00–07:00 的打卡无效，防止刷到凌晨被当成第二天的上班卡
         var hourly = await IsHourlyOnAsync(user.AttendanceGroupId, today);
-        if (hourly && !IsHourlyPunchTimeValid(now))
-            return new PunchResponseDto { Success = false, Message = HourlyInvalidTimeMessage };
+        DateOnly hourlyWorkDate = today;
+        if (hourly)
+        {
+            // 夜班计时工（排的是跨天班次）：上班日 19:00 到次日 10:00 的打卡有效，次日早上的下班卡归上班那天
+            var hTodayShift = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
+            var hPrevShift  = (await GetShiftAssignmentAsync(userId, today.AddDays(-1)))?.ShiftSchedule;
+            if (ResolveHourlyWorkDate(now, hTodayShift, hPrevShift) is not { } resolvedHourlyDate)
+                return new PunchResponseDto { Success = false, Message = HourlyInvalidMessageFor(hTodayShift, hPrevShift) };
+            hourlyWorkDate = resolvedHourlyDate;
+        }
 
         // 打卡时间精确到分钟（把秒抹掉）。提前到这里算，是因为下面的去重判断需要用它。
         var punchTime = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0);
@@ -92,7 +100,7 @@ public partial class AttendanceService
         }
 
         var (workDate, openYesterdayRecord) = hourly
-            ? (today, (AttendanceRecord?)null)   // 计时工：没有夜班续接，永远是当天
+            ? (hourlyWorkDate, (AttendanceRecord?)null)   // 计时工：按上面算好的考勤日（夜班次日早上的卡归上班那天）
             : await ResolvePunchWorkDateAsync(userId, request.PunchType, today, now);
 
         // 上班卡的合理性校验（夜班下班后重复刷、跨天班次打得太早）：远程打卡页面已经在调付费的人脸识别之前判过一次，
@@ -497,7 +505,11 @@ public partial class AttendanceService
         // 计时工：没有夜班/重复刷/打得太早这些规则，只有"00:00–07:00 无效"这一条
         var rejGroupId = await db.Users.Where(u => u.Id == userId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
         if (await IsHourlyOnAsync(rejGroupId, today))
-            return IsHourlyPunchTimeValid(now) ? null : HourlyInvalidTimeMessage;
+        {
+            var rTodayShift = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
+            var rPrevShift  = (await GetShiftAssignmentAsync(userId, today.AddDays(-1)))?.ShiftSchedule;
+            return ResolveHourlyWorkDate(now, rTodayShift, rPrevShift) is null ? HourlyInvalidMessageFor(rTodayShift, rPrevShift) : null;
+        }
         // 今天已经有上班卡了，不是"新的上班卡"，不归这里管
         if (await db.AttendanceRecords.AnyAsync(r => r.UserId == userId && r.WorkDate == today && r.ClockInTime != null))
             return null;
