@@ -305,12 +305,13 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 再加上"昨天的跨天班次（夜班）延续到今天凌晨的那一段"——夜班员工在凌晨填的加班，
         // 如果压在昨晚夜班的正班时间里，一样是重复计算
         var otGroupForShift = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
-        var otShiftToday = await EffectiveShift.ForAsync(db, applicantUserId, otDate, otGroupForShift);
+        var (otShiftToday, otTodayIsFallback) = await EffectiveShift.ResolveAsync(db, applicantUserId, otDate, otGroupForShift);   // 没排班：他最近排的班 → 考勤组常用日班
         var otShiftPrev  = await EffectiveShift.AssignedAsync(db, applicantUserId, otPrev);
         foreach (var (shiftDate, s0) in new[] { (otDate, otShiftToday), (otPrev, otShiftPrev) })
         {
             if (s0 is null || (shiftDate == otPrev && !s0.IsCrossDay)) continue;   // 昨天的班只有跨天班次才会延续到今天
-            if (AttendanceService.IsShiftWeeklyRestDay(shiftDate, s0)) continue;
+            // 休息日：排了班的按班次自己配置的休息日；兜底班次（那天没排班）和正班那边一致，只按周六周日
+            if (AttendanceService.IsShiftWeeklyRestDay(shiftDate, shiftDate == otDate && otTodayIsFallback ? null : s0)) continue;
             var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(shiftDate, s0);   // 班次的上下班时间（跨天班次下班顺延到第二天）
             if (dto.OvertimeStartTime.Value < shiftEnd && dto.OvertimeEndTime.Value > shiftStart)
                 throw new BusinessException(

@@ -20,13 +20,16 @@ public partial class AttendanceService
     /// <paramref name="shifts"/> 是这次加班可能碰到的班次：加班开始那天的班次，以及前一天的跨天班次（夜班下班后接着干）。
     /// </summary>
     public static decimal ComputeOvertimeHoursOutsideShift(
-        DateTime start, DateTime end, IReadOnlyList<(DateOnly Day, ShiftSchedule Shift)> shifts, int? groupId = null)
+        DateTime start, DateTime end, IReadOnlyList<(DateOnly Day, ShiftSchedule Shift)> shifts, int? groupId = null,
+        IReadOnlyCollection<DateOnly>? fallbackDays = null)
     {
         if (end <= start) return 0;
         var segments = new List<(DateTime S, DateTime E)> { (start, end) };
         foreach (var (day, shift) in shifts)
         {
-            if (IsShiftWeeklyRestDay(day, shift)) continue;
+            // 兜底班次（那天没排班）：是不是休息日和正班那边一致，只按周六周日；排了班的按班次自己配置的休息日
+            var isRest = fallbackDays?.Contains(day) == true ? IsShiftWeeklyRestDay(day, null) : IsShiftWeeklyRestDay(day, shift);
+            if (isRest) continue;
             var (winStart, winEnd) = ResolveLeaveWindow(day, shift);
             var next = new List<(DateTime S, DateTime E)>();
             foreach (var (s, e) in segments)
@@ -43,14 +46,17 @@ public partial class AttendanceService
         return FloorToHalf(Math.Max(0, minutes / 60));
     }
 
-    /// <summary>加班单对应的"可能碰到的班次"：开始那天的班次（没排就兜底）+ 前一天排的跨天班次。</summary>
-    internal async Task<List<(DateOnly Day, ShiftSchedule Shift)>> LoadOvertimeShiftsAsync(int userId, DateOnly otDate, int? groupId)
+    /// <summary>加班单对应的"可能碰到的班次"：开始那天的班次（没排就兜底：他最近排的班 → 考勤组常用日班）+ 前一天排的跨天班次。fallbackDays = 其中属于兜底的日期。</summary>
+    internal async Task<(List<(DateOnly Day, ShiftSchedule Shift)> Shifts, HashSet<DateOnly> FallbackDays)> LoadOvertimeShiftsAsync(
+        int userId, DateOnly otDate, int? groupId, Dictionary<int, ShiftSchedule?>? groupDefaultCache = null)
     {
         var list = new List<(DateOnly, ShiftSchedule)>();
-        if (await EffectiveShift.ForAsync(db, userId, otDate, groupId) is { } today) list.Add((otDate, today));
+        var fallback = new HashSet<DateOnly>();
+        var (todayShift, isFallback) = await EffectiveShift.ResolveAsync(db, userId, otDate, groupId, default, groupDefaultCache);
+        if (todayShift is not null) { list.Add((otDate, todayShift)); if (isFallback) fallback.Add(otDate); }
         var prevDay = otDate.AddDays(-1);
         if (await EffectiveShift.AssignedAsync(db, userId, prevDay) is { IsCrossDay: true } prev) list.Add((prevDay, prev));
-        return list;
+        return (list, fallback);
     }
 
     /// <summary>对账结果行：一个人一天一行，旧加班时长 → 按班次对过之后的加班时长。</summary>
@@ -80,6 +86,31 @@ public partial class AttendanceService
         var users = await db.Users.Where(u => uids.Contains(u.Id))
             .Select(u => new { u.Id, u.EmployeeNo, u.RealName, u.AttendanceGroupId }).ToDictionaryAsync(u => u.Id, ct);
 
+        // 批量对账要对几千张单，班次一次性预加载（人 × 日期 → 班次），不能逐张单查库
+        var shiftByUserDay = (await db.ShiftAssignments
+                .Where(a => uids.Contains(a.UserId) && a.WorkDate >= from.AddDays(-3) && a.WorkDate <= to.AddDays(3))
+                .Select(a => new { a.UserId, a.WorkDate, a.ShiftSchedule }).ToListAsync(ct))
+            .ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+        var groupDefaultCache = new Dictionary<int, ShiftSchedule?>();
+        foreach (var gid in users.Values.Select(u => u.AttendanceGroupId).Where(g => g.HasValue).Select(g => g!.Value).Distinct())
+            await EffectiveShift.GroupDefaultAsync(db, gid, ct, groupDefaultCache);
+        // 兜底用"这个人最近一次实际排的班"：先在预加载的窗口里找离这天最近的；窗口里一次都没排过的人再单独查一次（每人只查一次）
+        var shiftsByUser = shiftByUserDay.GroupBy(k => k.Key.Item1).ToDictionary(g => g.Key, g => g.Select(x => (Day: x.Key.Item2, Shift: x.Value)).OrderBy(x => x.Day).ToList());
+        var nearestOutside = new Dictionary<int, ShiftSchedule?>();
+        async Task<ShiftSchedule?> NearestAsync(int uid, DateOnly day)
+        {
+            if (shiftsByUser.TryGetValue(uid, out var own) && own.Count > 0)
+            {
+                var before = own.LastOrDefault(x => x.Day < day);
+                if (before.Shift is not null) return before.Shift;
+                var after = own.FirstOrDefault(x => x.Day > day);
+                if (after.Shift is not null) return after.Shift;
+            }
+            if (!nearestOutside.TryGetValue(uid, out var outside))
+                nearestOutside[uid] = outside = await EffectiveShift.NearestAssignedAsync(db, uid, day, ct);
+            return outside;
+        }
+
         // (人, 考勤日) → 各张单按班次对过之后的时长合计；同时记下每张单对过之后的时长，用来把单子上存的时长一并改成实际记入的数
         var sumByDay = new Dictionary<(int, DateOnly), decimal>();
         var shiftNameByDay = new Dictionary<(int, DateOnly), string>();
@@ -88,21 +119,39 @@ public partial class AttendanceService
         {
             var u = users[f.ApplicantUserId];
             var otStart = f.OvertimeStartTime!.Value;
-            var workDate = await ResolveOvertimeWorkDateAsync(f.ApplicantUserId, otStart);
+            var otDate = DateOnly.FromDateTime(otStart);
+            shiftByUserDay.TryGetValue((f.ApplicantUserId, otDate.AddDays(-1)), out var yShift);
+            shiftByUserDay.TryGetValue((f.ApplicantUserId, otDate), out var assignedToday);
+            var workDate = ResolveOvertimeWorkDate(otStart, yShift, assignedToday);
             if (workDate < from || workDate > to) continue;
-            var shifts = await LoadOvertimeShiftsAsync(f.ApplicantUserId, DateOnly.FromDateTime(otStart), u.AttendanceGroupId);
-            var hours = ComputeOvertimeHoursOutsideShift(otStart, f.OvertimeEndTime!.Value, shifts, u.AttendanceGroupId);
+
+            var shifts = new List<(DateOnly, ShiftSchedule)>();
+            var fallbackDays = new HashSet<DateOnly>();
+            var todayShift = assignedToday;
+            if (todayShift is null)   // 没排班：他最近一次实际排的班 → 考勤组常用日班
+            {
+                todayShift = await NearestAsync(f.ApplicantUserId, otDate)
+                             ?? (u.AttendanceGroupId is { } g ? groupDefaultCache.GetValueOrDefault(g) : null);
+                if (todayShift is not null) fallbackDays.Add(otDate);
+            }
+            if (todayShift is not null) shifts.Add((otDate, todayShift));
+            if (yShift is { IsCrossDay: true }) shifts.Add((otDate.AddDays(-1), yShift));
+
+            var hours = ComputeOvertimeHoursOutsideShift(otStart, f.OvertimeEndTime!.Value, shifts, u.AttendanceGroupId, fallbackDays);
             formHours[f.Id] = hours;
             sumByDay[(f.ApplicantUserId, workDate)] = sumByDay.GetValueOrDefault((f.ApplicantUserId, workDate)) + hours;
-            if (shifts.Count > 0) shiftNameByDay[(f.ApplicantUserId, workDate)] = shifts[0].Shift.ShiftName;
+            if (shifts.Count > 0) shiftNameByDay[(f.ApplicantUserId, workDate)] = shifts[0].Item2.ShiftName + (assignedToday is null ? "（兜底）" : "");
         }
+
+        var recordByUserDay = (await db.AttendanceRecords
+                .Where(r => uids.Contains(r.UserId) && r.WorkDate >= from && r.WorkDate <= to).ToListAsync(ct))
+            .ToDictionary(r => (r.UserId, r.WorkDate));
 
         var result = new List<OvertimeReconcileRow>();
         var touchedMonths = new HashSet<(int UserId, int Year, int Month)>();
         foreach (var ((uid, wd), newSum) in sumByDay.OrderBy(k => k.Key.Item1).ThenBy(k => k.Key.Item2))
         {
-            var rec = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == uid && r.WorkDate == wd, ct);
-            if (rec is null || rec.OvertimeHours <= newSum) continue;   // 只减不增
+            if (!recordByUserDay.TryGetValue((uid, wd), out var rec) || rec.OvertimeHours <= newSum) continue;   // 只减不增
             var u = users[uid];
             result.Add(new OvertimeReconcileRow(uid, u.EmployeeNo, u.RealName, wd, shiftNameByDay.GetValueOrDefault((uid, wd), ""),
                 rec.OvertimeHours, newSum, string.Join("、", forms.Where(f => f.ApplicantUserId == uid && formHours.ContainsKey(f.Id)

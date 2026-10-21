@@ -130,4 +130,24 @@ public class OvertimeShiftReconcileTests : SqliteTestBase
         Assert.Empty(await svc.ReconcileOvertimeAsync([uid], Tue, Tue, dryRun: false));
         Assert.Empty(await svc.ReconcileOvertimeAsync([uid], Tue, Tue, dryRun: false));
     }
+
+    [Fact]
+    public void 兜底班次的休息日只按周六周日_排了班的按班次自己的休息日()
+    {
+        var day = DayShift(); day.RestDaysOfWeek = "2";   // 这个班次配成周二休息
+        // 周二整天加班 08:30–20:30：实际排的班 → 周二是休息日，整段 10.5；兜底班次 → 和正班一致只看周六周日，周二是工作日，只记 17:30 后的 2.5
+        Assert.Equal(10.5m, AttendanceService.ComputeOvertimeHoursOutsideShift(At(Tue, 8, 30), At(Tue, 20, 30), [(Tue, day)]));
+        Assert.Equal(2.5m, AttendanceService.ComputeOvertimeHoursOutsideShift(At(Tue, 8, 30), At(Tue, 20, 30), [(Tue, day)], null, new HashSet<DateOnly> { Tue }));
+    }
+
+    [Fact]
+    public async Task 夜班员工没排班那天_兜底用他最近排的夜班_不是日班()
+    {
+        var (uid, _) = SeedNightWorld();   // 周一到周三排夜班
+        var thu = Tue.AddDays(2);
+        using var db = CreateContext();
+        var (shift, isFallback) = await EffectiveShift.ResolveAsync(db, uid, thu, db.Users.Single(u => u.Id == uid).AttendanceGroupId);
+        Assert.True(isFallback);
+        Assert.True(shift!.IsCrossDay);
+    }
 }

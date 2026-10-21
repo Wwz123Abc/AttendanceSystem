@@ -14,9 +14,18 @@ namespace AttendanceSystem.Services.Implementations;
 public static class EffectiveShift
 {
     /// <summary>考勤组最常用的日班：组内启用的非跨天班次里，被排班次数最多的那个（只有一个就是它）。</summary>
-    public static async Task<ShiftSchedule?> GroupDefaultAsync(AttendanceDbContext db, int? groupId, CancellationToken ct = default)
+    public static async Task<ShiftSchedule?> GroupDefaultAsync(AttendanceDbContext db, int? groupId, CancellationToken ct = default,
+        Dictionary<int, ShiftSchedule?>? cache = null)
     {
         if (groupId is not { } gid) return null;
+        if (cache is not null && cache.TryGetValue(gid, out var cached)) return cached;   // 批量对账时同一个组只查一次
+        var found = await GroupDefaultCoreAsync(db, gid, ct);
+        if (cache is not null) cache[gid] = found;
+        return found;
+    }
+
+    private static async Task<ShiftSchedule?> GroupDefaultCoreAsync(AttendanceDbContext db, int gid, CancellationToken ct)
+    {
         var shifts = await db.ShiftSchedules.Where(s => s.AttendanceGroupId == gid && s.IsActive && !s.IsCrossDay).ToListAsync(ct);
         if (shifts.Count <= 1) return shifts.FirstOrDefault();
         var ids = shifts.Select(s => s.Id).ToList();
@@ -31,7 +40,30 @@ public static class EffectiveShift
         await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate == date)
             .Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
 
-    /// <summary>排的班次，没排班就用考勤组最常用的日班兜底。</summary>
-    public static async Task<ShiftSchedule?> ForAsync(AttendanceDbContext db, int userId, DateOnly date, int? groupId, CancellationToken ct = default) =>
-        await AssignedAsync(db, userId, date, ct) ?? await GroupDefaultAsync(db, groupId, ct);
+    /// <summary>这个人离这一天最近的一次实际排班：先找这天之前最近的，没有再找这天之后最早的。夜班员工排班没跟上时，按他自己的夜班判断，不是按日班。</summary>
+    public static async Task<ShiftSchedule?> NearestAssignedAsync(AttendanceDbContext db, int userId, DateOnly date, CancellationToken ct = default)
+    {
+        var before = await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate < date)
+            .OrderByDescending(a => a.WorkDate).Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
+        if (before is not null) return before;
+        return await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate > date)
+            .OrderBy(a => a.WorkDate).Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
+    }
+
+    /// <summary>
+    /// 这个人这一天按哪个班次算：① 当天排的班；② 没排班 → 他最近一次实际排的班（夜班员工就按夜班）；③ 都没有 → 考勤组最常用的日班。
+    /// IsFallback=true 表示不是当天实际排的班，"这天是不是休息日"要和正班那边一样只按周六周日判断（没排班的日子正班就是这样算的）。
+    /// </summary>
+    public static async Task<(ShiftSchedule? Shift, bool IsFallback)> ResolveAsync(AttendanceDbContext db, int userId, DateOnly date, int? groupId,
+        CancellationToken ct = default, Dictionary<int, ShiftSchedule?>? cache = null)
+    {
+        if (await AssignedAsync(db, userId, date, ct) is { } assigned) return (assigned, false);
+        if (await NearestAssignedAsync(db, userId, date, ct) is { } nearest) return (nearest, true);
+        var def = await GroupDefaultAsync(db, groupId, ct, cache);
+        return (def, def is not null);
+    }
+
+    /// <summary>排的班次，没排班就按 <see cref="ResolveAsync"/> 的顺序兜底。</summary>
+    public static async Task<ShiftSchedule?> ForAsync(AttendanceDbContext db, int userId, DateOnly date, int? groupId, CancellationToken ct = default,
+        Dictionary<int, ShiftSchedule?>? cache = null) => (await ResolveAsync(db, userId, date, groupId, ct, cache)).Shift;
 }
