@@ -84,7 +84,7 @@ public class RemotePunchModel(
     public async Task<JsonResult> OnGetPreviewAsync()
     {
         var (type, todayBeforePunch) = await ResolvePunchTypeAsync();
-        var workDate = todayBeforePunch?.WorkDate ?? DateOnly.FromDateTime(DateTime.Today);
+        var workDate = hourlyWorkDate ?? todayBeforePunch?.WorkDate ?? DateOnly.FromDateTime(DateTime.Today);   // 夜班计时工：次日早上的卡归上班那天
         var shift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;
         var now = DateTime.Now;
         string? hint = null;
@@ -250,6 +250,9 @@ public class RemotePunchModel(
     /// <summary>
     /// 不用员工手选上班/下班，系统按今天的打卡情况自动判断；返回判断出的类型和"打卡前"的今日记录。详细口径见方法体里的注释。
     /// </summary>
+    /// <summary>计时工这次打卡归属的考勤日（<see cref="ResolvePunchTypeAsync"/> 算出来，预览用）；非计时工为 null。</summary>
+    private DateOnly? hourlyWorkDate;
+
     private async Task<(PunchType Type, AttendanceRecordDto? TodayBeforePunch)> ResolvePunchTypeAsync()
     {
         // 不用员工手选上班/下班，系统按"今天打过上班卡没有"自动判断：还没打过 → 算上班；
@@ -276,10 +279,10 @@ public class RemotePunchModel(
             // 夜班计时工：次日早上的卡归上班那天，这天的班次、有没有上班卡都要按"考勤日"去查，不是日历上的今天
             var hTodayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
             var hPrevShift  = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today.AddDays(-1)))?.ShiftSchedule;
-            var hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift) ?? today;
+            hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift) ?? today;
             var hourlyShift = hourlyWorkDate == today ? hTodayShift : hPrevShift;
             var hourlyRec = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == CurrentUserId && r.WorkDate == hourlyWorkDate);
-            return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, hourlyWorkDate, hourlyShift, hourlyRec?.ClockInTime is not null), todayBeforePunch);
+            return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, hourlyWorkDate.Value, hourlyShift, hourlyRec?.ClockInTime is not null), todayBeforePunch);
         }
         var workDate = todayBeforePunch?.WorkDate ?? today;
         var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;

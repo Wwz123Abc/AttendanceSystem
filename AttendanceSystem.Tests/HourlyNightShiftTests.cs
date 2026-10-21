@@ -176,4 +176,19 @@ public class HourlyNightShiftTests : SqliteTestBase
         var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
         Assert.Equal(9m, rec.ActualWorkHours);
     }
+
+    [Fact]
+    public async Task 手机远程打卡_夜班配了午间窗口_午间卡命中_完整一晚()
+    {
+        var uid = SeedNightHourly("00:00-01:00");
+        Assert.True((await PunchAtAsync(uid, Tue_(19, 50), PunchType.ClockIn)).Success);
+        Assert.True((await PunchAtAsync(uid, Wed_(0, 20), PunchType.MidCheck)).Success);   // 凌晨 00:20 的午间卡归周二这一班
+        Assert.True((await PunchAtAsync(uid, Wed_(6, 40), PunchType.ClockOut)).Success);
+        using var db = CreateContext();
+        var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal("00:00-01:00=00:20", rec.MidCheckResults);
+        Assert.Equal(Wed_(6, 40), rec.ClockOutTime);
+        Assert.Equal(9m, rec.ActualWorkHours);   // 19:50–06:40 = 10 小时 50 分，扣 1.5 小时 = 9.33 → 9.0
+        Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue.AddDays(1)));
+    }
 }
