@@ -183,6 +183,12 @@ public class EmployeeRecordModel(AttendanceDbContext db, IDeptScopeService deptS
         var punchedNoShift = Shifts.Where(s => s.Date >= Start && s.Date <= End && s.Missing && s.HasPunch).Select(s => s.Date).ToList();
         if (punchedNoShift.Count > 0)
             Flags.Add(new Flag("danger", $"有 {punchedNoShift.Count} 天有打卡但当天没排班（{string.Join("、", punchedNoShift.Take(8).Select(d => d.ToString("MM-dd")))}{(punchedNoShift.Count > 8 ? " …" : "")}）：这些天的工时/加班没有按班次校验，补排班后系统会自动对账加班。"));
+        // 排班类型和实际打卡时间对不上：夜班排班但上班卡在白天，或白班排班但上班卡在深夜——多半是排错了班次
+        // （批量排班会覆盖已有排班），夜班计时工的白天打卡会被当成无效，工时也会按夜班规则算
+        var mismatch = records.Where(r => r.ClockInTime is { } ci && assigns.TryGetValue(r.WorkDate, out var sh)
+                && ((sh.IsCrossDay && ci.Hour is >= 7 and < 17) || (!sh.IsCrossDay && ci.Hour >= 22))).Select(r => r.WorkDate).ToList();
+        if (mismatch.Count > 0)
+            Flags.Add(new Flag("danger", $"有 {mismatch.Count} 天的打卡时间和排班类型对不上（{string.Join("、", mismatch.Take(8).Select(d => d.ToString("MM-dd")))}{(mismatch.Count > 8 ? " …" : "")}）：夜班排班却在白天上班打卡（或白班排班却深夜打卡），多半是排错了班次，工时可能不准，请核对排班。"));
         var absent = records.Count(r => r.AttendanceStatus == AttendanceStatus.Absent);
         if (absent >= 3) Flags.Add(new Flag("danger", $"所选区间内旷工 {absent} 天。"));
         var late = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);

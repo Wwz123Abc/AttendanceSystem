@@ -139,7 +139,9 @@ public class ZKDeviceSyncService(
                     recordMap.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevRec) ? hPrevRec.ClockInTime : null);
                 if (AttendanceService.ResolveHourlyWorkDate(r.Time, hTodayShift, hPrevShift) is not { } hourlyDate)
                 {
-                    logger.LogInformation("考勤机 {SN} 上计时工 {Pin} 在 {Time} 的打卡不在有效打卡时间内，无效，已忽略", sn, r.Pin, r.Time);
+                    // Warning：这类打卡是被丢掉的——常见原因是排班类型和实际上班时间对不上（白班的人被排成夜班），
+                    // 要让管理员能在日志里看到，不能只记 Information
+                    logger.LogWarning("考勤机 {SN} 上计时工 {Pin} 在 {Time} 的打卡不在有效打卡时间内，已忽略（检查他当天的排班是不是和实际上班时间对得上）", sn, r.Pin, r.Time);
                     continue;
                 }
                 workDate = hourlyDate;
@@ -237,8 +239,10 @@ public class ZKDeviceSyncService(
         // 管理员手动补卡是同一个道理：不然跨月夜班下班卡、设备断网补传落在"月初自动生成汇总"之后时，
         // 月度汇总会停留在陈旧数字（2026-09-21 代码审查发现）。按(人,月)去重，避免同一批里同一个人
         // 涉及好几天都在同一个月时被重复刷新好几遍。
-        foreach (var (uid, year, month) in touchedKeys.Select(k => (k.UserId, k.WorkDate.Year, k.WorkDate.Month)).Distinct())
-            await attendanceService.GenerateMonthlySummaryAsync(year, month, [uid]);
+        // 按月份分组，一个月只调一次（带上这个月涉及的所有人），不再"每人每月调一次"——考勤机断网后补传大批数据时，
+        // 逐人刷新会查几百次库，把这个请求拖得很长
+        foreach (var grp in touchedKeys.GroupBy(k => (k.WorkDate.Year, k.WorkDate.Month)))
+            await attendanceService.GenerateMonthlySummaryAsync(grp.Key.Year, grp.Key.Month, grp.Select(k => k.UserId).Distinct().ToList());
     }
 
     /// <summary>

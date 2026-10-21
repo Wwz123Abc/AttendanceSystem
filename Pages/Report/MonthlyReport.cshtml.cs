@@ -35,6 +35,8 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     /// <summary>按姓名或工号搜索的关键字（空=不搜索）。</summary>
     public string? Keyword { get; set; }
 
+    private const int MaxPersons = 200;
+
     /// <summary>指定人员（姓名或工号，多个用逗号/空格/顿号隔开）：填了之后，下方表格和三个导出都只包含这些人（空=不限）。</summary>
     public string? Persons { get; set; }
 
@@ -50,9 +52,12 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         var tokens = System.Text.RegularExpressions.Regex.Split(persons ?? "", @"[\s,，;；、]+")
             .Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToList();
         if (tokens.Count == 0) return (null, []);
+        var overLimit = tokens.Count > MaxPersons;
+        if (overLimit) tokens = tokens.Take(MaxPersons).ToList();   // 防止粘贴上万个名字生成超大查询
         var found = await db.Users.Where(u => tokens.Contains(u.EmployeeNo) || tokens.Contains(u.RealName))
             .Select(u => new { u.Id, u.EmployeeNo, u.RealName }).ToListAsync(HttpContext.RequestAborted);
         var notFound = tokens.Where(t => !found.Any(f => string.Equals(f.EmployeeNo, t, StringComparison.OrdinalIgnoreCase) || f.RealName == t)).ToList();
+        if (overLimit) notFound.Add($"（指定人员超过 {MaxPersons} 个，只处理了前 {MaxPersons} 个，请分批）");
         return (found.Select(f => f.Id).Distinct().ToList(), notFound);
     }
 

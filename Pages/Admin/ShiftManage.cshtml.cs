@@ -83,6 +83,18 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
     [BindProperty] public string    AssignEnd     { get; set; } = "";  // 结束日期
     [BindProperty] public List<int> AssignUserIds { get; set; } = [];  // 勾选的员工（可跨组）
     [BindProperty] public bool      AssignAll     { get; set; }        // 是否所选组全部成员
+    [BindProperty] public bool      AllowOverwritePast { get; set; }   // 是否允许覆盖"今天之前"已有的排班（默认不允许）
+
+    /// <summary>对账加班的人天上限：排班保存后同步对账已批准加班单，人 × 天太多会拖慢请求，超过就不自动对账。</summary>
+    private const int MaxReconcilePersonDays = 3000;
+
+    /// <summary>
+    /// 批量排班遇到"今天之前、已经排过别的班次"的日期要不要跳过：过去的排班已经被打卡/工时/加班按当时的班次算过，
+    /// 悄悄改掉会让历史工时按新班次的规则重新解释（2026-10-21：夜班排给两个人时覆盖了他们 9/26–10/20 的白班，
+    /// 历史工时被按夜班规则算，对不上实际打卡）。默认跳过，管理员勾选"允许覆盖过去的排班"才改。
+    /// </summary>
+    public static bool ShouldSkipPastOverwrite(DateOnly day, DateOnly today, int existingShiftId, int newShiftId, bool allowPast) =>
+        day < today && existingShiftId != newShiftId && !allowPast;
 
     /// <summary>选中的考勤组上下文（随各表单回传，提交后仍保持在同一批组）。</summary>
     [BindProperty] public List<int> CtxGroupIds { get; set; } = [];
@@ -511,7 +523,8 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                 .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end)
                 .ToDictionaryAsync(a => (a.UserId, a.WorkDate));
 
-            int count = 0, skipped = 0;
+            int count = 0, skipped = 0, skippedPast = 0;
+            var todayForAssign = DateOnly.FromDateTime(DateTime.Today);
             for (var d = start; d <= end; d = d.AddDays(1))
             {
                 foreach (var uid in userIds)
@@ -523,6 +536,11 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                     }
                     if (existingAssignments.TryGetValue((uid, d), out var existing))
                     {
+                        if (ShouldSkipPastOverwrite(d, todayForAssign, existing.ShiftScheduleId, AssignShiftId, AllowOverwritePast))
+                        {
+                            skippedPast++;
+                            continue;
+                        }
                         existing.ShiftScheduleId = AssignShiftId;
                     }
                     else
@@ -547,11 +565,17 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
 
             // 排班补上/改了：这段日期里已经批准的加班单，按新排的班次重新对一遍（加班只记班次上下班时间之外的部分），
             // 避免"先提交加班、后补排班"造成正班和加班重复计算
-            var reconciled = await attendanceService.ReconcileOvertimeAfterScheduleAsync(userIds.ToList(), start, end);
+            var personDays = userIds.Count * (end.DayNumber - start.DayNumber + 1);
+            var reconciled = personDays <= MaxReconcilePersonDays
+                ? await attendanceService.ReconcileOvertimeAfterScheduleAsync(userIds.ToList(), start, end)
+                : 0;
 
             SuccessMessage = $"排班成功：{count} 条记录"
                 + (skipped > 0 ? $"；已跳过 {skipped} 条（员工未入职）" : "")
-                + (reconciled > 0 ? $"；有 {reconciled} 个人天的加班时长和班次重叠，已按班次扣除重叠部分" : "");
+                + (reconciled > 0 ? $"；有 {reconciled} 个人天的加班时长和班次重叠，已按班次扣除重叠部分" : "")
+                + (personDays > MaxReconcilePersonDays ? $"；人天较多（{personDays}），没有自动对账加班时长，请缩小范围分批排班" : "")
+                + (skippedPast > 0 ? $"；已跳过 {skippedPast} 条今天之前已排过别的班次的日期（勾选「允许覆盖过去的排班」才会改，改了历史工时不会自动重算）" : "")
+                + (AllowOverwritePast && start < todayForAssign ? "；注意：覆盖了过去日期的排班，这些天已经算好的工时不会自动重算，需要的话到班次管理里用「同时重算历史工时」" : "");
 
             // 带上刚排的日期区间，确保新排班在展示窗口内可见
             return RedirectToSelf(start.ToString("yyyy-MM-dd"), end.ToString("yyyy-MM-dd"));

@@ -99,6 +99,7 @@ public class ZKDeviceController(
 
     /// <summary>数据上传：设备真正推数据的地方，用 table 区分数据类型。</summary>
     [HttpPost("/iclock/cdata")]
+    [RequestSizeLimit(10 * 1024 * 1024)]   // 匿名接口：单次上传最多 10MB（打卡记录/抓拍照远小于这个数），不再只靠全局 50MB
     public async Task<IActionResult> Upload([FromQuery] string? SN, [FromQuery] string? table, CancellationToken ct)
     {
         if (!await IsKnownDeviceAsync(SN, ct))

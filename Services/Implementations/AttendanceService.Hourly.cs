@@ -162,9 +162,13 @@ public partial class AttendanceService
     /// <paramref name="dryRun"/>=true 只计算不写库。幂等：重复跑结果一样。
     /// </summary>
     public async Task<List<HourlyRebuildRow>> RebuildHourlyRecordsAsync(
-        IReadOnlyCollection<int> groupIds, DateOnly from, DateOnly to, bool dryRun, CancellationToken ct = default)
+        IReadOnlyCollection<int> groupIds, DateOnly from, DateOnly to, bool dryRun, CancellationToken ct = default,
+        IReadOnlyCollection<int>? onlyUserIds = null, bool useShiftWindows = false)
     {
-        var users = await db.Users.Where(u => u.AttendanceGroupId != null && groupIds.Contains(u.AttendanceGroupId.Value))
+        // onlyUserIds：只重建这几个人；useShiftWindows：午间窗口用"现在排的班次"的窗口，并把记录上的应上/下班时间刷成现在班次的
+        // （默认沿用记录里当时冻结的窗口——班次后来被改过/排错时，冻结的窗口本身就是错的，需要这个开关）
+        var users = await db.Users.Where(u => u.AttendanceGroupId != null && groupIds.Contains(u.AttendanceGroupId.Value)
+                && (onlyUserIds == null || onlyUserIds.Contains(u.Id)))
             .Select(u => new { u.Id, u.EmployeeNo, u.RealName }).ToListAsync(ct);
         var userIds = users.Select(u => u.Id).ToList();
         var fromDt = from.ToDateTime(TimeOnly.MinValue);
@@ -203,10 +207,10 @@ public partial class AttendanceService
             }
 
             // 午间窗口：用记录里当时冻结的窗口（班次后来可能改过/停用），多段只取第一段（新规则只有一个午间窗口）
-            List<(TimeOnly Start, TimeOnly End)> windows = rec?.MidCheckResults.ParseMidCheckResults()
-                    .Select(w => (w.WindowStart, w.WindowEnd)).ToList()
-                ?? [];
-            if (windows.Count == 0 && shift is not null) windows = shift.ParseMidCheckWindows();
+            List<(TimeOnly Start, TimeOnly End)> windows = useShiftWindows
+                ? (shift?.ParseMidCheckWindows() ?? [])
+                : rec?.MidCheckResults.ParseMidCheckResults().Select(w => (w.WindowStart, w.WindowEnd)).ToList() ?? [];
+            if (windows.Count == 0 && shift is not null && !useShiftWindows) windows = shift.ParseMidCheckWindows();
             if (windows.Count > 1) windows = [windows.OrderBy(w => w.Start).First()];
             List<MidCheckWindowResult>? mid = shift is not null && windows.Count > 0
                 ? ResolveMidCheckResults(d, shift, windows, punches)
@@ -242,6 +246,11 @@ public partial class AttendanceService
             rec.ActualWorkHours = newHours; rec.OvertimeHours = 0;
             rec.AttendanceStatus = newStatus; rec.LateMinutes = newLate; rec.EarlyLeaveMinutes = 0;
             rec.MidCheckResults = mid?.FormatMidCheckResults();
+            if (useShiftWindows && shift is not null)
+            {
+                rec.ScheduledStartTime = d.ToDateTime(shift.WorkStartTime);
+                rec.ScheduledEndTime = shift.IsCrossDay ? d.ToDateTime(shift.WorkEndTime).AddDays(1) : d.ToDateTime(shift.WorkEndTime);
+            }
             AppendApprovalNote(rec, "已按计时工规则重算（2026-10-20）");
             rec.UpdatedAt = clock.LocalNow();
         }
