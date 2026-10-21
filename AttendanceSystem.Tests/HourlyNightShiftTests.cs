@@ -48,7 +48,7 @@ public class HourlyNightShiftTests : SqliteTestBase
         var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
         Assert.Equal(Tue_(19, 55), rec.ClockInTime);
         Assert.Equal(Wed_(6, 30), rec.ClockOutTime);
-        Assert.Equal(9.5m, rec.ActualWorkHours);   // 19:55–06:30 = 10 小时 35 分，扣 00:00–01:00 的 1 小时 = 9.58 → 9.5（05:30–06:00 不扣）
+        Assert.Equal(9m, rec.ActualWorkHours);   // 19:55–06:30 = 10 小时 35 分，扣 00:00–01:00 的 1 小时和 05:30–06:00 的 0.5 小时 = 9.08 → 9.0
         Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue.AddDays(1) && r.ClockInTime == Wed_(6, 30)));   // 次日早上的卡没有变成第二天的上班卡
     }
 
@@ -60,7 +60,7 @@ public class HourlyNightShiftTests : SqliteTestBase
         using var db = CreateContext();
         var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
         Assert.Equal(Wed_(9, 50), rec.ClockOutTime);
-        Assert.Equal(13m, rec.ActualWorkHours);   // 19:30–09:50 = 14 小时 20 分，扣 1 小时 = 13.33 → 13.0
+        Assert.Equal(12.5m, rec.ActualWorkHours);   // 19:30–09:50 = 14 小时 20 分，扣 1.5 小时 = 12.83 → 12.5
     }
 
     [Fact]
@@ -81,17 +81,17 @@ public class HourlyNightShiftTests : SqliteTestBase
         using var db = CreateContext();
         var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
         Assert.Equal(AttendanceStatus.Late, rec.AttendanceStatus);
-        Assert.Equal(10.5m, rec.ActualWorkHours);   // 20:10–08:00 = 11 小时 50 分，扣 1 小时 = 10.83 → 10.5
+        Assert.Equal(10m, rec.ActualWorkHours);   // 20:10–08:00 = 11 小时 50 分，扣 1.5 小时 = 10.33 → 10.0
     }
 
     [Fact]
     public void 夜班工时计算_不封顶_不扣白班饭点_10点后不算()
     {
         var night = NightShift();
-        // 20:00 → 次日 10:00 = 14 小时，扣 00:00–01:00 一小时 = 13 小时
-        Assert.Equal(13m, AttendanceService.ComputeHourlyWorkHours(Tue, Tue_(20, 0), Wed_(10, 0), night, null));
+        // 20:00 → 次日 10:00 = 14 小时，扣 00:00–01:00 一小时、05:30–06:00 半小时 = 12.5 小时
+        Assert.Equal(12.5m, AttendanceService.ComputeHourlyWorkHours(Tue, Tue_(20, 0), Wed_(10, 0), night, null));
         // 下班卡晚于 10:00 的按 10:00 算
-        Assert.Equal(13m, AttendanceService.ComputeHourlyWorkHours(Tue, Tue_(20, 0), Wed_(12, 0), night, null));
+        Assert.Equal(12.5m, AttendanceService.ComputeHourlyWorkHours(Tue, Tue_(20, 0), Wed_(12, 0), night, null));
         // 20:00 → 23:30：没碰到 00:00–01:00，不扣
         Assert.Equal(3.5m, AttendanceService.ComputeHourlyWorkHours(Tue, Tue_(20, 0), Tue_(23, 30), night, null));
     }
@@ -131,7 +131,7 @@ public class HourlyNightShiftTests : SqliteTestBase
         using var db = CreateContext();
         var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
         Assert.Equal(Wed_(6, 40), rec.ClockOutTime);
-        Assert.Equal(9.5m, rec.ActualWorkHours);   // 19:50–06:40 = 10 小时 50 分，扣 1 小时 = 9.83 → 9.5
+        Assert.Equal(9m, rec.ActualWorkHours);   // 19:50–06:40 = 10 小时 50 分，扣 1.5 小时 = 9.33 → 9.0
         Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue.AddDays(1) && r.ClockInTime != null));
     }
 
@@ -154,7 +154,7 @@ public class HourlyNightShiftTests : SqliteTestBase
         using var db = CreateContext();
         var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
         Assert.Equal(Wed_(6, 30), rec.ClockOutTime);
-        Assert.Equal(9.5m, rec.ActualWorkHours);   // 19:55–06:30 扣 1 小时 = 9.58 → 9.5
+        Assert.Equal(9m, rec.ActualWorkHours);   // 19:55–06:30 扣 1.5 小时 = 9.08 → 9.0
     }
 
     [Fact]
@@ -174,6 +174,6 @@ public class HourlyNightShiftTests : SqliteTestBase
         await SyncAsync(Tue_(19, 55), Wed_(1, 20), Wed_(6, 30));   // 01:20 在窗口结束后 30 分钟宽限内
         using var db = CreateContext();
         var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
-        Assert.Equal(9.5m, rec.ActualWorkHours);
+        Assert.Equal(9m, rec.ActualWorkHours);
     }
 }

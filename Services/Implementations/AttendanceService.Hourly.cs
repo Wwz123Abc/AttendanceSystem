@@ -21,6 +21,10 @@ public partial class AttendanceService
     /// <summary>计时工夜班：次日这个钟点（不含）之前才有效，下班卡最晚算到这里，再晚的时间不计入工时。</summary>
     public const int HourlyNightLatestHour = 10;
 
+    /// <summary>计时工夜班要扣的饭点（都在上班日的次日）：00:00–01:00、05:30–06:00。</summary>
+    public static readonly (TimeOnly From, TimeOnly To)[] HourlyNightMealWindows =
+        [(new TimeOnly(0, 0), new TimeOnly(1, 0)), (new TimeOnly(5, 30), new TimeOnly(6, 0))];
+
     public const string HourlyNightInvalidTimeMessage = "夜班计时工的有效打卡时间是上班日 19:00 到次日 10:00，现在不在这个时间范围内";
 
     /// <summary>
@@ -90,19 +94,24 @@ public partial class AttendanceService
             if (ResolveSecondHalfAbsentBoundary(workDate, shift, midResults) is { } boundary && boundary < effOut)
                 effOut = boundary;
         }
-        // 夜班（跨天班次）：下班卡最晚算到次日 10:00；只扣次日 00:00–01:00 这一个小时的饭（2026-10-21 用户确认），
-        // 不再按白班的 12:00–13:00、17:30–18:00 和系统默认的 05:30–06:00 扣；不封顶。
+        // 夜班（跨天班次）：下班卡最晚算到次日 10:00；扣次日 00:00–01:00（1 小时）和 05:30–06:00（0.5 小时）两段饭
+        // （2026-10-21 用户确认：00:00–01:00，再加上系统默认的 05:30–06:00），不再按白班的 12:00–13:00、17:30–18:00 扣；不封顶。
         // 班次配了午间窗口（比如 00:00–01:00）的话，漏打也按计时工统一规则：只算窗口开始之前的工时（上面已经处理）
         if (shift is { IsCrossDay: true })
         {
             var nightLatest = workDate.AddDays(1).ToDateTime(new TimeOnly(HourlyNightLatestHour, 0));
             if (effOut > nightLatest) effOut = nightLatest;
             if (effOut <= effIn) return 0;
-            var mealStart = workDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
-            var mealEnd   = mealStart.AddHours(1);
-            var overlapStart = effIn > mealStart ? effIn : mealStart;
-            var overlapEnd   = effOut < mealEnd ? effOut : mealEnd;
-            var mealMinutes = overlapEnd > overlapStart ? (decimal)(overlapEnd - overlapStart).TotalMinutes : 0m;
+            var nextMidnight = workDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+            decimal mealMinutes = 0m;
+            foreach (var (mealFrom, mealTo) in HourlyNightMealWindows)
+            {
+                var mealStart = nextMidnight.Add(mealFrom.ToTimeSpan());
+                var mealEnd   = nextMidnight.Add(mealTo.ToTimeSpan());
+                var overlapStart = effIn > mealStart ? effIn : mealStart;
+                var overlapEnd   = effOut < mealEnd ? effOut : mealEnd;
+                if (overlapEnd > overlapStart) mealMinutes += (decimal)(overlapEnd - overlapStart).TotalMinutes;
+            }
             return FloorToHalf(Math.Max(0m, ((decimal)(effOut - effIn).TotalMinutes - mealMinutes) / 60m));
         }
         var dayEnd = workDate.ToDateTime(new TimeOnly(23, 59, 59));
