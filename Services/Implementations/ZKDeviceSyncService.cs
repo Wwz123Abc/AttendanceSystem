@@ -133,7 +133,10 @@ public class ZKDeviceSyncService(
                 // 计时工：白班 07:00 起有效；夜班（跨天班次）上班日 19:00 到次日 10:00 有效，次日早上的下班卡归上班那天
                 var rowDay = DateOnly.FromDateTime(r.Time);
                 shiftByUserDate.TryGetValue((uid, rowDay), out var hTodayShift);
-                shiftByUserDate.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevShift);
+                shiftByUserDate.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevShiftRaw);
+                // 前一天排了夜班但没打过上班卡（比如夜班周换白班周）：不算续接，早上的卡按今天的规则判断
+                var hPrevShift = AttendanceService.EffectivePrevNightShift(hPrevShiftRaw,
+                    recordMap.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevRec) ? hPrevRec.ClockInTime : null);
                 if (AttendanceService.ResolveHourlyWorkDate(r.Time, hTodayShift, hPrevShift) is not { } hourlyDate)
                 {
                     logger.LogInformation("考勤机 {SN} 上计时工 {Pin} 在 {Time} 的打卡不在有效打卡时间内，无效，已忽略", sn, r.Pin, r.Time);

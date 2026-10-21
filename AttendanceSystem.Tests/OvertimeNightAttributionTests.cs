@@ -37,10 +37,12 @@ public class OvertimeNightAttributionTests : SqliteTestBase
     public async Task 夜班员工当天晚上开始的加班_仍记当天()
     {
         var (uid, _) = SeedNightWorld();
-        await ApplyOvertimeAsync(uid, Tue.ToDateTime(new TimeOnly(20, 30)), Tue.ToDateTime(new TimeOnly(23, 0)), "JB-N-2");
+        // 周四没排班（周三的夜班早上 08:00 就下班了），晚上 20:30 开始的加班不和任何班次重叠，记周四当天
+        var thu = Tue.AddDays(2);
+        await ApplyOvertimeAsync(uid, thu.ToDateTime(new TimeOnly(20, 30)), thu.ToDateTime(new TimeOnly(23, 0)), "JB-N-2");
 
         using var check = CreateContext();
-        Assert.Equal(2.5m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue)).OvertimeHours);
+        Assert.Equal(2.5m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == thu)).OvertimeHours);
     }
 
     [Fact]

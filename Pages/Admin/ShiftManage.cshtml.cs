@@ -545,8 +545,13 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             if (count == 0)
                 throw new Exception("所选员工均未办理入职（入职日期未设置或晚于排班日期），未生成任何排班");
 
+            // 排班补上/改了：这段日期里已经批准的加班单，按新排的班次重新对一遍（加班只记班次上下班时间之外的部分），
+            // 避免"先提交加班、后补排班"造成正班和加班重复计算
+            var reconciled = await attendanceService.ReconcileOvertimeAfterScheduleAsync(userIds.ToList(), start, end);
+
             SuccessMessage = $"排班成功：{count} 条记录"
-                + (skipped > 0 ? $"；已跳过 {skipped} 条（员工未入职）" : "");
+                + (skipped > 0 ? $"；已跳过 {skipped} 条（员工未入职）" : "")
+                + (reconciled > 0 ? $"；有 {reconciled} 个人天的加班时长和班次重叠，已按班次扣除重叠部分" : "");
 
             // 带上刚排的日期区间，确保新排班在展示窗口内可见
             return RedirectToSelf(start.ToString("yyyy-MM-dd"), end.ToString("yyyy-MM-dd"));

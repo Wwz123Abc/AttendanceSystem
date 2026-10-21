@@ -50,14 +50,14 @@ public partial class AttendanceService
     /// 不依赖 MonthlyAttendanceSummary 这张按自然月生成的汇总表，而是直接从每日考勤记录/排班/假期现算，
     /// 这样才能支持不是自然月的统计区间。可选按部门 / 按考勤组自动带出的所属公司筛选。
     /// </summary>
-    public async Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default)
-        => await GenerateTemplateReportCoreAsync(start, end, deptIds, null, ct);
+    public async Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default, IReadOnlyCollection<int>? onlyUserIds = null)
+        => await GenerateTemplateReportCoreAsync(start, end, deptIds, null, ct, onlyUserIds);
 
     public async Task<TemplateReportRowDto?> GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default)
         => (await GenerateTemplateReportCoreAsync(start, end, null, userId, ct)).Rows.FirstOrDefault();
 
     private async Task<TemplateReportResultDto> GenerateTemplateReportCoreAsync(
-        DateOnly start, DateOnly end, List<int>? deptIds, int? onlyUserId, CancellationToken ct)
+        DateOnly start, DateOnly end, List<int>? deptIds, int? onlyUserId, CancellationToken ct, IReadOnlyCollection<int>? onlyUserIds = null)
     {
         var dates = new List<DateOnly>();
         for (var d = start; d <= end; d = d.AddDays(1)) dates.Add(d);
@@ -81,6 +81,7 @@ public partial class AttendanceService
         // 不勾任何部门 = 不筛选，导出全公司所有人。
         if (deptIds is { Count: > 0 }) q = q.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
         if (onlyUserId.HasValue) q = q.Where(u => u.Id == onlyUserId.Value);   // 员工看自己那一行（跟导出表同一套算法）
+        if (onlyUserIds is not null) q = q.Where(u => onlyUserIds.Contains(u.Id));   // 管理员指定了只看/只导出某几个人
         var users = await q.OrderBy(u => u.Department!.DeptName).ThenBy(u => u.EmployeeNo).ToListAsync(ct);
         var userIds = users.Select(u => u.Id).ToList();
 
@@ -258,7 +259,7 @@ public partial class AttendanceService
     }
 
     /// <summary>取"打卡时间表"导出用的数据，人员范围口径和 <see cref="GenerateTemplateReportAsync"/> 保持一致。</summary>
-    public async Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default)
+    public async Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default, IReadOnlyCollection<int>? onlyUserIds = null)
     {
         var relevantIds = await db.Users.Where(u => u.IsActive).Select(u => u.Id)
             .Union(db.AttendanceRecords.Where(r => r.WorkDate >= start && r.WorkDate <= end).Select(r => r.UserId))
@@ -267,6 +268,7 @@ public partial class AttendanceService
 
         var uq = db.Users.Where(u => relevantIds.Contains(u.Id)).NeedingAttendance();
         if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
+        if (onlyUserIds is not null) uq = uq.Where(u => onlyUserIds.Contains(u.Id));
         var userIds = await uq.Select(u => u.Id).ToListAsync(ct);
 
         var list = (await db.AttendanceRecords

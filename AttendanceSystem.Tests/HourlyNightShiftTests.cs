@@ -191,4 +191,43 @@ public class HourlyNightShiftTests : SqliteTestBase
         Assert.Equal(9m, rec.ActualWorkHours);   // 19:50–06:40 = 10 小时 50 分，扣 1.5 小时 = 9.33 → 9.0
         Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue.AddDays(1)));
     }
+
+    [Fact]
+    public async Task 夜班换白班_前一天挂着夜班但没上班_第一天早上的卡算今天_考勤机同步()
+    {
+        var uid = SeedNightHourly();
+        using (var db = CreateContext())
+        {
+            // 周二改排白班；周一仍挂着夜班但人没来（没有周一的记录）
+            var gid = db.Users.Single(u => u.Id == uid).AttendanceGroupId;
+            var dayShift = DayShift(); dayShift.AttendanceGroupId = gid!.Value; dayShift.MidCheckWindows = "12:00-13:00";
+            db.ShiftSchedules.Add(dayShift); db.SaveChanges();
+            var tue = db.ShiftAssignments.Single(a => a.UserId == uid && a.WorkDate == Tue);
+            tue.ShiftScheduleId = dayShift.Id; db.SaveChanges();
+        }
+        await SyncAsync(Tue_(8, 25), Tue_(12, 20), Tue_(18, 10));
+        using var db2 = CreateContext();
+        var rec = await db2.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(Tue_(8, 25), rec.ClockInTime);
+        Assert.Equal(Tue_(18, 10), rec.ClockOutTime);
+        Assert.InRange(rec.ActualWorkHours, 7.5m, 8.5m);   // 08:25–18:10 扣午饭晚饭
+        Assert.False(await db2.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Mon));   // 周一没有凭空多出记录
+    }
+
+    [Fact]
+    public async Task 夜班换白班_手机远程打卡也算今天()
+    {
+        var uid = SeedNightHourly();
+        using (var db = CreateContext())
+        {
+            var gid = db.Users.Single(u => u.Id == uid).AttendanceGroupId;
+            var dayShift = DayShift(); dayShift.AttendanceGroupId = gid!.Value;
+            db.ShiftSchedules.Add(dayShift); db.SaveChanges();
+            db.ShiftAssignments.Single(a => a.UserId == uid && a.WorkDate == Tue).ShiftScheduleId = dayShift.Id; db.SaveChanges();
+        }
+        Assert.True((await PunchAtAsync(uid, Tue_(8, 25), PunchType.ClockIn)).Success);
+        using var db2 = CreateContext();
+        Assert.True(await db2.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue && r.ClockInTime == Tue_(8, 25)));
+        Assert.False(await db2.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Mon));
+    }
 }

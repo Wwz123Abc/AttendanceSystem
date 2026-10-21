@@ -119,8 +119,9 @@ public class UnpaidBreakSettingsTests : SqliteTestBase, IDisposable
     {
         var (uid, groupId) = SeedWeekWorld();
         UnpaidBreakSettings.Apply(groupId, [(H(0), H(1)), (H(5, 30), H(6)), (H(12), H(13)), (H(17, 30), H(18, 30))]);
-        var start = Mon.ToDateTime(new TimeOnly(15, 0));
-        var end   = Mon.ToDateTime(new TimeOnly(19, 0));   // 4 小时；默认扣 17:30-18:00 → 3.5；这个考勤组扣 17:30-18:30 → 3.0
+        // 下班后的加班（17:30 起，不和 08:30–17:30 的班次重叠；工作日加班只记班次之外的部分，2026-10-21）
+        var start = Mon.ToDateTime(new TimeOnly(17, 30));
+        var end   = Mon.ToDateTime(new TimeOnly(19, 30));   // 2 小时；默认扣 17:30-18:00 → 1.5；这个考勤组扣 17:30-18:30 → 1.0
         int id;
         using (var db = CreateContext())
         {
@@ -136,10 +137,10 @@ public class UnpaidBreakSettingsTests : SqliteTestBase, IDisposable
         using (var db = CreateContext())
             await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
         using var check = CreateContext();
-        Assert.Equal(3.0m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon)).OvertimeHours);
+        Assert.Equal(1.0m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon)).OvertimeHours);
 
-        // 同样的起止时间按默认饭点算应该是 3.5
+        // 同样的起止时间按默认饭点算应该是 1.5
         UnpaidBreakSettings.Remove(groupId);
-        Assert.Equal(3.5m, AttendanceService.ComputeWorkHours(start, end, groupId));
+        Assert.Equal(1.5m, AttendanceService.ComputeWorkHours(start, end, groupId));
     }
 }

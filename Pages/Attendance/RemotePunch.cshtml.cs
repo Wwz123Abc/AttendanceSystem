@@ -278,7 +278,8 @@ public class RemotePunchModel(
         {
             // 夜班计时工：次日早上的卡归上班那天，这天的班次、有没有上班卡都要按"考勤日"去查，不是日历上的今天
             var hTodayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
-            var hPrevShift  = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today.AddDays(-1)))?.ShiftSchedule;
+            var hPrevShift  = AttendanceService.EffectivePrevNightShift((await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today.AddDays(-1)))?.ShiftSchedule,
+                await db.AttendanceRecords.Where(r => r.UserId == CurrentUserId && r.WorkDate == today.AddDays(-1)).Select(r => r.ClockInTime).FirstOrDefaultAsync());
             hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift) ?? today;
             var hourlyShift = hourlyWorkDate == today ? hTodayShift : hPrevShift;
             var hourlyRec = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == CurrentUserId && r.WorkDate == hourlyWorkDate);

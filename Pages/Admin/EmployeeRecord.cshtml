@@ -1,0 +1,195 @@
+@page
+@model AttendanceSystem.Pages.Admin.EmployeeRecordModel
+@{
+    ViewData["Title"] = "员工记录查询";
+    var e = Model.Emp;
+    string[] week = ["日", "一", "二", "三", "四", "五", "六"];
+    string Q(int id) => $"?keyword={Uri.EscapeDataString(Model.Keyword ?? "")}&id={id}&start={Model.Start:yyyy-MM-dd}&end={Model.End:yyyy-MM-dd}";
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-person-lines-fill me-2 text-primary"></i>员工记录查询</h4>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-3">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label small mb-1">姓名 / 工号</label>
+                <input type="text" name="keyword" class="form-control form-control-sm" style="width:200px"
+                       placeholder="输入员工姓名或工号" value="@Model.Keyword" autofocus />
+            </div>
+            <div class="col-auto">
+                <label class="form-label small mb-1">考勤记录开始日期</label>
+                <input type="date" name="start" class="form-control form-control-sm" value="@Model.Start.ToString("yyyy-MM-dd")" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label small mb-1">结束日期</label>
+                <input type="date" name="end" class="form-control form-control-sm" value="@Model.End.ToString("yyyy-MM-dd")" />
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i>查询</button>
+            </div>
+            <div class="col-12"><div class="form-text">输入姓名后会列出所有同名的人，点一个就能看到他的基本信息、考勤组、排班、考勤记录、原始打卡、审批单和异常提示。默认看最近 30 天。</div></div>
+        </form>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.Message))
+{
+    <div class="alert alert-warning">@Model.Message</div>
+}
+
+@if (Model.Keyword is not null && Model.Matches.Count == 0 && e is null)
+{
+    <div class="alert alert-secondary">没有找到姓名或工号包含"@Model.Keyword"的员工（或不在您的管理范围内）。</div>
+}
+
+@if (Model.Matches.Count > 1 || (Model.Matches.Count == 1 && e is null))
+{
+    <div class="card mb-3">
+        <div class="card-header py-2">匹配到 @Model.Matches.Count 人（点工号查看详情）</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+                <thead class="table-light"><tr><th>工号</th><th>姓名</th><th>部门</th><th>考勤组</th><th>状态</th></tr></thead>
+                <tbody>
+                @foreach (var m in Model.Matches)
+                {
+                    <tr class="@(e?.Id == m.Id ? "table-primary" : "")">
+                        <td><a href="@Q(m.Id)">@m.EmployeeNo</a></td>
+                        <td>@m.RealName</td>
+                        <td>@m.Dept</td>
+                        <td>@(m.Group ?? "（无）")</td>
+                        <td>@(m.Active ? "在职" : "已停用")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (e is not null)
+{
+    foreach (var f in Model.Flags)
+    {
+        <div class="alert alert-@f.Level py-2 mb-2"><i class="bi bi-exclamation-triangle me-1"></i>@f.Text</div>
+    }
+
+    <div class="card mb-3 mt-3">
+        <div class="card-header py-2"><i class="bi bi-person-vcard me-1"></i>基本信息</div>
+        <div class="card-body py-2">
+            <div class="row g-2 small">
+                <div class="col-6 col-md-3"><span class="text-muted">工号</span><br /><b>@e.EmployeeNo</b></div>
+                <div class="col-6 col-md-3"><span class="text-muted">姓名</span><br /><b>@e.RealName</b></div>
+                <div class="col-6 col-md-3"><span class="text-muted">部门</span><br />@(e.Dept ?? "（无）")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">职位</span><br />@(e.Position ?? "—")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">考勤组</span><br /><b class="@(e.GroupName is null ? "text-danger" : "")">@(e.GroupName ?? "（没有考勤组）")</b></div>
+                <div class="col-6 col-md-3"><span class="text-muted">计时工模式起始日</span><br />@(e.HourlyStart?.ToString("yyyy-MM-dd") ?? "—（普通考勤组）")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">角色</span><br />@e.RoleText</div>
+                <div class="col-6 col-md-3"><span class="text-muted">账号状态</span><br />@(e.Active ? "在职" : "已停用")@(e.Exempt ? "（免考勤）" : "")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">入职日期</span><br />@(e.HireDate?.ToString("yyyy-MM-dd") ?? "—")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">直属上级</span><br />@(e.Supervisor ?? "—")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">手机号</span><br />@(e.Phone ?? "—")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">绑定的考勤机</span><br />@(e.Devices ?? "无（只能手机人脸打卡）")</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header py-2">
+            <i class="bi bi-calendar-week me-1"></i>排班（今天前 14 天到后 45 天，红色 = 该排班的日子没有排班）
+        </div>
+        <div style="max-height:320px;overflow-y:auto">
+            <table class="table table-sm table-hover mb-0 align-middle">
+                <thead class="table-light" style="position:sticky;top:0"><tr><th>日期</th><th>星期</th><th>班次</th><th>上下班时间</th><th>备注</th></tr></thead>
+                <tbody>
+                @foreach (var s in Model.Shifts)
+                {
+                    <tr class="@(s.Missing ? "table-danger" : s.Date == Model.Today ? "table-primary" : "")">
+                        <td>@s.Date.ToString("yyyy-MM-dd")@(s.Date == Model.Today ? "（今天）" : "")</td>
+                        <td>周@(week[(int)s.Date.DayOfWeek])</td>
+                        <td>@(s.ShiftName ?? (s.Missing ? "未排班" : "—"))</td>
+                        <td>@s.Time@(s.CrossDay ? "（跨天）" : "")</td>
+                        <td>@(s.IsRest ? "休息日" : "")@(s.Missing && s.HasPunch ? "有打卡但没排班" : "")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header py-2">
+            <i class="bi bi-clipboard-data me-1"></i>考勤记录（@Model.Start.ToString("yyyy-MM-dd") 至 @Model.End.ToString("yyyy-MM-dd")，
+            共 @Model.Records.Count 天；正班合计 @Model.TotalWork.ToString("0.##") 小时，加班合计 @Model.TotalOvertime.ToString("0.##") 小时）
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle" style="font-size:.85rem">
+                <thead class="table-light"><tr><th>日期</th><th>班次</th><th>上班</th><th>下班</th><th>工时</th><th>加班</th><th>请假</th><th>状态</th><th>迟到(分)</th><th>午间窗口</th><th>备注</th></tr></thead>
+                <tbody>
+                @foreach (var r in Model.Records)
+                {
+                    <tr class="@(r.Status == "旷工" ? "table-danger" : r.NoShift ? "table-warning" : "")">
+                        <td>@r.Date.ToString("MM-dd")（周@(week[(int)r.Date.DayOfWeek])）</td>
+                        <td>@(r.ShiftName ?? (r.NoShift ? "未排班" : "—"))</td>
+                        <td>@r.In?.ToString("MM-dd HH:mm")</td>
+                        <td>@r.Out?.ToString("MM-dd HH:mm")</td>
+                        <td>@(r.Work == 0 ? "" : r.Work.ToString("0.##"))</td>
+                        <td>@(r.Overtime == 0 ? "" : r.Overtime.ToString("0.##"))</td>
+                        <td>@(r.Leave == 0 ? "" : r.Leave.ToString("0.##"))</td>
+                        <td>@r.Status</td>
+                        <td>@(r.LateMinutes == 0 ? "" : r.LateMinutes.ToString())</td>
+                        <td>@r.Mid</td>
+                        <td class="text-muted" style="max-width:360px">@r.Note</td>
+                    </tr>
+                }
+                @if (Model.Records.Count == 0)
+                {
+                    <tr><td colspan="11" class="text-muted text-center py-3">这段时间没有考勤记录</td></tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <div class="card mb-3">
+                <div class="card-header py-2"><i class="bi bi-fingerprint me-1"></i>原始打卡（@Model.Punches.Count 条）</div>
+                <div style="max-height:360px;overflow-y:auto">
+                    <table class="table table-sm table-hover mb-0 align-middle" style="font-size:.85rem">
+                        <thead class="table-light" style="position:sticky;top:0"><tr><th>时间</th><th>类型</th><th>来源</th><th>地址</th></tr></thead>
+                        <tbody>
+                        @foreach (var p in Model.Punches)
+                        {
+                            <tr class="@(p.Valid ? "" : "text-decoration-line-through text-muted")">
+                                <td>@p.Time.ToString("MM-dd HH:mm")（周@(week[(int)p.Time.DayOfWeek])）</td>
+                                <td>@p.Type</td><td>@p.Source</td><td class="text-muted">@p.Address</td>
+                            </tr>
+                        }
+                        @if (Model.Punches.Count == 0) { <tr><td colspan="4" class="text-muted text-center py-3">这段时间没有打卡</td></tr> }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card mb-3">
+                <div class="card-header py-2"><i class="bi bi-file-earmark-text me-1"></i>审批单（@Model.Approvals.Count 张）</div>
+                <div style="max-height:360px;overflow-y:auto">
+                    <table class="table table-sm table-hover mb-0 align-middle" style="font-size:.85rem">
+                        <thead class="table-light" style="position:sticky;top:0"><tr><th>单号</th><th>类型</th><th>状态</th><th>时间</th><th>时长</th></tr></thead>
+                        <tbody>
+                        @foreach (var a in Model.Approvals)
+                        {
+                            <tr><td>@a.No</td><td>@a.Type</td><td>@a.Status</td><td>@a.Time</td><td>@(a.Hours?.ToString("0.##"))</td></tr>
+                        }
+                        @if (Model.Approvals.Count == 0) { <tr><td colspan="5" class="text-muted text-center py-3">这段时间没有审批单</td></tr> }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+}

@@ -13,6 +13,7 @@
         };
         foreach (var id in Model.SelectedDeptIds) parts.Add("deptIds=" + id);
         if (!string.IsNullOrEmpty(Model.Keyword)) parts.Add("keyword=" + Uri.EscapeDataString(Model.Keyword));
+        if (!string.IsNullOrEmpty(Model.Persons)) parts.Add("persons=" + Uri.EscapeDataString(Model.Persons));
         if (p > 1) parts.Add("p=" + p);
         return "?" + string.Join("&", parts);
     }
@@ -52,9 +53,18 @@
                            placeholder="按姓名或工号搜索" value="@Model.Keyword" />
                 </div>
                 <div class="col-auto">
-                    <div class="form-text mb-1">默认是"上月26日至本月25日"，可以改成任意起止日期；搜索只影响下方表格显示，不影响导出范围</div>
+                    <label class="form-label small mb-1">指定人员（导出/查看只含这些人）</label>
+                    <input type="text" name="persons" class="form-control form-control-sm" style="width:300px"
+                           placeholder="姓名或工号，多个用逗号/空格隔开" value="@Model.Persons" />
+                </div>
+                <div class="col-auto">
+                    <div class="form-text mb-1">默认是"上月26日至本月25日"，可以改成任意起止日期；"姓名/工号"搜索只影响下方表格显示，不影响导出范围；填了"指定人员"后，表格和三个导出都只包含这些人（重名的都会带上；范围里勾了部门的，只含该部门内的人）</div>
                 </div>
             </div>
+            @if (Model.PersonsNotFound.Count > 0)
+            {
+                <div class="alert alert-warning py-1 px-2 small mb-2">指定人员里有找不到的姓名/工号：<b>@string.Join("、", Model.PersonsNotFound)</b>（导出时会报错，请核对后重填）</div>
+            }
             <label class="form-label fw-semibold mb-1">
                 范围
                 <small class="text-muted fw-normal">（勾选公司=连它下面所有部门一起，范围大；只勾具体部门=只看这个部门，范围小；都不勾=全公司所有人）</small>

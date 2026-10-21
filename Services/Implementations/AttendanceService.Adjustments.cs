@@ -176,8 +176,10 @@ public partial class AttendanceService
         // 不直接用单子上存的时长，是因为改规则之前提交、还没批的老单子存的是不扣饭点的总长度；
         // 算完顺手把单子上的时长也改成实际记入的数，审批列表/记录里看到的和考勤上记的一致
         var otGroupId = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        // 工作日的加班只记班次上下班时间之外的部分（班次没排就用考勤组最常用的日班兜底），不能和正班重复计算
         var otHours = approval.OvertimeEndTime.HasValue
-            ? ComputeWorkHours(otStart, approval.OvertimeEndTime.Value, otGroupId)   // 按申请人所在考勤组的饭点扣
+            ? ComputeOvertimeHoursOutsideShift(otStart, approval.OvertimeEndTime.Value,
+                await LoadOvertimeShiftsAsync(approval.ApplicantUserId, DateOnly.FromDateTime(otStart), otGroupId), otGroupId)
             : otDuration;
         approval.OvertimeDurationHours = otHours;
 

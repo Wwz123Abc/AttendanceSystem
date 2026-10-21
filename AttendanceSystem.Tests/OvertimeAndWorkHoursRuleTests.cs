@@ -156,8 +156,9 @@ public class OvertimeAndWorkHoursRuleTests : SqliteTestBase
     public async Task 加班审批通过回写_申请时长超过6小时9小时按规则扣饭点(int sh, int sm, int eh, int em, double expected)
     {
         var (uid, _) = SeedWeekWorld();
-        var start = Mon.ToDateTime(new TimeOnly(sh, sm));
-        var end   = Mon.ToDateTime(new TimeOnly(eh, em));
+        // 用休息日（周六）：工作日的加班只记班次上下班时间之外的部分（2026-10-21），休息日整段都是加班，这里测的才是纯饭点扣减
+        var start = Sat.ToDateTime(new TimeOnly(sh, sm));
+        var end   = Sat.ToDateTime(new TimeOnly(eh, em));
         var raw   = (decimal)(end - start).TotalHours;
         var id = await AddApprovedAsync(new ApprovalRequest
         {
@@ -170,7 +171,7 @@ public class OvertimeAndWorkHoursRuleTests : SqliteTestBase
             await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
 
         using var check = CreateContext();
-        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Sat);
         Assert.Equal((decimal)expected, rec.OvertimeHours);
         Assert.Equal((decimal)expected, (await check.ApprovalRequests.SingleAsync(a => a.Id == id)).OvertimeDurationHours);   // 单子上的时长同步成实际记入的数
     }
@@ -225,12 +226,27 @@ public class OvertimeAndWorkHoursRuleTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 当天没排班_不判断重叠()
+    public async Task 当天没排班_用考勤组的日班兜底_照样判断重叠()
+    {
+        // 2026-10-21 改：以前"没排班就不判断"，排班延后的人（朱志方等）提交的整天加班单全部漏过检查，
+        // 正班和加班重复计算；现在没排班就用所在考勤组最常用的日班兜底
+        var uid = SeedOvertimeWorld(restDays: "");
+        using (var db = CreateContext())
+        {
+            db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid));
+            db.SaveChanges();
+        }
+        Assert.Contains("不能和上班时间重叠", (await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(17, 30)))?.Message ?? "");
+    }
+
+    [Fact]
+    public async Task 当天没排班_考勤组也没有日班可兜底_不判断重叠()
     {
         var uid = SeedOvertimeWorld(restDays: "");
         using (var db = CreateContext())
         {
             db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid));
+            db.ShiftSchedules.RemoveRange(db.ShiftSchedules);   // 组里一个班次都没有，没有可兜底的
             db.SaveChanges();
         }
         Assert.Null(await TrySubmitOvertimeAsync(uid, new TimeOnly(8, 30), new TimeOnly(17, 30)));

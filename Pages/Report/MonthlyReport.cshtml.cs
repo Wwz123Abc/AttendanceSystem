@@ -35,6 +35,27 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     /// <summary>按姓名或工号搜索的关键字（空=不搜索）。</summary>
     public string? Keyword { get; set; }
 
+    /// <summary>指定人员（姓名或工号，多个用逗号/空格/顿号隔开）：填了之后，下方表格和三个导出都只包含这些人（空=不限）。</summary>
+    public string? Persons { get; set; }
+
+    /// <summary>指定人员里没找到的名字/工号，页面上提示出来。</summary>
+    public List<string> PersonsNotFound { get; set; } = [];
+
+    /// <summary>
+    /// 把"指定人员"文本解析成员工编号：每个词先按工号精确匹配，再按姓名精确匹配（重名的人全部带上，页面表格里能看出来是谁）。
+    /// 返回 null 表示没填（不限制）；填了但一个都没找到返回空集合（表格/导出就是空的，不会变成"导出所有人"）。
+    /// </summary>
+    private async Task<(List<int>? Ids, List<string> NotFound)> ResolvePersonsAsync(string? persons)
+    {
+        var tokens = System.Text.RegularExpressions.Regex.Split(persons ?? "", @"[\s,，;；、]+")
+            .Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToList();
+        if (tokens.Count == 0) return (null, []);
+        var found = await db.Users.Where(u => tokens.Contains(u.EmployeeNo) || tokens.Contains(u.RealName))
+            .Select(u => new { u.Id, u.EmployeeNo, u.RealName }).ToListAsync(HttpContext.RequestAborted);
+        var notFound = tokens.Where(t => !found.Any(f => string.Equals(f.EmployeeNo, t, StringComparison.OrdinalIgnoreCase) || f.RealName == t)).ToList();
+        return (found.Select(f => f.Id).Distinct().ToList(), notFound);
+    }
+
     public int PageIndex    { get; set; } = 1;
     public int TotalMatched { get; set; }
 
@@ -57,7 +78,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     public List<CompanyDeptNode> DeptTree { get; set; } = [];
 
     /// <summary>打开页面：按筛选条件（起止日期/部门/关键字）查出要展示的数据，分页截取当前页。</summary>
-    public async Task OnGetAsync(DateOnly? start, DateOnly? end, List<int>? deptIds, string? keyword, int p = 1)
+    public async Task OnGetAsync(DateOnly? start, DateOnly? end, List<int>? deptIds, string? keyword, string? persons, int p = 1)
     {
         var today      = DateOnly.FromDateTime(DateTime.Today);
         var defaultEnd = new DateOnly(today.Year, today.Month, 25);
@@ -75,8 +96,12 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         Year  = End.Year;
         Month = End.Month;
 
+        Persons = string.IsNullOrWhiteSpace(persons) ? null : persons.Trim();
+        var (personIds, notFound) = await ResolvePersonsAsync(Persons);
+        PersonsNotFound = notFound;
+
         var result = await attendanceService.GenerateTemplateReportAsync(
-            Start, End, SelectedDeptIds.Count > 0 ? SelectedDeptIds : null, HttpContext.RequestAborted);
+            Start, End, SelectedDeptIds.Count > 0 ? SelectedDeptIds : null, HttpContext.RequestAborted, personIds);
         Dates = result.Dates;
 
         var filtered = Keyword is null
@@ -144,14 +169,16 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     /// deptIds 来自页面的公司/部门合并树勾选结果（和页面上表格看到的范围一致，不受关键字搜索影响——
     /// 导出是给公司存档/发工资用的完整表，关键字搜索只是页面上方便肉眼找人用的，不应该影响导出范围）。
     /// </summary>
-    public async Task<IActionResult> OnGetExportTemplateAsync(DateOnly? start, DateOnly? end, List<int>? deptIds)
+    public async Task<IActionResult> OnGetExportTemplateAsync(DateOnly? start, DateOnly? end, List<int>? deptIds, string? persons)
     {
         if (start is null || end is null) return BadRequest("请选择起止日期");
         if (end < start) return BadRequest("结束日期不能早于开始日期");
         if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
 
         deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetRequiredUser(), deptIds);
-        var result = await attendanceService.GenerateTemplateReportAsync(start.Value, end.Value, deptIds, HttpContext.RequestAborted);
+        var (personIds, notFound) = await ResolvePersonsAsync(persons);
+        if (notFound.Count > 0) return BadRequest("指定人员里有找不到的姓名/工号：" + string.Join("、", notFound));
+        var result = await attendanceService.GenerateTemplateReportAsync(start.Value, end.Value, deptIds, HttpContext.RequestAborted, personIds);
         var bytes  = ExcelExportHelper.ExportTemplateReport(result);
         return File(bytes, XlsxContentType, $"发薪考勤汇总表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
@@ -160,14 +187,16 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     /// 点"导出打卡时间表"时执行：范围和"导出模板汇总表"一样，按当前起止日期/部门勾选（不受关键字搜索影响），
     /// 但内容换成一行一人一天的打卡明细（上下班时间、工时、迟到等），方便核对具体打卡时间用。
     /// </summary>
-    public async Task<IActionResult> OnGetExportClockTimeSheetAsync(DateOnly? start, DateOnly? end, List<int>? deptIds)
+    public async Task<IActionResult> OnGetExportClockTimeSheetAsync(DateOnly? start, DateOnly? end, List<int>? deptIds, string? persons)
     {
         if (start is null || end is null) return BadRequest("请选择起止日期");
         if (end < start) return BadRequest("结束日期不能早于开始日期");
         if (end.Value.DayNumber - start.Value.DayNumber > 366) return BadRequest("统计周期不能超过 366 天");
 
         deptIds = await deptScopeService.ResolveEffectiveDeptIdsAsync(HttpContext.GetRequiredUser(), deptIds);
-        var records = await attendanceService.GetClockTimeSheetAsync(start.Value, end.Value, deptIds, HttpContext.RequestAborted);
+        var (personIds, notFound) = await ResolvePersonsAsync(persons);
+        if (notFound.Count > 0) return BadRequest("指定人员里有找不到的姓名/工号：" + string.Join("、", notFound));
+        var records = await attendanceService.GetClockTimeSheetAsync(start.Value, end.Value, deptIds, HttpContext.RequestAborted, personIds);
         var bytes   = ExcelExportHelper.ExportClockTimeSheet(records, start.Value, end.Value);
         return File(bytes, XlsxContentType, $"打卡时间表_{start:yyyyMMdd}-{end:yyyyMMdd}.xlsx");
     }
@@ -180,7 +209,7 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
     /// 分公司管理员只能导出自己范围内的人）；内容是一次打卡一行的原始流水，用来核对某人某天到底几点打了几次卡。
     /// 日期按"打卡发生的日历日"算：起始日 00:00 到结束日 23:59:59。
     /// </summary>
-    public async Task<IActionResult> OnGetExportRawPunchesAsync(DateOnly? start, DateOnly? end, List<int>? deptIds)
+    public async Task<IActionResult> OnGetExportRawPunchesAsync(DateOnly? start, DateOnly? end, List<int>? deptIds, string? persons)
     {
         if (start is null || end is null) return BadRequest("请选择起止日期");
         if (end < start) return BadRequest("结束日期不能早于开始日期");
@@ -195,6 +224,9 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
             .Distinct().ToListAsync(HttpContext.RequestAborted);
         var uq = db.Users.Where(u => relevantIds.Contains(u.Id)).NeedingAttendance();
         if (deptIds is { Count: > 0 }) uq = uq.Where(u => u.DepartmentId.HasValue && deptIds.Contains(u.DepartmentId.Value));
+        var (personIds, notFound) = await ResolvePersonsAsync(persons);
+        if (notFound.Count > 0) return BadRequest("指定人员里有找不到的姓名/工号：" + string.Join("、", notFound));
+        if (personIds is not null) uq = uq.Where(u => personIds.Contains(u.Id));
         var userIds = await uq.Select(u => u.Id).ToListAsync(HttpContext.RequestAborted);
         var rows = await db.AttendancePunches
             .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= from && p.PunchTime < to)

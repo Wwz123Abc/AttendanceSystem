@@ -38,10 +38,11 @@ public class FakeAttendanceService : IAttendanceService
     public Task<ShiftAssignment?> GetShiftAssignmentAsync(int userId, DateOnly date) => throw new NotImplementedException();
     public Task RevertAdminPunchAdjustAsync(int logId, string? operatorName) => throw new NotImplementedException();
     public Task<(int Checked, int HoursChanged)> RecalcShiftHistoryAsync(int shiftId, DateOnly from) => throw new NotImplementedException();
+    public Task<int> ReconcileOvertimeAfterScheduleAsync(IReadOnlyCollection<int> userIds, DateOnly from, DateOnly to) => Task.FromResult(0);
     public Task AdminReplenishPunchAsync(int userId, DateOnly workDate, PunchType type, DateTime punchAt, bool allowOverwrite, string? remark, string? operatorName) => throw new NotImplementedException();
     public Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName) => throw new NotImplementedException();
     public Task<List<MyScheduleDto>> GetMyScheduleAsync(int userId, DateOnly start, DateOnly end) => throw new NotImplementedException();
     public Task<TemplateReportRowDto?> GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default, IReadOnlyCollection<int>? onlyUserIds = null) => throw new NotImplementedException();
+    public Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default, IReadOnlyCollection<int>? onlyUserIds = null) => throw new NotImplementedException();
 }

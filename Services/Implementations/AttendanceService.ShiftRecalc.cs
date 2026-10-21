@@ -61,6 +61,9 @@ public partial class AttendanceService
             try { await GenerateMonthlySummaryAsync(grp.Key.Year, grp.Key.Month, grp.Select(r => r.UserId).Distinct().ToList()); }
             catch (Exception ex) { logger.LogError(ex, "班次历史工时已重算，但刷新 {Year}-{Month} 月度汇总失败", grp.Key.Year, grp.Key.Month); }
         }
+        // 班次时间改了，这个班次这段时间里已批准的加班单也按新的上下班时间重新对一遍（加班只记班次之外的部分）
+        var otUsers = records.Select(r => r.UserId).Distinct().ToList();
+        if (otUsers.Count > 0) await ReconcileOvertimeAfterScheduleAsync(otUsers, fromDate, today);
         return (checkedCount, changed.Count);
     }
 }

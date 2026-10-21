@@ -300,14 +300,15 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 休息日（没有"正班"）不受限，整天加班照常；当天没排班的也不判断。（2026-09-28 用户确认）
         var otDate  = DateOnly.FromDateTime(dto.OvertimeStartTime.Value);
         var otPrev  = otDate.AddDays(-1);
-        var otAssigns = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
-            .Where(a => a.UserId == applicantUserId && (a.WorkDate == otDate || a.WorkDate == otPrev))
-            .ToListAsync();
-        // 当天的班次，加上"昨天的跨天班次（夜班）延续到今天凌晨的那一段"——夜班员工在凌晨填的加班，
+        // 当天的班次：排了班用排的班次，没排班（排班没跟上/延后补排）就用考勤组最常用的日班兜底——
+        // 不能因为没排班就跳过这道检查（2026-10-21：朱志方等人 10/1–10/5 提交的 08:30 起的整天加班单就是这样漏过去的）。
+        // 再加上"昨天的跨天班次（夜班）延续到今天凌晨的那一段"——夜班员工在凌晨填的加班，
         // 如果压在昨晚夜班的正班时间里，一样是重复计算
-        foreach (var (shiftDate, shiftAssign) in new[] { (otDate, otAssigns.FirstOrDefault(a => a.WorkDate == otDate)), (otPrev, otAssigns.FirstOrDefault(a => a.WorkDate == otPrev)) })
+        var otGroupForShift = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        var otShiftToday = await EffectiveShift.ForAsync(db, applicantUserId, otDate, otGroupForShift);
+        var otShiftPrev  = await EffectiveShift.AssignedAsync(db, applicantUserId, otPrev);
+        foreach (var (shiftDate, s0) in new[] { (otDate, otShiftToday), (otPrev, otShiftPrev) })
         {
-            var s0 = shiftAssign?.ShiftSchedule;
             if (s0 is null || (shiftDate == otPrev && !s0.IsCrossDay)) continue;   // 昨天的班只有跨天班次才会延续到今天
             if (AttendanceService.IsShiftWeeklyRestDay(shiftDate, s0)) continue;
             var (shiftStart, shiftEnd) = AttendanceService.ResolveLeaveWindow(shiftDate, s0);   // 班次的上下班时间（跨天班次下班顺延到第二天）

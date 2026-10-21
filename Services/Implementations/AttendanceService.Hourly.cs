@@ -40,6 +40,14 @@ public partial class AttendanceService
         return IsHourlyPunchTimeValid(punchTime) ? d : null;
     }
 
+    /// <summary>
+    /// 前一天排的夜班"算不算数"：只有前一天确实打过上班卡（上过这个夜班），次日早上的卡才可能是它的下班卡。
+    /// 没上班卡（夜班周换白班周，中间那天还挂着夜班、人没来）就当没有这个夜班，按今天的规则判断
+    /// （非计时工的夜班续接一直要求昨天有上班卡，这里保持一致）。传给 <see cref="ResolveHourlyWorkDate"/> 的 prevShift 用这个过一遍。
+    /// </summary>
+    public static ShiftSchedule? EffectivePrevNightShift(ShiftSchedule? prevShift, DateTime? prevClockIn) =>
+        prevShift is { IsCrossDay: true } && prevClockIn is null ? null : prevShift;
+
     /// <summary>打卡无效时给员工看的提示：夜班员工和白班员工的有效时间不一样。</summary>
     public static string HourlyInvalidMessageFor(ShiftSchedule? todayShift, ShiftSchedule? prevShift) =>
         todayShift is { IsCrossDay: true } || prevShift is { IsCrossDay: true } ? HourlyNightInvalidTimeMessage : HourlyInvalidTimeMessage;

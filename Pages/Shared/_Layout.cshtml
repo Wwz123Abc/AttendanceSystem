@@ -442,6 +442,12 @@
                         </a>
                     </li>
                     <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/EmployeeRecord") ? "active" : "")"
+                           href="/Admin/EmployeeRecord">
+                            <i class="bi bi-person-lines-fill"></i>员工记录查询
+                        </a>
+                    </li>
+                    <li>
                         <a class="nav-link @(currentPath.StartsWith("/Admin/PunchAdjust") ? "active" : "")"
                            href="/Admin/PunchAdjust">
                             <i class="bi bi-clock-history"></i>手动补卡
