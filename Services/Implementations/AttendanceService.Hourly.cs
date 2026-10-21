@@ -95,6 +95,11 @@ public partial class AttendanceService
     {
         var effIn = clockIn;
         var effOut = clockOut;
+        // 午间窗口只对"到岗时窗口还没结束"的人生效：窗口结束（含 30 分钟宽限）之后才到岗的人，根本没有机会打这次午间卡，
+        // 不能按"漏打"把下午的工时扣掉（2026-10-21：李小勇 10/19 18:04 才到岗，12:00–13:00 的窗口被判漏打，在岗 3 小时被算成 0）
+        if (shift is not null && midResults is { Count: > 0 })
+            midResults = midResults.Where(w => w.IsSatisfied
+                || clockIn < ResolveShiftTime(workDate, w.WindowEnd, shift).AddMinutes(MidCheckGraceMinutes)).ToList();
         if (shift is not null && midResults is { Count: > 0 })
         {
             foreach (var missedEnd in ResolveMissedNonLastWindowEnds(workDate, shift, midResults))

@@ -335,4 +335,21 @@ public class HourlyWorkModeTests : SqliteTestBase
         Assert.Equal(0m, m.OvertimeHours);
         Assert.Equal(0m, m.ActualWorkHours);
     }
+
+    [Fact]
+    public async Task 计时工到岗时午间窗口已过_不套漏打规则_按实际在岗算()
+    {
+        var (uid, _) = SeedHourly();   // 午间窗口 12:00–13:00
+        await SyncAsync(At(18, 4), At(21, 1));   // 18:04 才到岗，窗口早过了（10/19 李小勇）
+        var rec = await TueRecordAsync(uid);
+        Assert.Equal(2.5m, rec.ActualWorkHours);   // 18:04–21:01 = 2 小时 57 分，扣晚饭 17:30–18:00 不重叠 → 2.5
+    }
+
+    [Fact]
+    public async Task 计时工窗口内到岗没打午间卡_仍按漏打算_只算窗口开始之前()
+    {
+        var (uid, _) = SeedHourly();
+        await SyncAsync(At(8, 25), At(21, 0));   // 窗口还没开始就到岗、之后没打午间卡 → 照旧只算上午
+        Assert.InRange((await TueRecordAsync(uid)).ActualWorkHours, 3.5m, 3.6m);
+    }
 }
