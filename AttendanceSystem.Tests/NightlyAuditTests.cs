@@ -89,4 +89,26 @@ public class NightlyAuditTests : SqliteTestBase
         Assert.Contains("有打卡但没排班", one.Content);
         Assert.False(await check.Notifications.AnyAsync(n => n.UserId == uid && n.NotificationType == NotificationTypes.DataAudit));   // 员工不会收到
     }
+
+    [Fact]
+    public async Task 深圳GA考勤组的没排班_不进通知()
+    {
+        var adminId = AddAdmin();
+        var (uid, _) = SeedDayMidWorld();
+        await SyncAsync(Tue.ToDateTime(new TimeOnly(8, 25)), Tue.ToDateTime(new TimeOnly(12, 20)), Tue.ToDateTime(new TimeOnly(17, 35)));
+        using (var db = CreateContext())
+        {
+            db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid));
+            var group = new AttendanceGroup { GroupName = "深圳GA考勤组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            (await db.Users.SingleAsync(u => u.Id == uid)).AttendanceGroupId = group.Id;
+            await db.SaveChangesAsync();
+        }
+
+        await RunNightlyAuditAsync();
+
+        using var check = CreateContext();
+        Assert.False(await check.Notifications.AnyAsync(n => n.UserId == adminId && n.NotificationType == NotificationTypes.DataAudit));
+    }
 }

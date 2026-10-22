@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
+using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Options;
@@ -42,6 +43,12 @@ public class AttendanceBackgroundService(
     /// <summary>每晚自动核对最近多少天（含今天之前一天）。</summary>
     private const int NightlyAuditDays = 14;
     private const string AuditNoticeTitle = "数据核对";
+
+    /// <summary>这些考勤组的"有打卡但没排班"不进每晚通知（2026-10-22 用户确认：深圳GA考勤组 44 人长期不排班，忽略）。</summary>
+    private static readonly string[] AuditNoShiftIgnoredGroups = ["深圳GA考勤组"];
+
+    private static bool IsIgnoredAuditIssue(AuditIssue i) =>
+        i.Type == AttendanceService.AuditNoShift && i.GroupName is { } g && AuditNoShiftIgnoredGroups.Contains(g);
 
     // 程序启动后这个方法一直在后台循环运行，直到程序关闭
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -175,6 +182,7 @@ public class AttendanceBackgroundService(
             await db.Notifications
                 .Where(n => n.NotificationType == NotificationTypes.DataAudit && !n.IsRead)
                 .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true).SetProperty(n => n.ReadAt, now));
+            issues = issues.Where(i => !IsIgnoredAuditIssue(i)).ToList();
             if (issues.Count == 0) return;
 
             var byType = string.Join("、", issues.GroupBy(i => i.Type).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}"));
