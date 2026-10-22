@@ -37,6 +37,11 @@ public class AttendanceBackgroundService(
     private DateTime _lastSummaryDate           = DateTime.MinValue;
     private DateTime _lastCleanupDate           = DateTime.MinValue;
     private DateTime _lastApprovalReminderAt    = DateTime.MinValue;
+    private DateTime _lastAuditDate             = DateTime.MinValue;
+
+    /// <summary>每晚自动核对最近多少天（含今天之前一天）。</summary>
+    private const int NightlyAuditDays = 14;
+    private const string AuditNoticeTitle = "数据核对";
 
     // 程序启动后这个方法一直在后台循环运行，直到程序关闭
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -108,6 +113,14 @@ public class AttendanceBackgroundService(
                     _lastCleanupDate = now;
                 }
 
+                // 每天 04:00 之后跑一次数据核对（程序整夜没起来的话，起来后当天补跑一次）：把最近 14 天按现行规则重算一遍和存库对比，
+                // 工时/加班多记自动改正，其余疑点发通知给管理员。失败只记日志，当天窗口内下一分钟会重试。
+                if (now.Hour >= 4 && _lastAuditDate.Date < now.Date)
+                {
+                    await RunNightlyAuditAsync();
+                    _lastAuditDate = now;
+                }
+
                 // 距上次提醒过去满 4 小时（程序刚启动、_lastApprovalReminderAt 还是最小值时，
                 // 差值必然超过 4 小时，所以启动后很快就会先跑一次，不用等真的攒够 4 小时）
                 if (now - _lastApprovalReminderAt >= TimeSpan.FromHours(4))
@@ -125,6 +138,58 @@ public class AttendanceBackgroundService(
 
             await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);   // 歇 1 分钟再检查
         }
+    }
+
+    /// <summary>
+    /// 每晚数据核对：核对最近 <see cref="NightlyAuditDays"/> 天，其中"工时与打卡不符"自动按现行规则重算（只改工时，
+    /// 不动状态/迟到早退/加班/请假）、"加班多记"自动对账扣减（只减不增）；重算后再核对一遍，
+    /// 剩下需要人处理的（没排班、排错班、加班少记、时间倒挂、有打卡却记旷工）汇总发给管理员。
+    /// 每个管理员始终只留最新一条未读，没有疑点就不打扰。
+    /// </summary>
+    private async Task RunNightlyAuditAsync()
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var attendance = scope.ServiceProvider.GetRequiredService<IAttendanceService>();
+            var db = scope.ServiceProvider.GetRequiredService<AttendanceDbContext>();
+
+            var now = clock.LocalNow();
+            var to = DateOnly.FromDateTime(now.Date).AddDays(-1);   // 今天还没过完，核对到昨天
+            var from = to.AddDays(-(NightlyAuditDays - 1));
+
+            var issues = await attendance.AuditAsync(from, to);
+            var fixedHours = 0;
+            var hourIds = issues.Where(i => i.Type == AttendanceService.AuditHours).Select(i => i.UserId).Distinct().ToList();
+            if (hourIds.Count > 0) fixedHours = await attendance.RecalcHoursAfterScheduleAsync(hourIds, from, to);
+            var fixedOt = 0;
+            var otIds = issues.Where(i => i.Type == AttendanceService.AuditOtOver).Select(i => i.UserId).Distinct().ToList();
+            if (otIds.Count > 0) fixedOt = await attendance.ReconcileOvertimeAfterScheduleAsync(otIds, from, to);
+            if (fixedHours + fixedOt > 0)
+            {
+                logger.LogInformation("每晚数据核对（{From}~{To}）：自动重算工时 {Hours} 个人天，加班对账 {Ot} 个人天", from, to, fixedHours, fixedOt);
+                issues = await attendance.AuditAsync(from, to);   // 修完再核对一遍，通知里只报还没解决的
+            }
+
+            // 先清掉管理员更早的未读核对通知，再看这一轮要不要发新的
+            await db.Notifications
+                .Where(n => n.NotificationType == NotificationTypes.DataAudit && !n.IsRead)
+                .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true).SetProperty(n => n.ReadAt, now));
+            if (issues.Count == 0) return;
+
+            var byType = string.Join("、", issues.GroupBy(i => i.Type).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}"));
+            var content = $"{from:MM-dd}~{to:MM-dd} 数据核对还有 {issues.Count} 条疑点：{byType}。"
+                + (fixedHours + fixedOt > 0 ? $"（已自动订正工时 {fixedHours}、加班 {fixedOt} 个人天）" : "") + "点击查看明细";
+            var admins = await db.Users.Where(u => u.IsActive && u.Role == UserRole.Admin).Select(u => u.Id).ToListAsync();
+            db.Notifications.AddRange(admins.Select(id => new Notification
+            {
+                UserId = id, Title = AuditNoticeTitle, Content = content,
+                NotificationType = NotificationTypes.DataAudit, CreatedAt = now
+            }));
+            await db.SaveChangesAsync();
+            logger.LogWarning("每晚数据核对（{From}~{To}）剩余 {Count} 条疑点：{ByType}", from, to, issues.Count, byType);
+        }
+        catch (Exception ex) { logger.LogError(ex, "每晚数据核对失败"); }
     }
 
     /// <summary>申请有效期 15 天，超时自动作废（只对 2026-10-23 起提交的申请生效）。失败只记日志，不影响后面的提醒。</summary>

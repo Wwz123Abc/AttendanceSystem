@@ -154,6 +154,8 @@ async function readNotif(id, type, relatedId) {
         location.href = '/Approval/PendingApproval';
     else if (type === 'Announcement')
         location.href = '/Notice/Board';
+    else if (type === 'DataAudit')
+        location.href = '/Admin/DataAudit';
     else
         loadNotifications();
 }

@@ -18,4 +18,7 @@ public static class NotificationTypes
 
     /// <summary>公告。</summary>
     public const string Announcement = "Announcement";
+
+    /// <summary>每晚自动数据核对的结果（只发给管理员）。</summary>
+    public const string DataAudit = "DataAudit";
 }
