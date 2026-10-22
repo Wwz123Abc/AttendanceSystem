@@ -426,8 +426,9 @@ public class ZKDeviceSyncService(
         {
             var midCheckResults = await ResolveMidCheckResultsAsync(uid, workDate, shift, windows, ct);
             record.MidCheckResults = midCheckResults.FormatMidCheckResults();
-            missedWindowEnds = AttendanceService.ResolveMissedNonLastWindowEnds(workDate, shift, midCheckResults);
-            secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, midCheckResults);
+            var effectiveResults = AttendanceService.DropWindowsEndedBeforeArrival(workDate, shift, midCheckResults, ci);   // 到岗时窗口已过的不算漏打
+            missedWindowEnds = AttendanceService.ResolveMissedNonLastWindowEnds(workDate, shift, effectiveResults);
+            secondHalfAbsentBoundary = AttendanceService.ResolveSecondHalfAbsentBoundary(workDate, shift, effectiveResults);
         }
 
         // 休息日不计正班工时（有加班的话只算加班）——跟本地打卡（ComputeDailyWorkHoursAsync）同一套规则

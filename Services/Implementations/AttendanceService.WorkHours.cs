@@ -98,9 +98,10 @@ public partial class AttendanceService
         }
         record.MidCheckResults = results.FormatMidCheckResults();
 
-        var missedEnds = ResolveMissedNonLastWindowEnds(workDate, shift, results);
+        var effective = DropWindowsEndedBeforeArrival(workDate, shift, results, clockIn);   // 到岗时窗口已过的不算漏打
+        var missedEnds = ResolveMissedNonLastWindowEnds(workDate, shift, effective);
         var effectiveClockIn = ClampEffectiveClockIn(workDate, clockIn, shift, missedEnds);
-        return (effectiveClockIn, ResolveSecondHalfAbsentBoundary(workDate, shift, results));
+        return (effectiveClockIn, ResolveSecondHalfAbsentBoundary(workDate, shift, effective));
     }
 
     /// <summary>
@@ -267,6 +268,19 @@ public partial class AttendanceService
         var lastWindow = results[ResolveLastWindowIndex(results)];
         return lastWindow.IsSatisfied ? null : ResolveShiftTime(workDate, lastWindow.WindowStart, shift);
     }
+
+    /// <summary>
+    /// 午间窗口只对"到岗时窗口还没结束（含 <see cref="MidCheckGraceMinutes"/> 分钟宽限）"的人生效：窗口结束之后才到岗的人，
+    /// 根本没有机会打这次午间卡，不能按"漏打"扣工时（2026-10-21 计时工李小勇 10/19 18:04 才到岗被算成 0；
+    /// 2026-10-22 审查发现普通班次的两条路径——本地打卡/补卡重算和考勤机同步、月度汇总补算——有同样的问题：
+    /// 漏打最后一段窗口会把有效下班收窄到窗口开始，而有效上班本来就晚于窗口，上班减下班是负数，工时成 0）。
+    /// 所有"漏打"判断（<see cref="ResolveMissedNonLastWindowEnds"/>、<see cref="ResolveSecondHalfAbsentBoundary"/>）之前，
+    /// 先用这个过一遍窗口结果；写回记录的命中情况仍用完整结果，只是计算工时时剔除。
+    /// </summary>
+    public static List<MidCheckWindowResult> DropWindowsEndedBeforeArrival(
+        DateOnly workDate, ShiftSchedule shift, List<MidCheckWindowResult> results, DateTime clockIn) =>
+        results.Where(w => w.IsSatisfied
+            || clockIn < ResolveShiftTime(workDate, w.WindowEnd, shift).AddMinutes(MidCheckGraceMinutes)).ToList();
 
     /// <summary>
     /// 算"漏打的、且不是最后一段"窗口的结束时间，供 <see cref="ClampEffectiveClockIn"/> 顺延有效

@@ -539,7 +539,7 @@
             <main class="main-content">
                 @RenderBody()
             </main>
-            <footer class="app-footer">© @DateTime.Now.Year 考勤管理系统</footer>
+            <footer class="app-footer">© @DateTime.Now.Year 考勤管理系统<partial name="_IcpFooter" /></footer>
             @if (currentUser?.IsAdmin == true || currentUser?.IsClerk == true)
             {
                 @await Html.PartialAsync("~/Pages/Shared/_AgentWidget.cshtml")

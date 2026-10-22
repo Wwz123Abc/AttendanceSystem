@@ -139,6 +139,7 @@ public partial class AttendanceService
                     else
                     {
                         var midCheckResults = shift is not null ? r.MidCheckResults.ParseMidCheckResults() : [];
+                        if (shift is not null) midCheckResults = DropWindowsEndedBeforeArrival(r.WorkDate, shift, midCheckResults, ci);   // 到岗时窗口已过的不算漏打
                         var missedEnds = shift is not null
                             ? ResolveMissedNonLastWindowEnds(r.WorkDate, shift, midCheckResults)
                             : [];

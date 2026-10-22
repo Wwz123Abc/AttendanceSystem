@@ -1,0 +1,17 @@
+@using Microsoft.Extensions.Configuration
+@inject IConfiguration Configuration
+@*
+    网站底部的 ICP 备案号（工信部要求：首页底部显示备案号，并链接到备案官网 https://beian.miit.gov.cn/）。
+    备案号跟域名走（每个域名各自备案），所以放在配置 Site:IcpNumber 里，不写死在代码里：
+    哪个站点配了就显示、没配就什么都不显示（生产环境 adt.colibri.com.cn 不受影响）。
+    环境变量写法：Site__IcpNumber=津ICP备xxxx号
+*@
+@{
+    var icp = Configuration["Site:IcpNumber"];
+}
+@if (!string.IsNullOrWhiteSpace(icp))
+{
+    <div class="text-center icp-footer" style="font-size:13px;margin-top:6px">
+        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">@icp</a>
+    </div>
+}

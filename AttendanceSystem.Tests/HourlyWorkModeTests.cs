@@ -352,4 +352,30 @@ public class HourlyWorkModeTests : SqliteTestBase
         await SyncAsync(At(8, 25), At(21, 0));   // 窗口还没开始就到岗、之后没打午间卡 → 照旧只算上午
         Assert.InRange((await TueRecordAsync(uid)).ActualWorkHours, 3.5m, 3.6m);
     }
+
+    [Fact]
+    public async Task 普通班次_到岗时午间窗口已过_考勤机同步不按漏打算成0()
+    {
+        var (uid, _) = SeedHourly(hourlyOn: false);   // 普通考勤组，白班 08:30–17:30，午间窗口 12:00–13:00
+        await SyncAsync(At(13, 40), At(17, 35));       // 13:40 才到（窗口结束 + 30 分钟宽限 = 13:30，已过）
+        var rec = await TueRecordAsync(uid);
+        Assert.Equal(3.5m, rec.ActualWorkHours);        // 13:40–17:30（不晚于应下班时间）= 3 小时 50 分 → 3.5；以前漏打最后一段窗口 → 下班收窄到 12:00 → 0
+    }
+
+    [Fact]
+    public async Task 普通班次_到岗时午间窗口已过_手机打卡也不算成0()
+    {
+        var (uid, _) = SeedHourly(hourlyOn: false);
+        Assert.True((await PunchAtAsync(uid, At(13, 40), PunchType.ClockIn)).Success);
+        Assert.True((await PunchAtAsync(uid, At(17, 35), PunchType.ClockOut)).Success);
+        Assert.Equal(3.5m, (await TueRecordAsync(uid)).ActualWorkHours);
+    }
+
+    [Fact]
+    public async Task 普通班次_窗口开始前到岗没打午间卡_仍按漏打只算上午()
+    {
+        var (uid, _) = SeedHourly(hourlyOn: false);
+        await SyncAsync(At(8, 25), At(17, 35));   // 窗口开始前就到岗，之后没打午间卡 → 规则不变
+        Assert.InRange((await TueRecordAsync(uid)).ActualWorkHours, 3m, 3.6m);   // 08:30–12:00
+    }
 }
