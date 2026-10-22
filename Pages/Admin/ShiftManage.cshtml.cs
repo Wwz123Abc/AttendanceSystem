@@ -566,12 +566,16 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             // 排班补上/改了：这段日期里已经批准的加班单，按新排的班次重新对一遍（加班只记班次上下班时间之外的部分），
             // 避免"先提交加班、后补排班"造成正班和加班重复计算
             var personDays = userIds.Count * (end.DayNumber - start.DayNumber + 1);
+            var recalcedHours = personDays <= MaxReconcilePersonDays
+                ? await attendanceService.RecalcHoursAfterScheduleAsync(userIds.ToList(), start, end)   // 先按新班次重算正班工时
+                : 0;
             var reconciled = personDays <= MaxReconcilePersonDays
                 ? await attendanceService.ReconcileOvertimeAfterScheduleAsync(userIds.ToList(), start, end)
                 : 0;
 
             SuccessMessage = $"排班成功：{count} 条记录"
                 + (skipped > 0 ? $"；已跳过 {skipped} 条（员工未入职）" : "")
+                + (recalcedHours > 0 ? $"；有 {recalcedHours} 个人天已打卡的记录，正班工时已按新班次重算" : "")
                 + (reconciled > 0 ? $"；有 {reconciled} 个人天的加班时长和班次重叠，已按班次扣除重叠部分" : "")
                 + (personDays > MaxReconcilePersonDays ? $"；人天较多（{personDays}），没有自动对账加班时长，请缩小范围分批排班" : "")
                 + (skippedPast > 0 ? $"；已跳过 {skippedPast} 条今天之前已排过别的班次的日期（勾选「允许覆盖过去的排班」才会改，改了历史工时不会自动重算）" : "")

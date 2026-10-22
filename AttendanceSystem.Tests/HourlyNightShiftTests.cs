@@ -230,4 +230,20 @@ public class HourlyNightShiftTests : SqliteTestBase
         Assert.True(await db2.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Tue && r.ClockInTime == Tue_(8, 25)));
         Assert.False(await db2.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == Mon));
     }
+
+    [Fact]
+    public void 白班下班到0点被标成跨天班次_不当夜班_白天打卡有效()
+    {
+        // 交付部「INN-SZ临时工班」：08:30 上班、次日 00:00 下班，下班 ≤ 上班被标成跨天班次，但它是白班
+        var dayCross = new AttendanceSystem.Models.Entities.ShiftSchedule
+        {
+            ShiftName = "INN-SZ临时工班", WorkStartTime = new TimeOnly(8, 30), WorkEndTime = new TimeOnly(0, 0), IsCrossDay = true
+        };
+        Assert.False(AttendanceService.IsHourlyNightShift(dayCross));
+        Assert.True(AttendanceService.IsHourlyNightShift(NightShift()));
+        Assert.Equal(Tue, AttendanceService.ResolveHourlyWorkDate(Tue_(8, 40), dayCross, dayCross));   // 白天 08:40 的打卡有效，归当天
+        Assert.Equal(Tue, AttendanceService.ResolveHourlyWorkDate(Tue_(21, 30), dayCross, dayCross));
+        // 按白班算：不套夜班的"只扣 0 点到 1 点的饭、次日 10 点封顶"
+        Assert.Equal(11m, AttendanceService.ComputeHourlyWorkHours(Tue, Tue_(8, 25), Tue_(21, 0), dayCross, null));   // 12 小时 35 分，扣午饭 1 小时、晚饭 0.5 小时
+    }
 }

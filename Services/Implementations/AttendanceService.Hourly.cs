@@ -16,6 +16,14 @@ public partial class AttendanceService
 
     public const string HourlyInvalidTimeMessage = "计时工 00:00 到 07:00 之间的打卡无效，请 07:00 以后再打卡";
 
+    /// <summary>
+    /// 计时工里算不算"夜班"：跨天班次，并且是晚上开始（17:00 之后）的。只看 <see cref="ShiftSchedule.IsCrossDay"/> 不够：
+    /// "08:30 上班、次日 00:00 下班"这种白班，下班时间 ≤ 上班时间，会被标成跨天班次（2026-10-22 数据核对发现交付部的
+    /// 「INN-SZ临时工班」就是这样），如果按夜班算，白天的打卡会被当成无效、工时也会按夜班规则算。
+    /// </summary>
+    public static bool IsHourlyNightShift(ShiftSchedule? shift) =>
+        shift is { IsCrossDay: true } && shift.WorkStartTime >= new TimeOnly(17, 0);
+
     /// <summary>计时工夜班（排的是跨天班次）：上班日这个钟点（含）之后才有效。</summary>
     public const int HourlyNightEarliestHour = 19;
     /// <summary>计时工夜班：次日这个钟点（不含）之前才有效，下班卡最晚算到这里，再晚的时间不计入工时。</summary>
@@ -35,8 +43,8 @@ public partial class AttendanceService
     public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift)
     {
         var d = DateOnly.FromDateTime(punchTime);
-        if (prevShift is { IsCrossDay: true } && punchTime.Hour < HourlyNightLatestHour) return d.AddDays(-1);
-        if (todayShift is { IsCrossDay: true }) return punchTime.Hour >= HourlyNightEarliestHour ? d : null;
+        if (IsHourlyNightShift(prevShift) && punchTime.Hour < HourlyNightLatestHour) return d.AddDays(-1);
+        if (IsHourlyNightShift(todayShift)) return punchTime.Hour >= HourlyNightEarliestHour ? d : null;
         return IsHourlyPunchTimeValid(punchTime) ? d : null;
     }
 
@@ -46,11 +54,11 @@ public partial class AttendanceService
     /// （非计时工的夜班续接一直要求昨天有上班卡，这里保持一致）。传给 <see cref="ResolveHourlyWorkDate"/> 的 prevShift 用这个过一遍。
     /// </summary>
     public static ShiftSchedule? EffectivePrevNightShift(ShiftSchedule? prevShift, DateTime? prevClockIn) =>
-        prevShift is { IsCrossDay: true } && prevClockIn is null ? null : prevShift;
+        IsHourlyNightShift(prevShift) && prevClockIn is null ? null : prevShift;
 
     /// <summary>打卡无效时给员工看的提示：夜班员工和白班员工的有效时间不一样。</summary>
     public static string HourlyInvalidMessageFor(ShiftSchedule? todayShift, ShiftSchedule? prevShift) =>
-        todayShift is { IsCrossDay: true } || prevShift is { IsCrossDay: true } ? HourlyNightInvalidTimeMessage : HourlyInvalidTimeMessage;
+        IsHourlyNightShift(todayShift) || IsHourlyNightShift(prevShift) ? HourlyNightInvalidTimeMessage : HourlyInvalidTimeMessage;
 
     /// <summary>所有开启了计时工模式的考勤组：考勤组 Id → 起始日。</summary>
     public async Task<Dictionary<int, DateOnly>> LoadHourlyGroupStartsAsync() =>
@@ -109,7 +117,7 @@ public partial class AttendanceService
         // 夜班（跨天班次）：下班卡最晚算到次日 10:00；扣次日 00:00–01:00（1 小时）和 05:30–06:00（0.5 小时）两段饭
         // （2026-10-21 用户确认：00:00–01:00，再加上系统默认的 05:30–06:00），不再按白班的 12:00–13:00、17:30–18:00 扣；不封顶。
         // 班次配了午间窗口（比如 00:00–01:00）的话，漏打也按计时工统一规则：只算窗口开始之前的工时（上面已经处理）
-        if (shift is { IsCrossDay: true })
+        if (IsHourlyNightShift(shift))
         {
             var nightLatest = workDate.AddDays(1).ToDateTime(new TimeOnly(HourlyNightLatestHour, 0));
             if (effOut > nightLatest) effOut = nightLatest;

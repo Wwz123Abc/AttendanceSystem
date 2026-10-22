@@ -96,7 +96,7 @@ public static class PunchReplenishmentRules
     public static string? FindProblem(PunchType type, DateOnly date, DateTime punchAt, ReplenishmentContext ctx, bool allowOverwrite = false)
     {
         // 计时工：没有夜班/跨天，补的时间必须在当天 07:00 到 23:59 之间（不能补到第二天凌晨）
-        if (ctx.Hourly && ctx.Shift is { IsCrossDay: true })
+        if (ctx.Hourly && AttendanceService.IsHourlyNightShift(ctx.Shift))
         {
             // 夜班计时工：补的时间必须在上班日 19:00 到次日 10:00 之间
             var nightFrom = date.ToDateTime(new TimeOnly(AttendanceService.HourlyNightEarliestHour, 0));

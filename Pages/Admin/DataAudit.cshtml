@@ -1,0 +1,73 @@
+@page
+@model AttendanceSystem.Pages.Admin.DataAuditModel
+@{
+    ViewData["Title"] = "数据核对";
+    string[] week = ["日", "一", "二", "三", "四", "五", "六"];
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-clipboard2-check me-2 text-primary"></i>数据核对</h4>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-3">
+        <form method="get" class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label small mb-1">开始日期</label>
+                <input type="date" name="start" class="form-control form-control-sm" value="@Model.Start.ToString("yyyy-MM-dd")" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label small mb-1">结束日期</label>
+                <input type="date" name="end" class="form-control form-control-sm" value="@Model.End.ToString("yyyy-MM-dd")" />
+            </div>
+            <div class="col-auto"><button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i>核对</button></div>
+            <div class="col-12"><div class="form-text">把这段时间每条考勤记录按现行规则从原始打卡、班次、午间窗口、加班单重新算一遍，和系统里存的工时、加班对比。只读，不改任何数据；最长 63 天。红色 = 工资可能算错，黄色 = 缺前提需要人工确认。</div></div>
+        </form>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header py-2">
+        @Model.Start.ToString("yyyy-MM-dd") 至 @Model.End.ToString("yyyy-MM-dd")：
+        @if (Model.Summary.Count == 0) { <span class="text-success fw-semibold">没有发现疑点，存的数和现行规则算出来的一致</span> }
+        else { <span class="fw-semibold">共 @Model.Summary.Sum(s => s.Count) 条疑点</span> }
+    </div>
+    @if (Model.Summary.Count > 0)
+    {
+        <div class="card-body py-2 d-flex flex-wrap gap-2">
+            <a class="btn btn-sm @(Model.TypeFilter is null ? "btn-dark" : "btn-outline-dark")" href="?start=@Model.Start.ToString("yyyy-MM-dd")&end=@Model.End.ToString("yyyy-MM-dd")">全部</a>
+            @foreach (var s in Model.Summary)
+            {
+                <a class="btn btn-sm @(Model.TypeFilter == s.Type ? (s.Severity == "danger" ? "btn-danger" : "btn-warning") : (s.Severity == "danger" ? "btn-outline-danger" : "btn-outline-warning"))"
+                   href="?start=@Model.Start.ToString("yyyy-MM-dd")&end=@Model.End.ToString("yyyy-MM-dd")&type=@Uri.EscapeDataString(s.Type)">@s.Type（@s.Count）</a>
+            }
+        </div>
+    }
+</div>
+
+@if (Model.Issues.Count > 0)
+{
+    <div class="card">
+        <div class="card-header py-2">疑点明细@(Model.Truncated ? $"（只显示前 {Model.Issues.Count} 条，共 {Model.TotalIssues} 条，请缩小日期范围或点上面的类型筛选）" : "")</div>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle" style="font-size:.86rem">
+                <thead class="table-light"><tr><th>日期</th><th>工号</th><th>姓名</th><th>考勤组</th><th>类型</th><th>系统里</th><th>应为</th><th>说明</th></tr></thead>
+                <tbody>
+                @foreach (var i in Model.Issues)
+                {
+                    <tr class="@(i.Severity == "danger" ? "table-danger" : "table-warning")">
+                        <td>@i.WorkDate.ToString("MM-dd")（周@(week[(int)i.WorkDate.DayOfWeek])）</td>
+                        <td><a href="/Admin/EmployeeRecord?keyword=@Uri.EscapeDataString(i.EmployeeNo)">@i.EmployeeNo</a></td>
+                        <td>@i.RealName</td>
+                        <td>@i.GroupName</td>
+                        <td>@i.Type</td>
+                        <td>@(i.Stored?.ToString("0.##"))</td>
+                        <td>@(i.Expected?.ToString("0.##"))</td>
+                        <td class="text-muted" style="max-width:520px">@i.Detail</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}

@@ -70,8 +70,11 @@ public partial class AttendanceService
     /// <paramref name="userIds"/> 为空 = 所有人；<paramref name="dryRun"/>=true 只算不写库。幂等。
     /// </summary>
     public async Task<List<OvertimeReconcileRow>> ReconcileOvertimeAsync(
-        IReadOnlyCollection<int>? userIds, DateOnly from, DateOnly to, bool dryRun, CancellationToken ct = default)
+        IReadOnlyCollection<int>? userIds, DateOnly from, DateOnly to, bool dryRun, CancellationToken ct = default,
+        bool includeUnderRecorded = false)
     {
+        // includeUnderRecorded（只在试算时有意义）：把"记录上的加班比单子对账后的合计还少"的人天也列出来（正常对账只减不增，
+        // 看不到少记的——2026-10-22 查谢振波 10/3 发现 10/20 的"夜班延续订正"把晚上那张 11 小时的单子误清零）
         var fromDt = from.AddDays(-1).ToDateTime(TimeOnly.MinValue);
         var toDt   = to.AddDays(2).ToDateTime(TimeOnly.MinValue);
         var forms = await db.ApprovalRequests
@@ -151,7 +154,16 @@ public partial class AttendanceService
         var touchedMonths = new HashSet<(int UserId, int Year, int Month)>();
         foreach (var ((uid, wd), newSum) in sumByDay.OrderBy(k => k.Key.Item1).ThenBy(k => k.Key.Item2))
         {
-            if (!recordByUserDay.TryGetValue((uid, wd), out var rec) || rec.OvertimeHours <= newSum) continue;   // 只减不增
+            recordByUserDay.TryGetValue((uid, wd), out var rec);
+            if (includeUnderRecorded && dryRun && (rec?.OvertimeHours ?? 0m) + 0.01m < newSum)
+            {
+                var uu = users[uid];
+                result.Add(new OvertimeReconcileRow(uid, uu.EmployeeNo, uu.RealName, wd, shiftNameByDay.GetValueOrDefault((uid, wd), ""),
+                    rec?.OvertimeHours ?? 0m, newSum, string.Join("、", forms.Where(f => f.ApplicantUserId == uid && formHours.ContainsKey(f.Id)
+                        && DateOnly.FromDateTime(f.OvertimeStartTime!.Value) >= wd.AddDays(-1) && DateOnly.FromDateTime(f.OvertimeStartTime!.Value) <= wd.AddDays(1)).Select(f => f.RequestNo))));
+                continue;
+            }
+            if (rec is null || rec.OvertimeHours <= newSum) continue;   // 只减不增
             var u = users[uid];
             result.Add(new OvertimeReconcileRow(uid, u.EmployeeNo, u.RealName, wd, shiftNameByDay.GetValueOrDefault((uid, wd), ""),
                 rec.OvertimeHours, newSum, string.Join("、", forms.Where(f => f.ApplicantUserId == uid && formHours.ContainsKey(f.Id)

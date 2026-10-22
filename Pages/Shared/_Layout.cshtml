@@ -448,6 +448,12 @@
                         </a>
                     </li>
                     <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Admin/DataAudit") ? "active" : "")"
+                           href="/Admin/DataAudit">
+                            <i class="bi bi-clipboard2-check"></i>数据核对
+                        </a>
+                    </li>
+                    <li>
                         <a class="nav-link @(currentPath.StartsWith("/Admin/PunchAdjust") ? "active" : "")"
                            href="/Admin/PunchAdjust">
                             <i class="bi bi-clock-history"></i>手动补卡
