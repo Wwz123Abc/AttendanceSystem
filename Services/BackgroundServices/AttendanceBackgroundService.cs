@@ -112,6 +112,7 @@ public class AttendanceBackgroundService(
                 // 差值必然超过 4 小时，所以启动后很快就会先跑一次，不用等真的攒够 4 小时）
                 if (now - _lastApprovalReminderAt >= TimeSpan.FromHours(4))
                 {
+                    await ExpireStaleApprovalsAsync();   // 先把超过 15 天没处理的新申请作废，再提醒（作废的就不用再提醒了）
                     await RemindPendingApprovalsAsync();
                     _lastApprovalReminderAt = now;
                 }
@@ -124,6 +125,19 @@ public class AttendanceBackgroundService(
 
             await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);   // 歇 1 分钟再检查
         }
+    }
+
+    /// <summary>申请有效期 15 天，超时自动作废（只对 2026-10-23 起提交的申请生效）。失败只记日志，不影响后面的提醒。</summary>
+    private async Task ExpireStaleApprovalsAsync()
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var approvals = scope.ServiceProvider.GetRequiredService<IApprovalService>();
+            var n = await approvals.ExpireStaleApprovalsAsync();
+            if (n > 0) logger.LogInformation("已自动作废超过 {Days} 天没处理的申请 {Count} 张", Services.Implementations.ApprovalService.ApprovalValidDays, n);
+        }
+        catch (Exception ex) { logger.LogError(ex, "自动作废超期申请失败"); }
     }
 
     /// <summary>这一天库里有没有任何"旷工"记录（用来判断那天的旷工标记有没有跑过）。</summary>

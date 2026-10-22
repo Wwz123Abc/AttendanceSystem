@@ -13,6 +13,9 @@ public interface IApprovalService
     Task<bool> HandleApprovalAsync(int approverUserId, HandleApprovalDto dto);
     /// <summary>申请人撤销申请（仅「待审批」状态可撤销）。</summary>
     Task<bool> CancelApprovalAsync(int userId, int approvalRequestId);
+
+    /// <summary>把超过有效期（15 天）还没处理、且在 <c>ApprovalService.ExpiryAppliesFrom</c> 之后提交的待审批/审批中申请自动作废，通知申请人。返回作废的张数。幂等。</summary>
+    Task<int> ExpireStaleApprovalsAsync();
     /// <summary>审批记录分页查询。</summary>
     /// <paramref name="deptIds"/> 非空时只查申请人部门在这个集合内的申请——分公司管理员查询/浏览审批记录时
     /// 用来收窄到自己范围内，不受限管理员不传（查全公司）。

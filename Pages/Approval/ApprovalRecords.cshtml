@@ -17,6 +17,7 @@
         ApprovalStatus.Approved   => "text-success",
         ApprovalStatus.Rejected   => "text-danger",
         ApprovalStatus.Cancelled  => "text-muted",
+        ApprovalStatus.Expired    => "text-muted",
         _                         => "text-warning"
     };
     var cur = Model.PageIndex;
@@ -70,6 +71,7 @@
                     <option value="@nameof(ApprovalStatus.Approved)"   selected="@(Model.Status == nameof(ApprovalStatus.Approved))">已通过</option>
                     <option value="@nameof(ApprovalStatus.Rejected)"   selected="@(Model.Status == nameof(ApprovalStatus.Rejected))">已驳回</option>
                     <option value="@nameof(ApprovalStatus.Cancelled)"  selected="@(Model.Status == nameof(ApprovalStatus.Cancelled))">已撤销</option>
+                    <option value="@nameof(ApprovalStatus.Expired)"    selected="@(Model.Status == nameof(ApprovalStatus.Expired))">已作废</option>
                 </select>
             </div>
             <div class="col-12 col-md-2">

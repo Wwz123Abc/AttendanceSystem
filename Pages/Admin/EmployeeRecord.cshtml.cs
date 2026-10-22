@@ -152,7 +152,7 @@ public class EmployeeRecordModel(AttendanceDbContext db, IDeptScopeService deptS
             .OrderByDescending(a => a.SubmittedAt).Take(200).ToListAsync();
         Approvals = approvals.Select(a => new ApprovalRow(a.RequestNo,
             a.ApprovalType switch { ApprovalType.PunchReplenishment => "补卡", ApprovalType.Leave => "请假", ApprovalType.Overtime => "加班", _ => "出差" },
-            a.ApprovalStatus switch { ApprovalStatus.Pending => "待审批", ApprovalStatus.InProgress => "审批中", ApprovalStatus.Approved => "已通过", ApprovalStatus.Rejected => "已驳回", _ => "已撤销" },
+            a.ApprovalStatus switch { ApprovalStatus.Pending => "待审批", ApprovalStatus.InProgress => "审批中", ApprovalStatus.Approved => "已通过", ApprovalStatus.Rejected => "已驳回", ApprovalStatus.Expired => "已作废", _ => "已撤销" },
             a.ApprovalType switch
             {
                 ApprovalType.Overtime => $"{a.OvertimeStartTime:MM-dd HH:mm} ~ {a.OvertimeEndTime:MM-dd HH:mm}",

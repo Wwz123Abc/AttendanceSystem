@@ -512,6 +512,51 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     }
 
     /// <summary>申请人撤销自己的申请（“待审批”和“审批中”都能撤；二级审批过了第一级变成“审批中”后，第二级审批人离职/卡住时，申请人也要能撤回重提）。</summary>
+    /// <summary>申请有效期：提交后这么多天还没处理，自动作废。</summary>
+    public const int ApprovalValidDays = 15;
+
+    /// <summary>
+    /// "超时作废"只对这个时间点（含）之后提交的申请生效（2026-10-22 用户确认"只对新申请生效"）：上线时线上有 257 张
+    /// 提交已超过 15 天的待审批申请（249 张是加班单），一次性作废会直接影响员工的加班工资，所以老申请照旧由审批人处理。
+    /// </summary>
+    public static readonly DateTime ExpiryAppliesFrom = new(2026, 10, 23);
+
+    /// <inheritdoc />
+    public async Task<int> ExpireStaleApprovalsAsync()
+    {
+        var now = clock.LocalNow();
+        var deadline = now.AddDays(-ApprovalValidDays);
+        var stale = await db.ApprovalRequests
+            .Where(a => (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress)
+                        && a.SubmittedAt >= ExpiryAppliesFrom && a.SubmittedAt < deadline)
+            .Select(a => new { a.Id, a.ApplicantUserId, a.RequestNo, a.SubmittedAt })
+            .ToListAsync();
+
+        var expired = 0;
+        foreach (var a in stale)
+        {
+            // 跟撤销一样用"抢占式"条件更新：只有整单现在确实还没被处理才作废，不会和审批人同时处理撞车
+            var claimed = await db.ApprovalRequests
+                .Where(x => x.Id == a.Id && (x.ApprovalStatus == ApprovalStatus.Pending || x.ApprovalStatus == ApprovalStatus.InProgress))
+                .ExecuteUpdateAsync(x => x
+                    .SetProperty(r => r.ApprovalStatus, ApprovalStatus.Expired)
+                    .SetProperty(r => r.UpdatedAt, now));
+            if (claimed == 0) continue;
+            await db.ApprovalSteps
+                .Where(s => s.ApprovalRequestId == a.Id && s.ApprovalStatus == ApprovalStatus.Pending)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.ApprovalStatus, ApprovalStatus.Cancelled));   // 审批人的待办里同步去掉
+            db.Notifications.Add(new Notification
+            {
+                UserId = a.ApplicantUserId, Title = "申请已作废",
+                Content = $"您的申请 {a.RequestNo}（{a.SubmittedAt:MM/dd} 提交）超过 {ApprovalValidDays} 天没有被处理，已自动作废。如仍需办理，请重新提交，并记得联系审批人。",
+                NotificationType = NotificationTypes.ApprovalResult, RelatedId = a.Id, CreatedAt = now
+            });
+            expired++;
+        }
+        if (expired > 0) await db.SaveChangesAsync();
+        return expired;
+    }
+
     public async Task<bool> CancelApprovalAsync(int userId, int approvalRequestId)
     {
         // 跟 HandleApprovalAsync 用同一套"抢占式"条件更新：只有整单现在确实还是 Pending 才能撤，
@@ -990,6 +1035,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         ApprovalStatus.Approved   => "已通过",
         ApprovalStatus.Rejected   => "已驳回",
         ApprovalStatus.Cancelled  => "已撤销",
+        ApprovalStatus.Expired    => "已作废",
         _                         => "未知"
     };
 
@@ -1001,6 +1047,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         ApprovalStatus.Approved   => "f-color-green",
         ApprovalStatus.Rejected   => "f-color-red",
         ApprovalStatus.Cancelled  => "f-color-gray",
+        ApprovalStatus.Expired    => "f-color-gray",
         _                         => ""
     };
 
