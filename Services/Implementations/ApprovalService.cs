@@ -182,8 +182,11 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     /// </summary>
     private async Task ValidatePunchReplenishmentAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
     {
-        if (dto.PunchDate is null || dto.PunchType is null || dto.PunchTime is null)
-            throw new BusinessException("请填写完整的补卡日期、类型和时间");
+        // 缺哪一项就说哪一项：以前统一报"请填写完整的补卡日期、类型和时间"，员工看着三项都有内容却被拒（手机浏览器的时间框
+        // 显示了默认时间但没真正选），不知道缺的是哪个（2026-10-22 叶镇南反馈）
+        if (dto.PunchDate is null) throw new BusinessException("请选择补卡日期");
+        if (dto.PunchType is null) throw new BusinessException("请选择打卡类型（上班、下班或午间）");
+        if (dto.PunchTime is null) throw new BusinessException("请填写打卡时间：点一下“打卡时间”框，选好具体的时和分再提交");
         if (dto.PunchDate.Value > DateOnly.FromDateTime(clock.LocalToday()))
             throw new BusinessException("补卡日期不能晚于今天");
         var type = dto.PunchType.Value;

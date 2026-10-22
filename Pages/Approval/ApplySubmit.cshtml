@@ -74,7 +74,8 @@
                         </div>
                         <div class="mb-3">
                             <label class="form-label">打卡时间</label>
-                            <input asp-for="PunchTime" type="time" class="form-control" />
+                            <input asp-for="PunchTime" type="time" class="form-control" id="fPunchTime" required />
+                            <div class="form-text">请点一下上面的时间框，选好具体的时和分（部分手机浏览器会显示一个默认时间，但没选就不算填写）。</div>
                         </div>
                     </div>
 

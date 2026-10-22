@@ -1,7 +1,7 @@
 // 每种申请类型对应哪几个"必填"的日期/时间字段（id）
 const REQUIRED_FIELDS_BY_TYPE = {
     Leave:              ['fLeaveStart', 'fLeaveEnd'],
-    PunchReplenishment: ['fPunchDate'],
+    PunchReplenishment: ['fPunchDate', 'fPunchTime'],   // 打卡时间也是必填：手机浏览器的时间框可能显示默认值但其实没选，提交后被服务器拒绝
     Overtime:           ['fOvertimeStart', 'fOvertimeEnd'],
     BusinessTrip:       ['fTripStart', 'fTripEnd']
 };
