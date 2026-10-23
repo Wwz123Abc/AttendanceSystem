@@ -62,23 +62,42 @@ public partial class AttendanceService
     /// （17:30 之后）算，只在发薪汇总报表里把这半小时加回来；考勤记录、加班单、员工明细、数据核对都保持原样。
     /// 补偿 = 这个人当天已通过的加班单里，落在 17:00–17:30 且确实被该组饭点扣掉的那部分（自动随饭点设置变化：
     /// 以后把晚饭段改成 17:30 起，这里自然补 0，不会重复加）。
+    /// 2026-10-23 修正（9/26、9/27、10/3、10/4 数据核对）：库里存的加班有的是按旧饭点（17:30–18:00）算的，本来就没少扣
+    /// （如 08:30–17:30 存 8、08:30–20:30 存 10.5），不能再补。所以补偿还要同时满足：不超过"按白班实际晚饭 17:30–18:30 重算的
+    /// 加班时长"和"库里存的值"之间的差——只补真正少了的，存的值已经够了就不补。
     /// </summary>
     private const string DinnerCompGroupName = "新能源-客服";
     private const string DinnerCompShiftName = "白班";
 
     private static decimal ComputeDinnerOvertimeCompensation(
-        DateOnly date, int? groupId, IReadOnlyList<(DateTime Start, DateTime End)> approvedOtOfDay)
+        DateOnly date, int? groupId, IReadOnlyList<(DateTime Start, DateTime End)> approvedOtOfDay, decimal storedHalf)
     {
         var winStart = date.ToDateTime(new TimeOnly(17, 0));
         var winEnd   = date.ToDateTime(new TimeOnly(17, 30));
-        decimal minutes = 0;
+        decimal lostMinutes = 0;      // 被该组饭点多扣在 17:00–17:30 的分钟数
+        decimal intendedHours = 0;    // 按"晚饭 17:30–18:30"重算的加班时长（每张单半小时取整再累加）
+        // 该组饭点里去掉晚饭段（17:00–18:30 内开始的），换成白班实际的晚饭 17:30–18:30
+        var intendedWindows = UnpaidBreakSettings.WindowsFor(groupId)
+            .Where(w => !(w.Start >= new TimeOnly(17, 0) && w.Start < new TimeOnly(18, 30)))
+            .Append((new TimeOnly(17, 30), new TimeOnly(18, 30))).ToList();
         foreach (var (s, e) in approvedOtOfDay)
         {
             var cs = s > winStart ? s : winStart;
             var ce = e < winEnd ? e : winEnd;
-            if (ce > cs) minutes += (decimal)ComputeUnpaidBreakOverlapMinutes(cs, ce, groupId);
+            if (ce > cs) lostMinutes += (decimal)ComputeUnpaidBreakOverlapMinutes(cs, ce, groupId);
+            if (e <= s) continue;
+            double overlap = 0;
+            for (var day = DateOnly.FromDateTime(s.Date); day <= DateOnly.FromDateTime(e.Date); day = day.AddDays(1))
+                foreach (var (ws, we) in intendedWindows)
+                {
+                    var os = day.ToDateTime(ws) > s ? day.ToDateTime(ws) : s;
+                    var oe = day.ToDateTime(we) < e ? day.ToDateTime(we) : e;
+                    if (oe > os) overlap += (oe - os).TotalMinutes;
+                }
+            intendedHours += FloorToHalf(((decimal)(e - s).TotalMinutes - (decimal)overlap) / 60);
         }
-        return FloorToHalf(minutes / 60);
+        var comp = FloorToHalf(lostMinutes / 60);
+        return Math.Min(comp, Math.Max(0m, intendedHours - storedHalf));
     }
 
     private async Task<TemplateReportResultDto> GenerateTemplateReportCoreAsync(
@@ -213,7 +232,7 @@ public partial class AttendanceService
                     var otHalf      = rec.OvertimeHours > 0 ? FloorToHalf(rec.OvertimeHours) : 0m;
                     var dinnerComp  = otHalf > 0 && assign?.ShiftSchedule.ShiftName == DinnerCompShiftName
                                       && otByUserDay.TryGetValue((user.Id, date), out var compOts)
-                                      ? ComputeDinnerOvertimeCompensation(date, user.AttendanceGroupId, compOts) : 0m;
+                                      ? ComputeDinnerOvertimeCompensation(date, user.AttendanceGroupId, compOts, otHalf) : 0m;
                     otHalf += dinnerComp;   // 新能源-客服白班：把被晚饭段 17:00–17:30 多扣的加班时长加回来（见 DinnerCompGroupName）
                     if (regularHalf + otHalf > 0) dayHours = regularHalf + otHalf;   // 每日格子 = 正班 + 加班（半小时取整，不足舍去）
                     totalWork += regularHalf;                                          // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
