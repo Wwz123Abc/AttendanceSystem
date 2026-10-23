@@ -56,6 +56,31 @@ public partial class AttendanceService
     public async Task<TemplateReportRowDto?> GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default)
         => (await GenerateTemplateReportCoreAsync(start, end, null, userId, ct)).Rows.FirstOrDefault();
 
+    /// <summary>
+    /// 新能源-客服考勤组"白班"的加班补偿（2026-10-23 用户决定）：这个组的晚饭时段是 17:00–18:00，白班 17:30 下班，
+    /// 休息日白班加班（比如 08:30–17:30）会被 17:00–17:30 这半小时晚饭多扣 0.5 小时，用户希望按白班实际吃饭时间
+    /// （17:30 之后）算，只在发薪汇总报表里把这半小时加回来；考勤记录、加班单、员工明细、数据核对都保持原样。
+    /// 补偿 = 这个人当天已通过的加班单里，落在 17:00–17:30 且确实被该组饭点扣掉的那部分（自动随饭点设置变化：
+    /// 以后把晚饭段改成 17:30 起，这里自然补 0，不会重复加）。
+    /// </summary>
+    private const string DinnerCompGroupName = "新能源-客服";
+    private const string DinnerCompShiftName = "白班";
+
+    private static decimal ComputeDinnerOvertimeCompensation(
+        DateOnly date, int? groupId, IReadOnlyList<(DateTime Start, DateTime End)> approvedOtOfDay)
+    {
+        var winStart = date.ToDateTime(new TimeOnly(17, 0));
+        var winEnd   = date.ToDateTime(new TimeOnly(17, 30));
+        decimal minutes = 0;
+        foreach (var (s, e) in approvedOtOfDay)
+        {
+            var cs = s > winStart ? s : winStart;
+            var ce = e < winEnd ? e : winEnd;
+            if (ce > cs) minutes += (decimal)ComputeUnpaidBreakOverlapMinutes(cs, ce, groupId);
+        }
+        return FloorToHalf(minutes / 60);
+    }
+
     private async Task<TemplateReportResultDto> GenerateTemplateReportCoreAsync(
         DateOnly start, DateOnly end, List<int>? deptIds, int? onlyUserId, CancellationToken ct, IReadOnlyCollection<int>? onlyUserIds = null)
     {
@@ -100,6 +125,21 @@ public partial class AttendanceService
             .ToDictionary(g => g.Key, g => g.ToDictionary(a => a.WorkDate));
 
         var night = await ComputeNightShiftDaysRangeAsync(userIds, start, end);
+
+        // 新能源-客服白班加班补偿要用的已通过加班单（只预取这个考勤组的人）
+        var compUserIds = users.Where(u => u.AttendanceGroup?.GroupName == DinnerCompGroupName).Select(u => u.Id).ToList();
+        var startDt = start.ToDateTime(TimeOnly.MinValue);
+        var endDt = end.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var otByUserDay = compUserIds.Count == 0
+            ? new Dictionary<(int, DateOnly), List<(DateTime, DateTime)>>()
+            : (await db.ApprovalRequests
+                    .Where(a => compUserIds.Contains(a.ApplicantUserId) && a.ApprovalType == ApprovalType.Overtime
+                                && a.ApprovalStatus == ApprovalStatus.Approved
+                                && a.OvertimeStartTime >= startDt && a.OvertimeStartTime < endDt && a.OvertimeEndTime != null)
+                    .Select(a => new { a.ApplicantUserId, Start = a.OvertimeStartTime!.Value, End = a.OvertimeEndTime!.Value })
+                    .ToListAsync(ct))
+                .GroupBy(a => (a.ApplicantUserId, DateOnly.FromDateTime(a.Start)))
+                .ToDictionary(g => g.Key, g => g.Select(a => (a.Start, a.End)).ToList());
 
         var rows = new List<TemplateReportRowDto>();
         foreach (var user in users)
@@ -171,6 +211,10 @@ public partial class AttendanceService
                     var regularHalf = hourlyDay ? FloorToHalf(rec.ActualWorkHours)   // 计时工不封顶
                                     : isShiftRest ? 0m : FloorToHalf(Math.Min(rec.ActualWorkHours, dailyStdHours));
                     var otHalf      = rec.OvertimeHours > 0 ? FloorToHalf(rec.OvertimeHours) : 0m;
+                    var dinnerComp  = otHalf > 0 && assign?.ShiftSchedule.ShiftName == DinnerCompShiftName
+                                      && otByUserDay.TryGetValue((user.Id, date), out var compOts)
+                                      ? ComputeDinnerOvertimeCompensation(date, user.AttendanceGroupId, compOts) : 0m;
+                    otHalf += dinnerComp;   // 新能源-客服白班：把被晚饭段 17:00–17:30 多扣的加班时长加回来（见 DinnerCompGroupName）
                     if (regularHalf + otHalf > 0) dayHours = regularHalf + otHalf;   // 每日格子 = 正班 + 加班（半小时取整，不足舍去）
                     totalWork += regularHalf;                                          // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
                     if (isNightShift) nightShiftHours += regularHalf;                  // 夜班总工时：当天算夜班才计入
@@ -208,7 +252,7 @@ public partial class AttendanceService
                         // 参考模板里"加班总时长"这几列的单位是小时，跟"工作时长"同一个口径，不用再换算。
                         // 每天的加班先按半小时取整再累加（而不是最后对合计取整）：这样"工作日+休息日"
                         // 两个分项加起来一定正好等于"加班总时长"，不会因为各自取整出现对不上的尾差。
-                        var ot = FloorToHalf(rec.OvertimeHours);
+                        var ot = FloorToHalf(rec.OvertimeHours) + dinnerComp;
                         totalOtHours += ot;
                         if (isShiftRest) restOtHours += ot;
                         else weekdayOtHours += ot;
