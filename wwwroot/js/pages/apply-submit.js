@@ -3,7 +3,8 @@ const REQUIRED_FIELDS_BY_TYPE = {
     Leave:              ['fLeaveStart', 'fLeaveEnd'],
     PunchReplenishment: ['fPunchDate', 'fPunchTime'],   // 打卡时间也是必填：手机浏览器的时间框可能显示默认值但其实没选，提交后被服务器拒绝
     Overtime:           ['fOvertimeStart', 'fOvertimeEnd'],
-    BusinessTrip:       ['fTripStart', 'fTripEnd']
+    BusinessTrip:       ['fTripStart', 'fTripEnd'],
+    ShiftChange:        ['fShiftStart', 'fShiftEnd', 'fShiftTarget']
 };
 
 // 切换"申请类型"时：① 只显示当前类型对应的那组字段，其余隐藏；
@@ -15,6 +16,7 @@ function syncApplyTypeFields(type) {
     document.getElementById('punchFields').classList.toggle('d-none', type !== 'PunchReplenishment');
     document.getElementById('overtimeFields').classList.toggle('d-none', type !== 'Overtime');
     document.getElementById('businessTripFields').classList.toggle('d-none', type !== 'BusinessTrip');
+    document.getElementById('shiftChangeFields').classList.toggle('d-none', type !== 'ShiftChange');
 
     for (const [t, ids] of Object.entries(REQUIRED_FIELDS_BY_TYPE)) {
         ids.forEach(id => {
@@ -111,6 +113,12 @@ document.querySelector('form[enctype]').addEventListener('submit', function (e) 
         else if (fOvertimeStart.value && fOvertimeStart.value > tomorrowEndStr) msg = '加班申请最早只能提前一天提交（仅夜班员工），请在加班前一天或当天提交';
         else if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value <= fOvertimeStart.value) msg = '加班结束时间必须晚于开始时间';
         else if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value > overtimeEndMax(fOvertimeStart.value)) msg = '加班结束时间最晚只能选到开始日期的第二天24点前，一次申请只对应一天的加班（跨夜的加班如果确实超过这个范围，请分开提交）';
+    } else if (type === 'ShiftChange') {
+        const sd = document.getElementById('fShiftStart').value, ed = document.getElementById('fShiftEnd').value;
+        const earliest = new Date(); earliest.setDate(earliest.getDate() - 3);
+        if (sd && sd < toDateInputValue(earliest)) msg = '转班最多只能补报最近 3 天，更早的日期请联系管理员处理';
+        else if (sd && ed && ed < sd) msg = '转班结束日期不能早于开始日期';
+        else if (sd && ed && (new Date(ed) - new Date(sd)) / 86400000 + 1 > 7) msg = '一张转班申请最多连续 7 天，请拆成多张提交';
     } else if (type === 'BusinessTrip') {
         if (fTripStart.value && fTripStart.value < todayStartStr) msg = '出差开始时间不能早于今天0点';
         else if (fTripStart.value && fTripStart.value > maxAdvanceStr) msg = '出差开始时间最多只能提前3个月申请';

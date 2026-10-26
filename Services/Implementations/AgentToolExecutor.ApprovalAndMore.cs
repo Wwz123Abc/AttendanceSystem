@@ -40,7 +40,10 @@ public partial class AgentToolExecutor
                 s.ApprovalRequest.OvertimeEndTime,
                 s.ApprovalRequest.BusinessTripStartTime,
                 s.ApprovalRequest.BusinessTripEndTime,
-                s.ApprovalRequest.BusinessTripDestination
+                s.ApprovalRequest.BusinessTripDestination,
+                s.ApprovalRequest.ShiftChangeStartDate,
+                s.ApprovalRequest.ShiftChangeEndDate,
+                s.ApprovalRequest.ShiftChangeTargetShiftName
             })
             .ToListAsync(ct);
 
@@ -55,6 +58,7 @@ public partial class AgentToolExecutor
                 ApprovalType.PunchReplenishment => $"补卡日期:{r.PunchDate:yyyy-MM-dd}",
                 ApprovalType.Leave              => $"时间:{r.LeaveStartTime:MM-dd HH:mm}~{r.LeaveEndTime:MM-dd HH:mm}",
                 ApprovalType.Overtime           => $"时间:{r.OvertimeStartTime:MM-dd HH:mm}~{r.OvertimeEndTime:MM-dd HH:mm}",
+                ApprovalType.ShiftChange        => $"转班:{r.ShiftChangeStartDate:MM-dd}~{r.ShiftChangeEndDate:MM-dd} 转为{r.ShiftChangeTargetShiftName}",
                 _                               => $"时间:{r.BusinessTripStartTime:MM-dd HH:mm}~{r.BusinessTripEndTime:MM-dd HH:mm}{(string.IsNullOrEmpty(r.BusinessTripDestination) ? "" : "，去 " + r.BusinessTripDestination)}"
             };
             var reasonPreview = (r.Reason ?? "").Length > 30 ? r.Reason![..30] + "…" : (r.Reason ?? "-");

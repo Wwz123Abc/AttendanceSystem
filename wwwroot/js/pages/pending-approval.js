@@ -122,6 +122,12 @@ detailModal.addEventListener('show.bs.modal', function(e) {
         <dt class="col-4">出差天数</dt><dd class="col-8">${d.tripDays} 天</dd>`;
     }
 
+    if (d.scStart) {
+        rows += `
+        <dt class="col-4">转班日期</dt><dd class="col-8">${d.scStart} ~ ${d.scEnd}</dd>
+        <dt class="col-4">转到班次</dt><dd class="col-8">${escapeHtml(d.scShift)}</dd>`;
+    }
+
     rows += `
         <dt class="col-4">申请原因</dt><dd class="col-8">${d.reason ? escapeHtml(d.reason) : '无'}</dd>
         <dt class="col-4">提交时间</dt><dd class="col-8">${d.time}</dd>`;

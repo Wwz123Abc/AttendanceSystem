@@ -42,6 +42,7 @@
                             <option value="PunchReplenishment">补卡申请</option>
                             <option value="Overtime">加班申请</option>
                             <option value="BusinessTrip">出差申请</option>
+                            <option value="ShiftChange">转班申请</option>
                         </select>
                     </div>
 
@@ -114,6 +115,29 @@
                             <input asp-for="BusinessTripEnd" type="datetime-local" class="form-control" id="fTripEnd" required />
                         </div>
                         <div class="form-text mb-3">审批通过后，出差期间自动记为全勤，无需打卡。开始时间最早只能选到今天0点，最多能提前3个月申请。</div>
+                    </div>
+
+                    <!-- 转班字段 -->
+                    <div id="shiftChangeFields" class="d-none">
+                        <div class="mb-3">
+                            <label class="form-label">转班开始日期</label>
+                            <input asp-for="ShiftChangeStart" type="date" class="form-control" id="fShiftStart" required />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">转班结束日期 <small class="text-muted">（含当天）</small></label>
+                            <input asp-for="ShiftChangeEnd" type="date" class="form-control" id="fShiftEnd" required />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">转到哪个班次</label>
+                            <select asp-for="ShiftChangeShiftId" class="form-select" id="fShiftTarget" required>
+                                <option value="">请选择班次</option>
+                                @foreach (var s in Model.ShiftOptions)
+                                {
+                                    <option value="@s.Id">@s.Name（@s.TimeText）</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="form-text mb-3">临时把自己这几天的班次改成另一个班次，审批通过后自动改排班，已有的打卡和加班会按新班次重新计算。开始日期最早可以补报到最近 3 天，一张申请最多连续 7 天。</div>
                     </div>
 
                     @if (Model.ApproverOptions.Count > 0)

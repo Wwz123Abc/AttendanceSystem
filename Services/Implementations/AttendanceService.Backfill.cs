@@ -43,7 +43,9 @@ public partial class AttendanceService
         foreach (var approval in overtimeApprovals)
         {
             if (approval.OvertimeEndTime is not { } end) continue;
-            var newDuration = ComputeWorkHours(approval.OvertimeStartTime!.Value, end, groupOf.GetValueOrDefault(approval.ApplicantUserId));
+            var otGroup = groupOf.GetValueOrDefault(approval.ApplicantUserId);
+            var otShiftId = (await EffectiveShift.ResolveAsync(db, approval.ApplicantUserId, DateOnly.FromDateTime(approval.OvertimeStartTime!.Value), otGroup)).Shift?.Id;
+            var newDuration = ComputeWorkHours(approval.OvertimeStartTime!.Value, end, otGroup, otShiftId);
             if (approval.OvertimeDurationHours != newDuration)
             {
                 approval.OvertimeDurationHours = newDuration;

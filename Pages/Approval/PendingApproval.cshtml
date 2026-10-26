@@ -40,6 +40,9 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary" data-type="@ApprovalType.BusinessTrip">
                         出差 <span class="badge bg-light text-dark ms-1">@Model.PendingItems.Count(i => i.ApprovalType == ApprovalType.BusinessTrip)</span>
                     </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-type="@ApprovalType.ShiftChange">
+                        转班 <span class="badge bg-light text-dark ms-1">@Model.PendingItems.Count(i => i.ApprovalType == ApprovalType.ShiftChange)</span>
+                    </button>
                 </div>
                 <div class="d-flex align-items-center gap-2">
                     <span class="text-muted small" id="selectedCountText">已选 0 条</span>
@@ -174,6 +177,8 @@
             $"{i.OvertimeStartTime:yyyy-MM-dd HH:mm} ~ {i.OvertimeEndTime:yyyy-MM-dd HH:mm}（{i.OvertimeDurationHours:0.#}h）",
         ApprovalType.BusinessTrip =>
             $"{(string.IsNullOrWhiteSpace(i.BusinessTripDestination) ? "" : i.BusinessTripDestination + " ")}{i.BusinessTripStartTime:yyyy-MM-dd} ~ {i.BusinessTripEndTime:yyyy-MM-dd}（{i.BusinessTripDurationDays:0.#}天）",
+        ApprovalType.ShiftChange =>
+            $"{i.ShiftChangeStartDate:yyyy-MM-dd} ~ {i.ShiftChangeEndDate:yyyy-MM-dd} 转为「{i.ShiftChangeTargetShiftName}」",
         _ => "—"
     };
 }
@@ -250,6 +255,10 @@ const APPROVAL_DETAILS = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
         tripStart = i.BusinessTripStartTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
         tripEnd   = i.BusinessTripEndTime?.ToString("yyyy-MM-dd HH:mm") ?? "",
         tripDays  = i.BusinessTripDurationDays?.ToString("0.##") ?? "",
+        // 转班
+        scStart = i.ShiftChangeStartDate?.ToString("yyyy-MM-dd") ?? "",
+        scEnd   = i.ShiftChangeEndDate?.ToString("yyyy-MM-dd") ?? "",
+        scShift = i.ShiftChangeTargetShiftName ?? "",
         attachments = i.AttachmentUrls
     })));
 </script>

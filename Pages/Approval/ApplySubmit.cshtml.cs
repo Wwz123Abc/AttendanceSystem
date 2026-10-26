@@ -44,6 +44,13 @@ public class ApplySubmitModel(
     [BindProperty] public string? BusinessTripStart       { get; set; }
     [BindProperty] public string? BusinessTripEnd         { get; set; }
     [BindProperty] public string? BusinessTripDestination { get; set; }
+    [BindProperty] public string? ShiftChangeStart        { get; set; }   // 转班开始日期 yyyy-MM-dd
+    [BindProperty] public string? ShiftChangeEnd          { get; set; }   // 转班结束日期 yyyy-MM-dd
+    [BindProperty] public int?    ShiftChangeShiftId      { get; set; }   // 要转到的班次
+
+    /// <summary>转班申请可选的班次：申请人所在考勤组里启用中的班次。</summary>
+    public record ShiftOption(int Id, string Name, string TimeText);
+    public List<ShiftOption> ShiftOptions { get; set; } = [];
     [BindProperty] public string? Reason        { get; set; }
     [BindProperty] public List<IFormFile> Attachments { get; set; } = [];  // 上传的附件文件
 
@@ -54,7 +61,17 @@ public class ApplySubmitModel(
     private async Task LoadMealBreakTextAsync()
     {
         var groupId = await db.Users.Where(u => u.Id == CurrentUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        if (groupId is { } shiftGroupId)
+            ShiftOptions = (await db.ShiftSchedules.Where(s => s.AttendanceGroupId == shiftGroupId && s.IsActive).OrderBy(s => s.Id)
+                    .Select(s => new { s.Id, s.ShiftName, s.WorkStartTime, s.WorkEndTime, s.IsCrossDay }).ToListAsync())
+                .Select(s => new ShiftOption(s.Id, s.ShiftName, $"{s.WorkStartTime:HH\\:mm}–{(s.IsCrossDay ? "次日" : "")}{s.WorkEndTime:HH\\:mm}")).ToList();
         MealBreakText = UnpaidBreakSettings.Describe(groupId);
+        if (groupId is { } gid)   // 本组里单独设置过饭点的班次也列出来
+        {
+            var shifts = await db.ShiftSchedules.Where(s => s.AttendanceGroupId == gid && s.IsActive).OrderBy(s => s.Id).Select(s => new { s.Id, s.ShiftName }).ToListAsync();
+            var custom = shifts.Where(s => UnpaidBreakSettings.IsShiftCustomized(s.Id)).Select(s => $"{s.ShiftName}：{UnpaidBreakSettings.Describe(gid, s.Id)}").ToList();
+            if (custom.Count > 0) MealBreakText += "；" + string.Join("；", custom);
+        }
     }
 
     public async Task OnGetAsync()
@@ -143,6 +160,12 @@ public class ApplySubmitModel(
                     dto.BusinessTripStartTime   = string.IsNullOrEmpty(BusinessTripStart) ? null : DateTime.Parse(BusinessTripStart);
                     dto.BusinessTripEndTime     = string.IsNullOrEmpty(BusinessTripEnd)   ? null : DateTime.Parse(BusinessTripEnd);
                     dto.BusinessTripDestination = string.IsNullOrWhiteSpace(BusinessTripDestination) ? null : BusinessTripDestination.Trim();
+                }
+                else if (ApprovalType == "ShiftChange")
+                {
+                    dto.ShiftChangeStartDate     = string.IsNullOrEmpty(ShiftChangeStart) ? null : DateOnly.Parse(ShiftChangeStart);
+                    dto.ShiftChangeEndDate       = string.IsNullOrEmpty(ShiftChangeEnd)   ? null : DateOnly.Parse(ShiftChangeEnd);
+                    dto.ShiftChangeTargetShiftId = ShiftChangeShiftId;
                 }
 
                 await approvalService.SubmitApprovalAsync(CurrentUserId, dto);
@@ -260,6 +283,20 @@ public class ApplySubmitModel(
                 return "出差结束时间必须晚于开始时间";
             if ((end - start).TotalDays > ApprovalService.MaxLeaveOrTripSpanDays)
                 return $"出差时间跨度不能超过 {ApprovalService.MaxLeaveOrTripSpanDays} 天，请拆成多张申请提交";
+        }
+        else if (ApprovalType == "ShiftChange")
+        {
+            if (string.IsNullOrEmpty(ShiftChangeStart) || string.IsNullOrEmpty(ShiftChangeEnd))
+                return "请选择转班的开始和结束日期";
+            if (!DateOnly.TryParse(ShiftChangeStart, out var start) || !DateOnly.TryParse(ShiftChangeEnd, out var end))
+                return "转班日期格式不正确";
+            if (ShiftChangeShiftId is null) return "请选择要转到的班次";
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            if (end < start) return "转班结束日期不能早于开始日期";
+            if (start < today.AddDays(-ApprovalService.ShiftChangeBackfillDays))
+                return $"转班最多只能补报最近 {ApprovalService.ShiftChangeBackfillDays} 天，更早的日期请联系管理员处理";
+            if (end.DayNumber - start.DayNumber + 1 > ApprovalService.MaxShiftChangeDays)
+                return $"一张转班申请最多连续 {ApprovalService.MaxShiftChangeDays} 天，请拆成多张提交";
         }
         return null;
     }

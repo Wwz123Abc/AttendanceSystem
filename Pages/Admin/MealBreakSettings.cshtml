@@ -32,11 +32,29 @@
                        href="?groupId=@g.Id">
                         <div>
                             <div class="fw-semibold">@g.Name <span class="small @(g.Id == Model.GroupId ? "" : "text-muted")">· @g.Users 人</span></div>
-                            <div class="small @(g.Id == Model.GroupId ? "" : "text-muted")">@g.Windows</div>
+                            <div class="small @(g.Id == Model.GroupId ? "" : "text-muted")">考勤组饭点：@g.Windows</div>
                         </div>
                         @if (g.Customized) { <span class="badge bg-warning text-dark">已自定义</span> }
                         else { <span class="badge bg-secondary">默认</span> }
                     </a>
+                    @if (g.Id == Model.GroupId)
+                    {
+                        <a class="list-group-item list-group-item-action ps-4 d-flex justify-content-between @(Model.ShiftId == 0 ? "fw-semibold bg-light" : "")" href="?groupId=@g.Id">
+                            <span>整个考勤组（班次没单独设置时用这个）</span>
+                        </a>
+                        @foreach (var s in Model.Shifts)
+                        {
+                            <a class="list-group-item list-group-item-action ps-4 d-flex justify-content-between align-items-start @(s.Id == Model.ShiftId ? "fw-semibold bg-light" : "")"
+                               href="?groupId=@g.Id&shiftId=@s.Id">
+                                <div>
+                                    <div>班次：@s.Name</div>
+                                    <div class="small text-muted">@s.Windows</div>
+                                </div>
+                                @if (s.Customized) { <span class="badge bg-warning text-dark">班次单独设置</span> }
+                                else { <span class="badge bg-light text-muted border">跟随考勤组</span> }
+                            </a>
+                        }
+                    }
                 }
             </div>
         </div>
@@ -44,13 +62,14 @@
     <div class="col-lg-7">
         <div class="card mb-3">
             <div class="card-header">
-                @(Model.GroupName == "" ? "请先建立考勤组" : Model.GroupName + " 的饭点时段")
+                @(Model.GroupName == "" ? "请先建立考勤组" : Model.GroupName + (Model.ShiftId > 0 ? " · 班次「" + Model.ShiftName + "」" : "（整个考勤组）") + " 的饭点时段")
                 @if (Model.IsDefault) { <span class="badge bg-secondary ms-2">默认</span> }
                 else { <span class="badge bg-warning text-dark ms-2">已自定义</span> }
             </div>
             <div class="card-body">
                 <form method="post" asp-page-handler="Save" id="mealForm">
                     <input type="hidden" name="GroupId" value="@Model.GroupId" />
+                    <input type="hidden" name="ShiftId" value="@Model.ShiftId" />
                     <table class="table table-sm align-middle mb-2">
                         <thead><tr><th style="width:42%">开始</th><th style="width:42%">结束</th><th></th></tr></thead>
                         <tbody id="mealRows">
@@ -70,7 +89,7 @@
                         <div class="d-flex gap-2">
                             <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i>保存</button>
                             <button type="submit" class="btn btn-outline-secondary" formaction="?handler=Reset"
-                                    onclick="return confirm('这个考勤组恢复成默认的 12:00-13:00、17:30-18:00、00:00-01:00、05:30-06:00 吗？')">恢复默认</button>
+                                    onclick="return confirm(@(Model.ShiftId > 0 ? "'这个班次不再单独设置，改用所在考勤组的饭点吗？'" : "'这个考勤组恢复成默认的 12:00-13:00、17:30-18:00、00:00-01:00、05:30-06:00 吗？'"))">@(Model.ShiftId > 0 ? "改用考勤组的" : "恢复默认")</button>
                         </div>
                     }
                     else if (!Model.CanEdit)
@@ -83,9 +102,9 @@
         </div>
         <div class="alert alert-info small mb-3">
             <i class="bi bi-info-circle me-1"></i>
-            <strong>这里的饭点只用于"加班申请"的时长核对</strong>：这个考勤组的人提交加班申请时，起止时间压到这几段的部分不计入加班时长，
+            <strong>这里的饭点只用于"加班申请"的时长核对</strong>：提交加班申请时，起止时间压到这几段的部分不计入加班时长，
             然后按半小时向下取整；加班不足 0.5 小时不能提交。正班的实际工时、请假时长不看这里，一律按默认饭点（12:00-13:00、17:30-18:00、00:00-01:00、05:30-06:00）算。
-            没有单独设置的考勤组，加班也用默认值。
+            <strong>优先级：班次单独设置的 → 所在考勤组的 → 默认</strong>。加班算哪个班次：加班开始那天他排的班次（没排班就按他最近排的班次）。
         </div>
         <div class="alert alert-warning small mb-0">
             <i class="bi bi-exclamation-triangle me-1"></i>

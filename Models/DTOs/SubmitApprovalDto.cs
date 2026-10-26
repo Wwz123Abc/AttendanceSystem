@@ -30,6 +30,11 @@ public class SubmitApprovalDto
     public DateTime? BusinessTripEndTime     { get; set; }
     public string?   BusinessTripDestination { get; set; }
 
+    // 转班时填这几项：哪几天（含首尾）转到哪个班次
+    public DateOnly? ShiftChangeStartDate    { get; set; }
+    public DateOnly? ShiftChangeEndDate      { get; set; }
+    public int?      ShiftChangeTargetShiftId { get; set; }
+
     // 通用
     public string?       Reason         { get; set; }        // 申请理由
     public List<string>  AttachmentUrls { get; set; } = [];  // 附件地址列表

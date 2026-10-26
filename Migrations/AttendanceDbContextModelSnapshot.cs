@@ -458,6 +458,23 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("varchar(50)")
                         .HasColumnName("RequestNo");
 
+                    b.Property<DateOnly?>("ShiftChangeEndDate")
+                        .HasColumnType("date")
+                        .HasColumnName("ShiftChangeEndDate");
+
+                    b.Property<DateOnly?>("ShiftChangeStartDate")
+                        .HasColumnType("date")
+                        .HasColumnName("ShiftChangeStartDate");
+
+                    b.Property<int?>("ShiftChangeTargetShiftId")
+                        .HasColumnType("int")
+                        .HasColumnName("ShiftChangeTargetShiftId");
+
+                    b.Property<string>("ShiftChangeTargetShiftName")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("ShiftChangeTargetShiftName");
+
                     b.Property<DateTime>("SubmittedAt")
                         .HasColumnType("datetime(6)")
                         .HasColumnName("SubmittedAt");

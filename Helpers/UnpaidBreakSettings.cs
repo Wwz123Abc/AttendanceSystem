@@ -5,7 +5,8 @@ using Microsoft.EntityFrameworkCore;
 namespace AttendanceSystem.Helpers;
 
 /// <summary>
-/// "不算钱"的饭点时段（工作/加班/请假区间压到这几段，重叠的部分不计入时长），<b>按考勤组各设各的</b>。
+/// "不算钱"的饭点时段（工作/加班/请假区间压到这几段，重叠的部分不计入时长），<b>可以按班次、也可以按考勤组设置</b>：
+/// 班次设了就用班次的（2026-10-26 起），没设就用所在考勤组的，考勤组也没设就用默认值。
 /// 默认（没单独设置过的考勤组）是 12:00-13:00、17:30-18:00、00:00-01:00、05:30-06:00（2026-09-29 用户确认）；
 /// 2026-10-13 起总部管理员可以在"饭点设置"页给某个考勤组单独改，保存在 <see cref="SystemSetting"/> 表里
 /// （键 <c>UnpaidBreakWindows:考勤组编号</c>，没有这一行的考勤组用默认值）；没有考勤组的人也用默认值。
@@ -15,6 +16,8 @@ namespace AttendanceSystem.Helpers;
 public static class UnpaidBreakSettings
 {
     public const string KeyPrefix = "UnpaidBreakWindows:";
+    /// <summary>按班次设置的键前缀：<c>UnpaidBreakWindows:shift:班次编号</c>。</summary>
+    public const string ShiftKeyPrefix = KeyPrefix + "shift:";
     public const int MaxWindows = 8;
     public const int MaxWindowMinutes = 240;
 
@@ -29,13 +32,39 @@ public static class UnpaidBreakSettings
     private static volatile IReadOnlyDictionary<int, (TimeOnly Start, TimeOnly End)[]> _overrides
         = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
 
-    public static string KeyFor(int groupId) => KeyPrefix + groupId;
+    private static volatile IReadOnlyDictionary<int, (TimeOnly Start, TimeOnly End)[]> _shiftOverrides
+        = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
 
-    /// <summary>某个考勤组当前生效的饭点时段（按开始时间排好序）；<paramref name="groupId"/> 为空或没单独设置过就是默认。</summary>
-    public static IReadOnlyList<(TimeOnly Start, TimeOnly End)> WindowsFor(int? groupId)
+    public static string KeyFor(int groupId) => KeyPrefix + groupId;
+    public static string KeyForShift(int shiftId) => ShiftKeyPrefix + shiftId;
+
+    /// <summary>
+    /// 当前生效的饭点时段（按开始时间排好序）：<paramref name="shiftId"/> 对应的班次单独设置过就用它的，
+    /// 否则用 <paramref name="groupId"/> 这个考勤组的，都没设置过就是默认。
+    /// </summary>
+    public static IReadOnlyList<(TimeOnly Start, TimeOnly End)> WindowsFor(int? groupId, int? shiftId = null)
     {
+        if (shiftId is { } s && _shiftOverrides.TryGetValue(s, out var sw)) return sw;
         if (groupId is { } g && _overrides.TryGetValue(g, out var w)) return w;
         return Defaults;
+    }
+
+    /// <summary>这个班次有没有单独设置过饭点。</summary>
+    public static bool IsShiftCustomized(int shiftId) => _shiftOverrides.ContainsKey(shiftId);
+
+    /// <summary>给某个班次换成新的时段（调用前先用 <see cref="Validate"/> 校验过）。班次的设置是明确设定，哪怕和默认一样也保留。</summary>
+    public static void ApplyShift(int shiftId, IEnumerable<(TimeOnly Start, TimeOnly End)> windows)
+    {
+        var next = new Dictionary<int, (TimeOnly, TimeOnly)[]>(_shiftOverrides) { [shiftId] = windows.OrderBy(w => w.Start).ToArray() };
+        _shiftOverrides = next;
+    }
+
+    /// <summary>这个班次不再单独设置（改用所在考勤组的）。</summary>
+    public static void RemoveShift(int shiftId)
+    {
+        var next = new Dictionary<int, (TimeOnly, TimeOnly)[]>(_shiftOverrides);
+        next.Remove(shiftId);
+        _shiftOverrides = next;
     }
 
     /// <summary>这个考勤组有没有单独设置过。</summary>
@@ -59,7 +88,11 @@ public static class UnpaidBreakSettings
     }
 
     /// <summary>所有考勤组都恢复默认（测试用）。</summary>
-    public static void ResetAll() => _overrides = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
+    public static void ResetAll()
+    {
+        _overrides = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
+        _shiftOverrides = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
+    }
 
     /// <summary>"12:00-13:00,17:30-18:00" 这种存库格式。</summary>
     public static string Format(IEnumerable<(TimeOnly Start, TimeOnly End)> windows)
@@ -96,9 +129,9 @@ public static class UnpaidBreakSettings
     }
 
     /// <summary>给页面提示用的一句话，如"12:00-13:00、17:30-18:00"；没有任何时段时返回"（没有设置饭点时段）"。</summary>
-    public static string Describe(int? groupId = null)
+    public static string Describe(int? groupId = null, int? shiftId = null)
     {
-        var w = WindowsFor(groupId);
+        var w = WindowsFor(groupId, shiftId);
         return w.Count == 0 ? "（没有设置饭点时段）" : string.Join("、", w.OrderBy(x => x.Start).Select(x => $"{x.Start:HH\\:mm}-{x.End:HH\\:mm}"));
     }
 
@@ -110,14 +143,18 @@ public static class UnpaidBreakSettings
     {
         var rows = await db.SystemSettings.Where(s => s.Key.StartsWith(KeyPrefix)).ToListAsync(ct);
         var next = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
+        var nextShift = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
         foreach (var row in rows)
         {
-            if (!int.TryParse(row.Key[KeyPrefix.Length..], out var gid)) continue;
+            var isShift = row.Key.StartsWith(ShiftKeyPrefix);
+            if (!int.TryParse(row.Key[(isShift ? ShiftKeyPrefix.Length : KeyPrefix.Length)..], out var id)) continue;
             var parsed = TryParse(row.Value);
             if (parsed is null || Validate(parsed) is not null) continue;
+            if (isShift) { nextShift[id] = [.. parsed.OrderBy(w => w.Start)]; continue; }
             if (Format(parsed) == Format(Defaults)) continue;
-            next[gid] = [.. parsed.OrderBy(w => w.Start)];
+            next[id] = [.. parsed.OrderBy(w => w.Start)];
         }
         _overrides = next;
+        _shiftOverrides = nextShift;
     }
 }

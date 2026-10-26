@@ -63,8 +63,20 @@ public partial class AttendanceService
         // ── 出差 ──：出差期间不用打卡，逐天置为「出差」并按全勤记工时（工资按工时结算，不能漏记）
         else if (approval.ApprovalType == ApprovalType.BusinessTrip && approval.BusinessTripStartTime is { } tripStart)
             await ApplyApprovedBusinessTripAsync(approval, tripStart, touchedMonths);
+        // ── 转班 ──：把申请人这几天的排班改成目标班次（没有排班的日子新建），改完下面重算这几天的正班工时和加班
+        else if (approval.ApprovalType == ApprovalType.ShiftChange && approval.ShiftChangeStartDate is { } scStart
+                 && approval.ShiftChangeEndDate is { } scEnd && approval.ShiftChangeTargetShiftId is { } scShiftId)
+            await ApplyApprovedShiftChangeAsync(approval, scStart, scEnd, scShiftId, touchedMonths);
 
         await db.SaveChangesAsync();
+
+        // 转班之后：这几天已经有的打卡、加班单要按新班次重新算（跟排班页保存排班后做的是同一件事）
+        if (approval.ApprovalType == ApprovalType.ShiftChange && approval.ShiftChangeStartDate is { } rs && approval.ShiftChangeEndDate is { } re)
+        {
+            var ids = new[] { approval.ApplicantUserId };
+            await RecalcHoursAfterScheduleAsync(ids, rs, re);
+            await ReconcileOvertimeAfterScheduleAsync(ids, rs, re);
+        }
 
         // 同步刷新受影响月份的月度汇总，不用再等人工点"重新生成"（GenerateMonthlySummaryAsync 本身是幂等的）
         foreach (var (y, m) in touchedMonths)
@@ -298,6 +310,27 @@ public partial class AttendanceService
             // 备注带上这一天的请假时长，跟加班审批的备注格式一致（"加班已审批通过（单号），9 小时"）
             AppendApprovalNote(record, $"请假审批通过（{approval.RequestNo}），{leaveHoursToday:0.##} 小时");
             record.UpdatedAt        = clock.LocalNow();
+            touchedMonths.Add((d.Year, d.Month));
+        }
+    }
+
+    /// <summary>
+    /// 转班审批通过后回写：把申请人 [开始日期, 结束日期] 每天的排班改成目标班次，没有排班的日子新建一条；
+    /// 入职日期之前的日子不排。目标班次已经被停用/删除就什么都不改（回写时再校验一次，不留悬空排班）。
+    /// 考勤记录、加班单的重算在 <see cref="UpdateAttendanceAfterApprovalAsync"/> 里统一做。
+    /// </summary>
+    private async Task ApplyApprovedShiftChangeAsync(ApprovalRequest approval, DateOnly start, DateOnly end, int shiftId, HashSet<(int Year, int Month)> touchedMonths)
+    {
+        var applicant = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => new { u.HireDate }).FirstOrDefaultAsync();
+        if (applicant is null || !await db.ShiftSchedules.AnyAsync(s => s.Id == shiftId && s.IsActive)) return;
+        var existing = await db.ShiftAssignments
+            .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= start && a.WorkDate <= end)
+            .ToDictionaryAsync(a => a.WorkDate);
+        for (var d = start; d <= end; d = d.AddDays(1))
+        {
+            if (applicant.HireDate is { } hire && hire > d) continue;
+            if (existing.TryGetValue(d, out var a)) a.ShiftScheduleId = shiftId;
+            else db.ShiftAssignments.Add(new ShiftAssignment { UserId = approval.ApplicantUserId, ShiftScheduleId = shiftId, WorkDate = d, IsAutoAssigned = false, CreatedAt = clock.LocalNow() });
             touchedMonths.Add((d.Year, d.Month));
         }
     }

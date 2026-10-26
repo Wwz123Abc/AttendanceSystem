@@ -40,9 +40,14 @@ public partial class AttendanceService
             }
             segments = next;
         }
+        // 饭点用加班开始那天的班次的设置（班次没设就用考勤组的）；这天没有班次就用列表里第一个
+        int? breakShiftId = null;
+        foreach (var (day, sh) in shifts)
+            if (day == DateOnly.FromDateTime(start)) { breakShiftId = sh.Id; break; }
+        if (breakShiftId is null && shifts.Count > 0) breakShiftId = shifts[0].Shift.Id;
         decimal minutes = 0;
         foreach (var (s, e) in segments)
-            minutes += (decimal)(e - s).TotalMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(s, e, groupId);
+            minutes += (decimal)(e - s).TotalMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(s, e, groupId, breakShiftId);
         return FloorToHalf(Math.Max(0, minutes / 60));
     }
 

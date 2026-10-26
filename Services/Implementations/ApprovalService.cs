@@ -69,6 +69,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 几秒钟内被重复提交了 2-4 次，同一时段的加班费因此被多算了几倍）。
         var activeStatuses = new[] { ApprovalStatus.Pending, ApprovalStatus.InProgress, ApprovalStatus.Approved };
 
+        string? shiftChangeTargetName = null;   // 转班申请：目标班次名称，校验时顺便取出来
         switch (dto.ApprovalType)
         {
             case ApprovalType.PunchReplenishment:
@@ -83,11 +84,17 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             case ApprovalType.BusinessTrip:
                 await ValidateBusinessTripRequestAsync(dto, applicantUserId, activeStatuses);
                 break;
+            case ApprovalType.ShiftChange:
+                shiftChangeTargetName = await ValidateShiftChangeRequestAsync(dto, applicantUserId, activeStatuses);
+                break;
         }
 
         var applicantGroupId = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();   // 饭点按考勤组
         var leaveDuration = await ComputeLeaveDurationAsync(dto, applicantUserId);
-        var overtimeDuration = ComputeOvertimeDuration(dto, applicantGroupId);
+        int? overtimeShiftId = null;   // 饭点按班次：取加班开始那天他的班次（没排班就兜底班次）
+        if (dto.OvertimeStartTime is { } otStartForShift)
+            overtimeShiftId = (await EffectiveShift.ResolveAsync(db, applicantUserId, DateOnly.FromDateTime(otStartForShift), applicantGroupId)).Shift?.Id;
+        var overtimeDuration = ComputeOvertimeDuration(dto, applicantGroupId, overtimeShiftId);
         decimal? businessTripDuration = dto.BusinessTripStartTime.HasValue && dto.BusinessTripEndTime.HasValue
             ? (decimal)(dto.BusinessTripEndTime.Value - dto.BusinessTripStartTime.Value).TotalDays : null;
 
@@ -118,6 +125,10 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 BusinessTripEndTime      = dto.BusinessTripEndTime,
                 BusinessTripDurationDays = businessTripDuration,
                 BusinessTripDestination  = dto.BusinessTripDestination,
+                ShiftChangeStartDate     = dto.ShiftChangeStartDate,
+                ShiftChangeEndDate       = dto.ShiftChangeEndDate,
+                ShiftChangeTargetShiftId = dto.ShiftChangeTargetShiftId,
+                ShiftChangeTargetShiftName = shiftChangeTargetName,
                 Reason             = dto.Reason,
                 // 附件列表转成 JSON 文本存进一个字段
                 AttachmentUrls     = dto.AttachmentUrls.Count > 0
@@ -349,6 +360,50 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             throw new BusinessException("这段时间的出差申请已经提交过了，不能重复提交");
     }
 
+    /// <summary>转班申请单最多连续几天（太长请拆成多张）。</summary>
+    public const int MaxShiftChangeDays = 7;
+    /// <summary>转班可以补报最近几天（当天临时换班、事后补申请）。</summary>
+    public const int ShiftChangeBackfillDays = 3;
+
+    /// <summary>
+    /// 转班申请的提交校验：起止日期、目标班次必须是本人所在考勤组里启用中的班次；日期范围——今天往前最多 3 天（允许补报）、
+    /// 往后最多 <see cref="MaxAdvanceRequestMonths"/> 个月，单张最多连续 <see cref="MaxShiftChangeDays"/> 天；
+    /// 这段日期里至少有一天现在排的班次不是目标班次（否则转了等于没转）；同一个人日期有重叠的有效转班申请不能重复提交。
+    /// 返回目标班次名称（记在申请单上展示用）。
+    /// </summary>
+    private async Task<string> ValidateShiftChangeRequestAsync(SubmitApprovalDto dto, int applicantUserId, ApprovalStatus[] activeStatuses)
+    {
+        if (dto.ShiftChangeStartDate is not { } start || dto.ShiftChangeEndDate is not { } end)
+            throw new BusinessException("请选择转班的开始和结束日期");
+        if (dto.ShiftChangeTargetShiftId is not { } targetId)
+            throw new BusinessException("请选择要转到的班次");
+        var today = DateOnly.FromDateTime(clock.LocalToday());
+        if (end < start) throw new BusinessException("转班结束日期不能早于开始日期");
+        if (start < today.AddDays(-ShiftChangeBackfillDays))
+            throw new BusinessException($"转班最多只能补报最近 {ShiftChangeBackfillDays} 天，更早的日期请联系管理员处理");
+        if (start.ToDateTime(TimeOnly.MinValue) > clock.LocalNow().AddMonths(MaxAdvanceRequestMonths))
+            throw new BusinessException($"转班开始日期最多只能提前 {MaxAdvanceRequestMonths} 个月申请");
+        if (end.DayNumber - start.DayNumber + 1 > MaxShiftChangeDays)
+            throw new BusinessException($"一张转班申请最多连续 {MaxShiftChangeDays} 天，请拆成多张提交");
+
+        var groupId = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+        var target = await db.ShiftSchedules.Where(s => s.Id == targetId && s.IsActive && groupId != null && s.AttendanceGroupId == groupId)
+            .Select(s => new { s.Id, s.ShiftName }).FirstOrDefaultAsync();
+        if (target is null) throw new BusinessException("要转到的班次不存在，或不属于你所在的考勤组");
+
+        var current = await db.ShiftAssignments.Where(a => a.UserId == applicantUserId && a.WorkDate >= start && a.WorkDate <= end)
+            .Select(a => a.ShiftScheduleId).ToListAsync();
+        var days = end.DayNumber - start.DayNumber + 1;
+        if (current.Count == days && current.All(id => id == targetId))
+            throw new BusinessException($"这段日期你排的已经都是「{target.ShiftName}」了，不需要转班");
+
+        if (await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == applicantUserId
+                && a.ApprovalType == ApprovalType.ShiftChange && activeStatuses.Contains(a.ApprovalStatus)
+                && a.ShiftChangeStartDate <= end && start <= a.ShiftChangeEndDate))
+            throw new BusinessException("这段时间已经有转班申请了（待审批或已通过），不能重复提交");
+        return target.ShiftName;
+    }
+
     /// <summary>请假时长：逐日按班次累加，口径跟审批通过后的回写一致；没填请假时间返回 null。</summary>
     private async Task<decimal?> ComputeLeaveDurationAsync(SubmitApprovalDto dto, int applicantUserId)
     {
@@ -385,7 +440,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     }
 
     /// <summary>加班时长：跟正班工时同一套公式，不足半小时直接拒绝；没填加班时间返回 null。</summary>
-    private static decimal? ComputeOvertimeDuration(SubmitApprovalDto dto, int? groupId)
+    private static decimal? ComputeOvertimeDuration(SubmitApprovalDto dto, int? groupId, int? shiftId = null)
     {
         // 加班时长：跟正班工时同一套公式（AttendanceService.ComputeWorkHours）——申请的时间段压到公司统一
         // "不算钱"时段（午间/晚餐/宵夜/早餐）的那部分不算钱，最后按半小时向下取整。
@@ -394,7 +449,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         decimal? overtimeDuration = null;
         if (dto.OvertimeStartTime.HasValue && dto.OvertimeEndTime.HasValue)
         {
-            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value, groupId);
+            overtimeDuration = AttendanceService.ComputeWorkHours(dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value, groupId, shiftId);
             if (overtimeDuration < 0.5m)
                 throw new BusinessException("加班时长不足 0.5 小时（按半小时为最小单位计算），请检查起止时间");
         }
@@ -793,6 +848,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             ApprovalType.Leave              => "QJ",
             ApprovalType.Overtime           => "JB",
             ApprovalType.BusinessTrip       => "CC",
+            ApprovalType.ShiftChange        => "ZB",
             _                               => "AP"
         };
         // 按类型分开计数：不同类型的前缀不一样（BK/QJ/JB/CC），流水号各数各的。
@@ -1010,6 +1066,9 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             BusinessTripEndTime      = a.BusinessTripEndTime,
             BusinessTripDurationDays = a.BusinessTripDurationDays,
             BusinessTripDestination  = a.BusinessTripDestination,
+            ShiftChangeStartDate     = a.ShiftChangeStartDate,
+            ShiftChangeEndDate       = a.ShiftChangeEndDate,
+            ShiftChangeTargetShiftName = a.ShiftChangeTargetShiftName,
             Reason                = a.Reason,
             AttachmentUrls        = attachments,
             SubmittedAt           = a.SubmittedAt,

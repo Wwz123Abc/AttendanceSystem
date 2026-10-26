@@ -323,11 +323,11 @@ public partial class AttendanceService
     /// 阈值才扣整段"的算法会出现"6h00m 不扣、6h01m 反而倒扣近 1 小时"的悬崖，多干一分钟工时反而更少）。</summary>
     /// <summary>算 [start, end) 这段时间里，落在 <see cref="UnpaidBreakWindows"/> 里的分钟数——不管这段
     /// 区间横跨几天、本身多长，只按实际重叠的分钟数算，没有"超过多久才触发"这种门槛，天然不会有悬崖。</summary>
-    internal static double ComputeUnpaidBreakOverlapMinutes(DateTime start, DateTime end, int? groupId = null)
+    internal static double ComputeUnpaidBreakOverlapMinutes(DateTime start, DateTime end, int? groupId = null, int? shiftId = null)
     {
         if (end <= start) return 0;
         double total = 0;
-        var windows = UnpaidBreakSettings.WindowsFor(groupId);   // 这个考勤组的饭点；先取一份，算的过程中管理员刚好保存也不会前后不一致
+        var windows = UnpaidBreakSettings.WindowsFor(groupId, shiftId);   // 这个班次/考勤组的饭点；先取一份，算的过程中管理员刚好保存也不会前后不一致
         for (var day = DateOnly.FromDateTime(start.Date); day <= DateOnly.FromDateTime(end.Date); day = day.AddDays(1))
         {
             foreach (var (winStart, winEnd) in windows)
@@ -352,11 +352,11 @@ public partial class AttendanceService
     /// 半小时取整再累加"的口径不一致，同一份数据在"我的记录"页会出现日明细 8.37、月合计却按 8.0
     /// 累加，员工自己相加对不上（2026-09-17 复审发现，口径登记表 §2/§5 决定统一到半小时）。
     /// </summary>
-    public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut, int? groupId = null)
+    public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut, int? groupId = null, int? shiftId = null)
     {
         var rawMinutes = (decimal)(clockOut - clockIn).TotalMinutes;   // 在岗总分钟（夜班下班在第二天也没问题）
         if (rawMinutes <= 0) return 0;
-        var minutes = rawMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(clockIn, clockOut, groupId);
+        var minutes = rawMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(clockIn, clockOut, groupId, shiftId);
         return FloorToHalf(Math.Max(0, minutes / 60));
     }
 

@@ -45,6 +45,13 @@ public class ApprovalRequest
     [MaxLength(200)]
     public string?   BusinessTripDestination { get; set; }  // 出差目的地（可选）
 
+    // ── 转班字段（仅转班申请用）────────────────────────────────────────────
+    public DateOnly? ShiftChangeStartDate { get; set; }       // 转班开始日期（含）
+    public DateOnly? ShiftChangeEndDate   { get; set; }       // 转班结束日期（含）
+    public int?      ShiftChangeTargetShiftId { get; set; }   // 要转到哪个班次
+    [MaxLength(50)]
+    public string?   ShiftChangeTargetShiftName { get; set; } // 目标班次名称（提交时记下来，之后班次改名也不影响展示）
+
     // ── 通用字段 ────────────────────────────────────────────────────────
     [MaxLength(1000)]
     public string? Reason { get; set; }                     // 申请理由

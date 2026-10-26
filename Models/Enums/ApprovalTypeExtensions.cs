@@ -11,6 +11,7 @@ public static class ApprovalTypeExtensions
         ApprovalType.Leave              => "请假",
         ApprovalType.Overtime           => "加班",
         ApprovalType.BusinessTrip       => "出差",
+        ApprovalType.ShiftChange        => "转班",
         _                               => "其他"   // 兜底，正常不会走到这里
     };
 }

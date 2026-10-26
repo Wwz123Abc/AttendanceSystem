@@ -40,6 +40,11 @@ public class ApprovalRequestDto
     public decimal?  BusinessTripDurationDays { get; set; }
     public string?   BusinessTripDestination  { get; set; }
 
+    // 转班信息
+    public DateOnly? ShiftChangeStartDate { get; set; }
+    public DateOnly? ShiftChangeEndDate   { get; set; }
+    public string?   ShiftChangeTargetShiftName { get; set; }
+
     // 通用
     public string?       Reason         { get; set; }
     public List<string>  AttachmentUrls { get; set; } = [];
@@ -61,6 +66,8 @@ public class ApprovalRequestDto
         ApprovalType.BusinessTrip =>
             $"{BusinessTripStartTime:yyyy-MM-dd HH:mm} ~ {BusinessTripEndTime:yyyy-MM-dd HH:mm}"
             + (string.IsNullOrWhiteSpace(BusinessTripDestination) ? "" : $"，目的地：{BusinessTripDestination}"),
+        ApprovalType.ShiftChange =>
+            $"{ShiftChangeStartDate:yyyy-MM-dd} ~ {ShiftChangeEndDate:yyyy-MM-dd} 转为「{ShiftChangeTargetShiftName}」",
         _ => ""
     };
 
@@ -70,6 +77,7 @@ public class ApprovalRequestDto
         ApprovalType.Leave        => LeaveDurationHours.HasValue ? $"{LeaveDurationHours:0.##} 小时" : "",
         ApprovalType.Overtime     => OvertimeDurationHours.HasValue ? $"{OvertimeDurationHours:0.##} 小时" : "",
         ApprovalType.BusinessTrip => BusinessTripDurationDays.HasValue ? $"{BusinessTripDurationDays:0.#} 天" : "",
+        ApprovalType.ShiftChange  => ShiftChangeStartDate.HasValue && ShiftChangeEndDate.HasValue ? $"{ShiftChangeEndDate.Value.DayNumber - ShiftChangeStartDate.Value.DayNumber + 1} 天" : "",
         _                         => ""
     };
 
