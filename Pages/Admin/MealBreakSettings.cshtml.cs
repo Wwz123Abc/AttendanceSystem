@@ -14,7 +14,7 @@ namespace AttendanceSystem.Pages.Admin;
 /// 饭点设置页：<b>按班次或按考勤组</b>设置"不算钱"的饭点时段（默认 12:00-13:00、17:30-18:00、00:00-01:00、05:30-06:00）。
 /// 班次设了就用班次的，没设就用所在考勤组的（2026-10-26 起可以按班次设置）。
 /// 加班、请假、每天的实际工时，起止时间压到这几段的部分不计入时长，所以这直接影响工资工时，
-/// 只有不受部门范围限制的总部管理员能改；管理员/文员都能看。改完只影响之后的计算和重新计算，已经存好的工时不会自己变。
+/// 管理员和文员都能看、都能改（2026-10-26 起；以前只有总部超级管理员能改）。改完只影响之后的计算和重新计算，已经存好的工时不会自己变。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
 public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSettingsModel> logger) : PageModel
@@ -47,8 +47,6 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
 
     public async Task<IActionResult> OnPostSaveAsync()
     {
-        CanEdit = HttpContext.GetRequiredUser().IsHqSuperAdmin;
-        if (!CanEdit) { ErrorMessage = "只有总部管理员能修改饭点时段"; await LoadAsync(); return Page(); }
         if (!await db.AttendanceGroups.AnyAsync(g => g.Id == GroupId)) { ErrorMessage = "请先选择考勤组"; await LoadAsync(); return Page(); }
 
         var windows = new List<(TimeOnly, TimeOnly)>();
@@ -83,8 +81,6 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
     /// <summary>这个考勤组恢复默认时段（删掉单独设置）；选的是班次就是"不再单独设置，改用所在考勤组的"。</summary>
     public async Task<IActionResult> OnPostResetAsync()
     {
-        CanEdit = HttpContext.GetRequiredUser().IsHqSuperAdmin;
-        if (!CanEdit) { ErrorMessage = "只有总部管理员能修改饭点时段"; await LoadAsync(); return Page(); }
         var key = ShiftId > 0 ? UnpaidBreakSettings.KeyForShift(ShiftId) : UnpaidBreakSettings.KeyFor(GroupId);
         var row = await db.SystemSettings.FirstOrDefaultAsync(s => s.Key == key);
         if (row is not null) { db.SystemSettings.Remove(row); await db.SaveChangesAsync(); }
@@ -112,7 +108,7 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
 
     private async Task LoadAsync(bool keepForm = false)
     {
-        CanEdit = HttpContext.GetRequiredUser().IsHqSuperAdmin;
+        CanEdit = true;   // 管理员和文员都能改（2026-10-26 用户确认；以前只有总部超级管理员能改）
         var userCounts = await db.Users.Where(u => u.IsActive && u.AttendanceGroupId != null)
             .GroupBy(u => u.AttendanceGroupId!.Value).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N);
         Groups = (await db.AttendanceGroups.OrderBy(g => g.GroupName).Select(g => new { g.Id, g.GroupName }).ToListAsync())
