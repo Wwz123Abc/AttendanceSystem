@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
@@ -110,5 +110,29 @@ public class NightlyAuditTests : SqliteTestBase
 
         using var check = CreateContext();
         Assert.False(await check.Notifications.AnyAsync(n => n.UserId == adminId && n.NotificationType == NotificationTypes.DataAudit));
+    }
+
+    [Fact]
+    public async Task 数据核对本身就忽略深圳GA考勤组的没排班_别的考勤组照常报()
+    {
+        var (uid, _) = SeedDayMidWorld();
+        await SyncAsync(Tue.ToDateTime(new TimeOnly(8, 25)), Tue.ToDateTime(new TimeOnly(12, 20)), Tue.ToDateTime(new TimeOnly(17, 35)));
+        int groupId;
+        using (var db = CreateContext())
+        {
+            db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid));
+            await db.SaveChangesAsync();
+            var g = new AttendanceGroup { GroupName = "深圳GA考勤组" };
+            db.AttendanceGroups.Add(g); await db.SaveChangesAsync(); groupId = g.Id;
+        }
+        using (var db = CreateContext())
+            Assert.Contains(await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).AuditAsync(Tue, Tue), i => i.Type == AttendanceService.AuditNoShift);   // 现在在"午卡组"：照常报
+        using (var db = CreateContext())
+        {
+            (await db.Users.SingleAsync(u => u.Id == uid)).AttendanceGroupId = groupId;
+            await db.SaveChangesAsync();
+        }
+        using (var db = CreateContext())
+            Assert.DoesNotContain(await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).AuditAsync(Tue, Tue), i => i.Type == AttendanceService.AuditNoShift);   // 换到深圳GA：忽略
     }
 }

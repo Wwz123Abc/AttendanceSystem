@@ -19,6 +19,9 @@ public partial class AttendanceService
     public const string AuditOtOver = "加班多记";
     public const string AuditOtUnder = "加班少记";
     public const string AuditNoShift = "有打卡但没排班";
+
+    /// <summary>这些考勤组的"有打卡但没排班"不算疑点（2026-10-26 用户确认：深圳GA考勤组长期不排班，数据核对页、每晚核对通知都忽略）。</summary>
+    public static readonly string[] NoShiftIgnoredGroups = ["深圳GA考勤组"];
     public const string AuditShiftMismatch = "排班类型与打卡时间对不上";
     public const string AuditAbsentWithPunch = "有打卡却记旷工";
     public const string AuditInverted = "上下班时间倒挂";
@@ -161,7 +164,7 @@ public partial class AttendanceService
 
             if (shift is null)
             {
-                if (r.ClockInTime is not null)
+                if (r.ClockInTime is not null && !(u.AttendanceGroup?.GroupName is { } ignoredGroup && NoShiftIgnoredGroups.Contains(ignoredGroup)))
                     issues.Add(Make(AuditNoShift, "warning", "这天有打卡但没有排班：迟到早退、午间窗口、加班重叠检查都没有班次可对照", r.ActualWorkHours));
                 continue;
             }
