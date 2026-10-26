@@ -71,9 +71,10 @@ public partial class AttendanceService
         if (records.Count == 0) return result;
 
         var uids = records.Select(r => r.UserId).Distinct().ToList();
-        var shiftByUserDay = (await db.ShiftAssignments.Include(a => a.ShiftSchedule)
-                .Where(a => uids.Contains(a.UserId) && a.WorkDate >= from && a.WorkDate <= to).ToListAsync(ct))
-            .ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+        var assignList = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+                .Where(a => uids.Contains(a.UserId) && a.WorkDate >= from && a.WorkDate <= to).ToListAsync(ct);
+        var shiftByUserDay = assignList.ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+        var assignCreatedAt = assignList.ToDictionary(a => (a.UserId, a.WorkDate), a => a.CreatedAt);
         var fromDt = from.AddDays(-1).ToDateTime(TimeOnly.MinValue);
         var toDt = to.AddDays(3).ToDateTime(TimeOnly.MinValue);
         var punchesByUser = (await db.AttendancePunches
@@ -90,7 +91,9 @@ public partial class AttendanceService
             // 每晚自动订正只处理"结算时还没排班、后来补排了班"的记录：这种记录上没有冻结的应上班时间和午间结果。
             // 有冻结数据的记录是按当时的班次设置结算的，管理员后来改了班次设置不该被夜里悄悄套到历史上
             // （项目规则：改班次不回头动历史，勾了"同时重算历史工时"才重算；2026-10-26 审查）
-            if (onlyUnfrozen && (r.ScheduledStartTime != null || r.MidCheckResults != null)) continue;
+            // 判断"事后补排班"：排班记录是在考勤记录最后一次结算之后才建的（考勤机同步的记录不写冻结字段，
+            // 靠有没有冻结字段分不出来，会把班次设置的修改套到历史上，2026-10-26 第三轮审查）
+            if (onlyUnfrozen && !(assignCreatedAt.GetValueOrDefault((r.UserId, r.WorkDate)) > r.UpdatedAt)) continue;
             var hourly = IsHourlyOn(hourlyStarts, r.User.AttendanceGroupId, r.WorkDate);
             var punches = punchesByUser.GetValueOrDefault(r.UserId) ?? [];
             if (ExpectedWorkHoursForAudit(r, shift, hourly, punches, defaultDaily) is not { } expected) continue;

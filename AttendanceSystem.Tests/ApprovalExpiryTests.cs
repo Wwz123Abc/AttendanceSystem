@@ -94,4 +94,18 @@ public class ApprovalExpiryTests : SqliteTestBase
         Assert.All(ids, id => Assert.Equal(ApprovalStatus.Pending, db.ApprovalRequests.Single(r => r.Id == id).ApprovalStatus));
         Assert.Equal(ApprovalStatus.Expired, db.ApprovalRequests.Single(r => r.Id == keep).ApprovalStatus);
     }
+
+    [Fact]
+    public async Task 审批中的单子_按上一级处理的时间算_不因为提交满15天就作废()
+    {
+        var submitted = new DateTime(2026, 11, 1, 9, 0, 0);
+        var id = await AddRequestAsync("BK-IP-1", submitted, ApprovalStatus.InProgress);   // 一级已批、二级待批
+        using (var db = CreateContext())
+        {
+            db.ApprovalRequests.Single(r => r.Id == id).UpdatedAt = submitted.AddDays(14);   // 第 14 天一级刚批
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(0, await ExpireAtAsync(submitted.AddDays(16)));   // 提交满 15 天，但上一级才处理 2 天
+        Assert.Equal(1, await ExpireAtAsync(submitted.AddDays(30)));   // 上一级处理满 15 天后仍没人处理：作废
+    }
 }

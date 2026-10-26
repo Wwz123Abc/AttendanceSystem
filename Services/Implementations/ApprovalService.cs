@@ -584,9 +584,12 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 只作废补卡和转班（2026-10-26 用户确认）：作废后员工能重新提交的只有这两种；加班不能事后补报、请假开始时间最早只能选
         // 24 小时内、出差不能早于今天，这三种一旦作废就没法再交，所以不自动作废，一直留给审批人处理
         var stale = await db.ApprovalRequests
-            .Where(a => (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress)
-                        && (a.ApprovalType == ApprovalType.PunchReplenishment || a.ApprovalType == ApprovalType.ShiftChange)
-                        && a.SubmittedAt >= ExpiryAppliesFrom && a.SubmittedAt < deadline)
+            .Where(a => (a.ApprovalType == ApprovalType.PunchReplenishment || a.ApprovalType == ApprovalType.ShiftChange)
+                        && a.SubmittedAt >= ExpiryAppliesFrom
+                        // 待审批：从提交起算；审批中（一级已批、二级待批）：从上一级处理的时间起算，
+                        // 不能因为提交满 15 天就把正在走的两级审批作废（2026-10-26 审查）
+                        && ((a.ApprovalStatus == ApprovalStatus.Pending && a.SubmittedAt < deadline)
+                            || (a.ApprovalStatus == ApprovalStatus.InProgress && a.UpdatedAt < deadline)))
             .Select(a => new { a.Id, a.ApplicantUserId, a.RequestNo, a.SubmittedAt })
             .ToListAsync();
 

@@ -55,7 +55,10 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         var overLimit = tokens.Count > MaxPersons;
         if (overLimit) tokens = tokens.Take(MaxPersons).ToList();   // 防止粘贴上万个名字生成超大查询
         var found = await db.Users.Where(u => tokens.Contains(u.EmployeeNo) || tokens.Contains(u.RealName))
-            .Select(u => new { u.Id, u.EmployeeNo, u.RealName }).ToListAsync(HttpContext.RequestAborted);
+            .Select(u => new { u.Id, u.EmployeeNo, u.RealName, u.DepartmentId }).ToListAsync(HttpContext.RequestAborted);
+        // 分公司管理员只能在自己范围内找人：范围外的和不存在的一样提示"没找到"，不能借此探测全公司有没有某个姓名/工号（2026-10-26 审查）
+        var visible = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
+        if (visible is not null) found = found.Where(f => f.DepartmentId != null && visible.Contains(f.DepartmentId.Value)).ToList();
         var notFound = tokens.Where(t => !found.Any(f => string.Equals(f.EmployeeNo, t, StringComparison.OrdinalIgnoreCase) || f.RealName == t)).ToList();
         if (overLimit) notFound.Add($"（指定人员超过 {MaxPersons} 个，只处理了前 {MaxPersons} 个，请分批）");
         return (found.Select(f => f.Id).Distinct().ToList(), notFound);

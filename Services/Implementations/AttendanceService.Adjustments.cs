@@ -82,6 +82,11 @@ public partial class AttendanceService
             foreach (var rec in punched)
             {
                 await RecalcWorkHoursAfterManualPunchAsync(rec, approval.ApplicantUserId);
+                if (rec.ScheduledStartTime != null && (await GetShiftAssignmentAsync(approval.ApplicantUserId, rec.WorkDate))?.ShiftSchedule is { } newShift)
+                {
+                    rec.ScheduledStartTime = rec.WorkDate.ToDateTime(newShift.WorkStartTime);
+                    rec.ScheduledEndTime   = newShift.IsCrossDay ? rec.WorkDate.ToDateTime(newShift.WorkEndTime).AddDays(1) : rec.WorkDate.ToDateTime(newShift.WorkEndTime);
+                }
                 AppendApprovalNote(rec, $"转班审批通过（{approval.RequestNo}），迟到/早退/工时已按新班次重判");
                 rec.UpdatedAt = clock.LocalNow();
             }
@@ -334,17 +339,46 @@ public partial class AttendanceService
     private async Task ApplyApprovedShiftChangeAsync(ApprovalRequest approval, DateOnly start, DateOnly end, int shiftId, HashSet<(int Year, int Month)> touchedMonths)
     {
         var applicant = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => new { u.HireDate }).FirstOrDefaultAsync();
-        if (applicant is null || !await db.ShiftSchedules.AnyAsync(s => s.Id == shiftId && s.IsActive)) return;
+        if (applicant is null) return;
+        if (!await db.ShiftSchedules.AnyAsync(s => s.Id == shiftId && s.IsActive))
+        {
+            // 目标班次在审批期间被停用/删除：排班一天都没改，要让申请人知道，不能单子显示"已通过"却什么都没变
+            logger.LogWarning("转班 {RequestNo} 审批通过，但目标班次 {ShiftId} 已停用或不存在，排班未修改", approval.RequestNo, shiftId);
+            db.Notifications.Add(new Notification
+            {
+                UserId = approval.ApplicantUserId, Title = "转班未生效", NotificationType = NotificationTypes.ApprovalResult, RelatedId = approval.Id,
+                Content = $"您的转班申请 {approval.RequestNo} 已通过，但目标班次「{approval.ShiftChangeTargetShiftName}」已被停用或删除，排班没有修改，请联系管理员处理。",
+                CreatedAt = clock.LocalNow()
+            });
+            return;
+        }
         var existing = await db.ShiftAssignments
             .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= start && a.WorkDate <= end)
             .ToDictionaryAsync(a => a.WorkDate);
+        // 这几天已经有已通过的请假/出差的，不改班次：请假小时是按原班次记的，换了班次再按新班次的标准工时去减会对不上
+        var startDt = start.ToDateTime(TimeOnly.MinValue); var endDt = end.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var busyRanges = (await db.ApprovalRequests
+                .Where(a => a.ApplicantUserId == approval.ApplicantUserId && a.ApprovalStatus == ApprovalStatus.Approved
+                            && ((a.ApprovalType == ApprovalType.Leave && a.LeaveStartTime < endDt && a.LeaveEndTime > startDt)
+                                || (a.ApprovalType == ApprovalType.BusinessTrip && a.BusinessTripStartTime < endDt && a.BusinessTripEndTime > startDt)))
+                .Select(a => new { S = a.LeaveStartTime ?? a.BusinessTripStartTime, E = a.LeaveEndTime ?? a.BusinessTripEndTime }).ToListAsync())
+            .Where(x => x.S != null && x.E != null).Select(x => (S: DateOnly.FromDateTime(x.S!.Value), E: DateOnly.FromDateTime(x.E!.Value))).ToList();
+        var skipped = new List<DateOnly>();
         for (var d = start; d <= end; d = d.AddDays(1))
         {
+            if (busyRanges.Any(r => r.S <= d && d <= r.E)) { skipped.Add(d); continue; }
             if (applicant.HireDate is { } hire && hire > d) continue;
             if (existing.TryGetValue(d, out var a)) a.ShiftScheduleId = shiftId;
             else db.ShiftAssignments.Add(new ShiftAssignment { UserId = approval.ApplicantUserId, ShiftScheduleId = shiftId, WorkDate = d, IsAutoAssigned = false, CreatedAt = clock.LocalNow() });
             touchedMonths.Add((d.Year, d.Month));
         }
+        if (skipped.Count > 0)
+            db.Notifications.Add(new Notification
+            {
+                UserId = approval.ApplicantUserId, Title = "转班部分日期未改", NotificationType = NotificationTypes.ApprovalResult, RelatedId = approval.Id,
+                Content = $"您的转班申请 {approval.RequestNo} 已通过，但 {string.Join("、", skipped.Select(x => x.ToString("MM-dd")))} 这几天已有批准的请假/出差，班次没有修改。",
+                CreatedAt = clock.LocalNow()
+            });
     }
 
     /// <summary>出差审批通过后回写：区间内逐天置为出差并按全勤记工时（休息日不算）。</summary>
@@ -675,6 +709,9 @@ public partial class AttendanceService
             record.AttendanceStatus  = clockInStatus == AttendanceStatus.Late   ? AttendanceStatus.Late
                                       : clockOutStatus == AttendanceStatus.EarlyLeave ? AttendanceStatus.EarlyLeave
                                       : AttendanceStatus.Normal;
+            // 计时工没有早退（迟到照常判）：跟远程打卡、考勤机同步一样归一化，不然补卡/请假/转班重算后会被判成早退
+            if (IsHourlyOn(await LoadHourlyGroupStartsAsync(), applicant?.AttendanceGroupId, record.WorkDate))
+                NormalizeHourlyRecord(record);
         }
     }
 }

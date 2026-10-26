@@ -39,6 +39,7 @@ public class AttendanceBackgroundService(
     private DateTime _lastCleanupDate           = DateTime.MinValue;
     private DateTime _lastApprovalReminderAt    = DateTime.MinValue;
     private DateTime _lastAuditDate             = DateTime.MinValue;
+    private DateTime _lastAuditAttemptAt        = DateTime.MinValue;   // 核对失败后隔多久重试，免得持续出错时每分钟狂试
 
     /// <summary>每晚自动核对最近多少天（含今天之前一天）。</summary>
     private const int NightlyAuditDays = 14;
@@ -115,11 +116,11 @@ public class AttendanceBackgroundService(
                 }
 
                 // 每天 04:00 之后跑一次数据核对（程序整夜没起来的话，起来后当天补跑一次）：把最近 14 天按现行规则重算一遍和存库对比，
-                // 工时/加班多记自动改正，其余疑点发通知给管理员。失败只记日志，当天窗口内下一分钟会重试。
-                if (now.Hour >= 4 && _lastAuditDate.Date < now.Date)
+                // 工时/加班多记自动改正，其余疑点发通知给管理员。失败只记日志、不记成"今天已核对"，隔 30 分钟再试（2026-10-26 审查）。
+                if (now.Hour >= 4 && _lastAuditDate.Date < now.Date && now - _lastAuditAttemptAt >= TimeSpan.FromMinutes(30))
                 {
-                    await RunNightlyAuditAsync();
-                    _lastAuditDate = now;
+                    _lastAuditAttemptAt = now;
+                    if (await RunNightlyAuditAsync()) _lastAuditDate = now;
                 }
 
                 // 距上次提醒过去满 4 小时（程序刚启动、_lastApprovalReminderAt 还是最小值时，
@@ -148,7 +149,7 @@ public class AttendanceBackgroundService(
     /// 订正后再核对一遍，剩下的（没排班、排错班、加班多少记、时间倒挂、有打卡却记旷工）汇总发给管理员。
     /// 每个管理员始终只留最新一条未读，没有疑点就不打扰。
     /// </summary>
-    private async Task RunNightlyAuditAsync()
+    private async Task<bool> RunNightlyAuditAsync()
     {
         try
         {
@@ -165,30 +166,35 @@ public class AttendanceBackgroundService(
             var hourIds = issues.Where(i => i.Type == AttendanceService.AuditHours).Select(i => i.UserId).Distinct().ToList();
             if (hourIds.Count > 0) fixedHours = await attendance.RecalcHoursAfterScheduleAsync(hourIds, from, to, onlyUnfrozen: true);
             if (fixedHours > 0)
-            {
                 logger.LogInformation("每晚数据核对（{From}~{To}）：自动重算工时 {Hours} 个人天（只处理结算时还没排班的）", from, to, fixedHours);
-                issues = await attendance.AuditAsync(from, to);   // 修完再核对一遍，通知里只报还没解决的
-            }
+            if (hourIds.Count > 0)   // 只要试过订正就再核对一遍（重算内部出错会返回 0，也要以订正后的实际状态为准），通知里只报还没解决的
+                issues = await attendance.AuditAsync(from, to);
 
-            // 先清掉管理员更早的未读核对通知，再看这一轮要不要发新的
-            await db.Notifications
-                .Where(n => n.NotificationType == NotificationTypes.DataAudit && !n.IsRead)
-                .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true).SetProperty(n => n.ReadAt, now));
-            if (issues.Count == 0) return;
-
-            var byType = string.Join("、", issues.GroupBy(i => i.Type).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}"));
-            var content = $"{from:MM-dd}~{to:MM-dd} 数据核对还有 {issues.Count} 条疑点：{byType}。"
-                + (fixedHours > 0 ? $"（已自动订正工时 {fixedHours} 个人天）" : "") + "点击查看明细";
-            var admins = await db.Users.Where(u => u.IsActive && u.Role == UserRole.Admin).Select(u => u.Id).ToListAsync();
-            db.Notifications.AddRange(admins.Select(id => new Notification
+            // 先发新通知、再把更早的标已读：中途出错最多多一条重复，不会出现"旧的已读、新的没发"让管理员收不到
+            var newNotices = new List<Notification>();
+            if (issues.Count > 0)
             {
-                UserId = id, Title = AuditNoticeTitle, Content = content,
-                NotificationType = NotificationTypes.DataAudit, CreatedAt = now
-            }));
-            await db.SaveChangesAsync();
-            logger.LogWarning("每晚数据核对（{From}~{To}）剩余 {Count} 条疑点：{ByType}", from, to, issues.Count, byType);
+                var byType0 = string.Join("、", issues.GroupBy(i => i.Type).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}"));
+                var content0 = $"{from:MM-dd}~{to:MM-dd} 数据核对还有 {issues.Count} 条疑点：{byType0}。"
+                    + (fixedHours > 0 ? $"（已自动订正工时 {fixedHours} 个人天）" : "") + "点击查看明细";
+                var admins0 = await db.Users.Where(u => u.IsActive && u.Role == UserRole.Admin).Select(u => u.Id).ToListAsync();
+                newNotices = admins0.Select(id => new Notification
+                {
+                    UserId = id, Title = AuditNoticeTitle, Content = content0,
+                    NotificationType = NotificationTypes.DataAudit, CreatedAt = now
+                }).ToList();
+                db.Notifications.AddRange(newNotices);
+                await db.SaveChangesAsync();
+                logger.LogWarning("每晚数据核对（{From}~{To}）剩余 {Count} 条疑点：{ByType}", from, to, issues.Count, byType0);
+            }
+            var keepIds = newNotices.Select(n => n.Id).ToList();
+            await db.Notifications
+                .Where(n => n.NotificationType == NotificationTypes.DataAudit && !n.IsRead && !keepIds.Contains(n.Id))
+                .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true).SetProperty(n => n.ReadAt, now));
+            return true;
+
         }
-        catch (Exception ex) { logger.LogError(ex, "每晚数据核对失败"); }
+        catch (Exception ex) { logger.LogError(ex, "每晚数据核对失败"); return false; }
     }
 
     /// <summary>申请有效期 15 天，超时自动作废（只对 2026-10-23 起提交的申请生效）。失败只记日志，不影响后面的提醒。</summary>

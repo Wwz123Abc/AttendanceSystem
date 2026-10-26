@@ -173,4 +173,42 @@ public class ShiftChangeApprovalTests : SqliteTestBase
         Assert.Equal(20, rec.LateMinutes);                                 // 夜班 20:00 上班：20:20 到 = 迟到 20 分钟，不再是白班 08:30 算出来的 710 分钟
         Assert.Equal(AttendanceStatus.Late, rec.AttendanceStatus);
     }
+
+    [Fact]
+    public async Task 目标班次审批期间被停用_排班不改_申请人收到通知()
+    {
+        var (uid, _, _, disabledId, _) = Seed();
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "ZB-T-4", ApplicantUserId = uid, ApprovalType = ApprovalType.ShiftChange, Reason = "t",
+            ShiftChangeStartDate = Sun, ShiftChangeEndDate = Mon, ShiftChangeTargetShiftId = disabledId, ShiftChangeTargetShiftName = "停用班"
+        });
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+        using var check = CreateContext();
+        Assert.DoesNotContain(await check.ShiftAssignments.Where(a => a.UserId == uid).ToListAsync(), a => a.ShiftScheduleId == disabledId);
+        Assert.True(await check.Notifications.AnyAsync(n => n.UserId == uid && n.Title == "转班未生效"));
+    }
+
+    [Fact]
+    public async Task 这几天有已批准的请假_不改那几天的班次_并通知()
+    {
+        var (uid, dayId, nightId, _, _) = Seed();
+        await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "QJ-T-1", ApplicantUserId = uid, ApprovalType = ApprovalType.Leave, Reason = "t", LeaveType = LeaveType.PersonalLeave,
+            LeaveStartTime = Mon.ToDateTime(new TimeOnly(8, 30)), LeaveEndTime = Mon.ToDateTime(new TimeOnly(17, 30)), LeaveDurationHours = 8
+        });
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "ZB-T-5", ApplicantUserId = uid, ApprovalType = ApprovalType.ShiftChange, Reason = "t",
+            ShiftChangeStartDate = Sun, ShiftChangeEndDate = Mon, ShiftChangeTargetShiftId = nightId, ShiftChangeTargetShiftName = "夜班"
+        });
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+        using var check = CreateContext();
+        Assert.Equal(nightId, (await check.ShiftAssignments.SingleAsync(a => a.UserId == uid && a.WorkDate == Sun)).ShiftScheduleId);
+        Assert.Equal(dayId, (await check.ShiftAssignments.SingleAsync(a => a.UserId == uid && a.WorkDate == Mon)).ShiftScheduleId);   // 周一有请假：班次不动
+        Assert.True(await check.Notifications.AnyAsync(n => n.UserId == uid && n.Title == "转班部分日期未改"));
+    }
 }
