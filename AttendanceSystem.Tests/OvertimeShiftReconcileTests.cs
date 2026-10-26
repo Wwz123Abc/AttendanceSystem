@@ -150,4 +150,35 @@ public class OvertimeShiftReconcileTests : SqliteTestBase
         Assert.True(isFallback);
         Assert.True(shift!.IsCrossDay);
     }
+
+    [Fact]
+    public async Task 对账_记录上多出来的手工订正不被抹掉_单子少算的部分才扣_单子时长只减不增并留说明()
+    {
+        var (uid, _) = SeedWeekWorld();   // 周五到周一排白班 08:30–17:30（周末是休息日）
+        var fri = Fri;
+        // 周五（工作日）：加班单 08:30–20:30 存 10 小时，按班次只算 17:30 之后 = 2.5（少算 7.5）；记录上是 10 + 手工订正 1.5 = 11.5
+        int formId;
+        using (var db = CreateContext())
+        {
+            var f = new ApprovalRequest
+            {
+                RequestNo = "JB-R-1", ApplicantUserId = uid, ApprovalType = ApprovalType.Overtime, ApprovalStatus = ApprovalStatus.Approved, Reason = "t",
+                OvertimeStartTime = At(fri, 8, 30), OvertimeEndTime = At(fri, 20, 30), OvertimeDurationHours = 10
+            };
+            db.ApprovalRequests.Add(f);
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = fri, AttendanceStatus = AttendanceStatus.Normal, OvertimeHours = 11.5m });
+            await db.SaveChangesAsync();
+            formId = f.Id;
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
+            await svc.ReconcileOvertimeAsync([uid], fri, fri, dryRun: false);
+        }
+        using var check = CreateContext();
+        Assert.Equal(4m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == fri)).OvertimeHours);   // 11.5 − 7.5：手工订正的 1.5 保留（不是直接赋值成 2.5）
+        var form = await check.ApprovalRequests.SingleAsync(f => f.Id == formId);
+        Assert.Equal(2.5m, form.OvertimeDurationHours);
+        Assert.Contains("按班次对账", form.Reason);
+    }
 }

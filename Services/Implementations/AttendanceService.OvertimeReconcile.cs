@@ -123,6 +123,8 @@ public partial class AttendanceService
         var sumByDay = new Dictionary<(int, DateOnly), decimal>();
         var shiftNameByDay = new Dictionary<(int, DateOnly), string>();
         var formHours = new Dictionary<int, decimal>();
+        var formWorkDate = new Dictionary<int, DateOnly>();                      // 每张单归到哪个考勤日
+        var reductionByDay = new Dictionary<(int, DateOnly), decimal>();        // 这天的单子按班次对过之后"少算了多少"（只算少的）
         foreach (var f in forms)
         {
             var u = users[f.ApplicantUserId];
@@ -147,6 +149,9 @@ public partial class AttendanceService
 
             var hours = ComputeOvertimeHoursOutsideShift(otStart, f.OvertimeEndTime!.Value, shifts, u.AttendanceGroupId, fallbackDays);
             formHours[f.Id] = hours;
+            formWorkDate[f.Id] = workDate;
+            var oldDuration = f.OvertimeDurationHours ?? 0m;
+            if (hours < oldDuration) reductionByDay[(f.ApplicantUserId, workDate)] = reductionByDay.GetValueOrDefault((f.ApplicantUserId, workDate)) + (oldDuration - hours);
             sumByDay[(f.ApplicantUserId, workDate)] = sumByDay.GetValueOrDefault((f.ApplicantUserId, workDate)) + hours;
             if (shifts.Count > 0) shiftNameByDay[(f.ApplicantUserId, workDate)] = shifts[0].Item2.ShiftName + (assignedToday is null ? "（兜底）" : "");
         }
@@ -169,13 +174,17 @@ public partial class AttendanceService
                 continue;
             }
             if (rec is null || rec.OvertimeHours <= newSum) continue;   // 只减不增
+            // 只扣掉"单子按班次对过之后少算的那部分"，不是直接赋值成单子合计：记录上多出来的部分如果是手工订正/历史导入的，
+            // 不能被夜里或排班页保存时顺手抹掉（2026-10-26 审查）；单子本身没变的天，记录保持原样
+            var newValue = Math.Max(newSum, rec.OvertimeHours - reductionByDay.GetValueOrDefault((uid, wd)));
+            if (!dryRun && newValue >= rec.OvertimeHours) continue;   // 真改时没有"单子少算的那部分"就不动；试算/数据核对仍然报出"记录比单子多"，让人看
             var u = users[uid];
             result.Add(new OvertimeReconcileRow(uid, u.EmployeeNo, u.RealName, wd, shiftNameByDay.GetValueOrDefault((uid, wd), ""),
-                rec.OvertimeHours, newSum, string.Join("、", forms.Where(f => f.ApplicantUserId == uid && formHours.ContainsKey(f.Id)
+                rec.OvertimeHours, dryRun ? newSum : newValue, string.Join("、", forms.Where(f => f.ApplicantUserId == uid && formHours.ContainsKey(f.Id)
                     && DateOnly.FromDateTime(f.OvertimeStartTime!.Value) >= wd.AddDays(-1) && DateOnly.FromDateTime(f.OvertimeStartTime!.Value) <= wd.AddDays(1)).Select(f => f.RequestNo))));
             if (dryRun) continue;
-            AppendApprovalNote(rec, $"加班时长已按班次对账：{rec.OvertimeHours:0.##}→{newSum:0.##} 小时（加班只记班次上下班时间之外的部分）");
-            rec.OvertimeHours = newSum;
+            AppendApprovalNote(rec, $"加班时长已按班次对账：{rec.OvertimeHours:0.##}→{newValue:0.##} 小时（加班只记班次上下班时间之外的部分）");
+            rec.OvertimeHours = newValue;
             rec.UpdatedAt = clock.LocalNow();
             touchedMonths.Add((uid, wd.Year, wd.Month));
         }
@@ -184,10 +193,15 @@ public partial class AttendanceService
         // 单子上存的时长也改成对过之后的数（只改记录被改小的那些人当天的单子）
         var changedKeys = result.Select(r => (r.UserId, r.WorkDate)).ToHashSet();
         foreach (var f in forms)
-            if (formHours.TryGetValue(f.Id, out var h) && f.OvertimeDurationHours != h
-                && changedKeys.Any(k => k.UserId == f.ApplicantUserId
-                    && DateOnly.FromDateTime(f.OvertimeStartTime!.Value) >= k.WorkDate.AddDays(-1) && DateOnly.FromDateTime(f.OvertimeStartTime!.Value) <= k.WorkDate.AddDays(1)))
+            // 只改"归到被改小的这一天"、且按班次对完确实比单子上存的少的单子（只减不增），并在申请理由后留一句说明
+            if (formHours.TryGetValue(f.Id, out var h) && h < (f.OvertimeDurationHours ?? 0m)
+                && formWorkDate.TryGetValue(f.Id, out var fwd) && changedKeys.Contains((f.ApplicantUserId, fwd)))
+            {
+                var mark = $"｜{clock.LocalNow():yyyy-MM-dd} 按班次对账：{f.OvertimeDurationHours:0.##}→{h:0.##} 小时";
+                f.Reason = ((f.Reason ?? "") + mark) is { Length: > 1000 } longer ? longer[..1000] : (f.Reason ?? "") + mark;
                 f.OvertimeDurationHours = h;
+                f.UpdatedAt = clock.LocalNow();
+            }
         await db.SaveChangesAsync(ct);
         foreach (var grp in touchedMonths.GroupBy(t => (t.Year, t.Month)))
             await GenerateMonthlySummaryAsync(grp.Key.Year, grp.Key.Month, grp.Select(t => t.UserId).Distinct().ToList());
