@@ -43,7 +43,7 @@ public partial class AttendanceService
         var effective = results is null ? [] : DropWindowsEndedBeforeArrival(r.WorkDate, shift, results, ci);
         var missedEnds = ResolveMissedNonLastWindowEnds(r.WorkDate, shift, effective);
         var boundary = ResolveSecondHalfAbsentBoundary(r.WorkDate, shift, effective);
-        var hours = ComputeWorkHours(ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds), ClampEffectiveClockOut(r.WorkDate, co, shift, boundary));
+        var hours = ComputeRegularWorkHours(ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds), ClampEffectiveClockOut(r.WorkDate, co, shift, boundary));
         return r.AttendanceStatus == AttendanceStatus.OnLeave
             ? ApplyLeaveHoursCap(hours, r.LeaveHours, ResolveDailyStandardHours(shift, defaultDailyHours))
             : hours;

@@ -54,7 +54,7 @@ public partial class AttendanceService
     }
 
     /// <summary>算实际工时（小时）：上下班时间差，扣掉压到公司统一"不算钱"时段的部分。</summary>
-    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut, int? groupId) => ComputeWorkHours(clockIn, clockOut);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
+    private decimal CalcWorkHours(DateTime clockIn, DateTime clockOut, int? groupId) => ComputeRegularWorkHours(clockIn, clockOut);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
 
     /// <summary>
     /// 算某天的实际工时（正班），并处理"休息日自己打卡、没有批准的加班申请就不算工时"这条规则：
@@ -352,6 +352,24 @@ public partial class AttendanceService
     /// 半小时取整再累加"的口径不一致，同一份数据在"我的记录"页会出现日明细 8.37、月合计却按 8.0
     /// 累加，员工自己相加对不上（2026-09-17 复审发现，口径登记表 §2/§5 决定统一到半小时）。
     /// </summary>
+    /// <summary>正班工时取整前的宽限（分钟）：扣完饭点后的在岗时长先加这几分钟，再向下取整到半小时。
+    /// 以前上班卡晚 33 秒（08:30:33）、7 小时 59 分 27 秒就被取整成 7.5，差几十秒吃掉半小时；
+    /// 现在不足半小时的零头只要在 5 分钟之内（含）就按整半小时算（2026-10-26 用户确认）。
+    /// 只用于"打卡算正班工时"，加班时长、请假时长、计时工模式不套这个宽限。</summary>
+    public const int RegularWorkHoursGraceMinutes = 5;
+
+    /// <summary>
+    /// 正班工时：上下班打卡算出的在岗时长，扣默认饭点后先加 <see cref="RegularWorkHoursGraceMinutes"/> 分钟宽限再向下取整到半小时。
+    /// ★ 本地打卡、考勤机同步、补卡回写、月度汇总、数据核对都调这一个，保证同一份打卡各处算出来一致。
+    /// </summary>
+    public static decimal ComputeRegularWorkHours(DateTime clockIn, DateTime clockOut)
+    {
+        var rawMinutes = (decimal)(clockOut - clockIn).TotalMinutes;
+        if (rawMinutes <= 0) return 0;
+        var minutes = rawMinutes - (decimal)ComputeUnpaidBreakOverlapMinutes(clockIn, clockOut);
+        return FloorToHalf(Math.Max(0, (minutes + RegularWorkHoursGraceMinutes) / 60));
+    }
+
     public static decimal ComputeWorkHours(DateTime clockIn, DateTime clockOut, int? groupId = null, int? shiftId = null)
     {
         var rawMinutes = (decimal)(clockOut - clockIn).TotalMinutes;   // 在岗总分钟（夜班下班在第二天也没问题）

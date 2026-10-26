@@ -153,7 +153,7 @@ public partial class AttendanceService
             if (ci >= leaveSegStart) continue;
             if (await IsHourlyOnAsync(await db.Users.Where(u => u.Id == uid).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(), day)) continue;   // 计时工没有这种估算
             var shift = (await GetShiftAssignmentAsync(uid, day))?.ShiftSchedule;
-            var newHours = ApplyLeaveHoursCap(ComputeWorkHours(ci, leaveSegStart), record.LeaveHours,
+            var newHours = ApplyLeaveHoursCap(ComputeRegularWorkHours(ci, leaveSegStart), record.LeaveHours,
                 ResolveDailyStandardHours(shift, defaultDailyHours));
             if (record.ActualWorkHours == newHours) continue;
             record.ActualWorkHours = newHours;

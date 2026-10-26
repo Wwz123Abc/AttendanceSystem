@@ -336,7 +336,7 @@ public partial class AttendanceService
                 var leaveSegStart = leaveStart > dayStart ? leaveStart : dayStart;
                 if (workedCi < leaveSegStart)
                 {
-                    var estimatedWork = ComputeWorkHours(workedCi, leaveSegStart);
+                    var estimatedWork = ComputeRegularWorkHours(workedCi, leaveSegStart);
                     record.ActualWorkHours = ApplyLeaveHoursCap(estimatedWork, record.LeaveHours, dailyCap);
                 }
             }

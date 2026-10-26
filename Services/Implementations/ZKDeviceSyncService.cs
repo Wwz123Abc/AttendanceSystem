@@ -440,7 +440,7 @@ public class ZKDeviceSyncService(
         {
             var effectiveClockIn  = AttendanceService.ClampEffectiveClockIn(workDate, ci, shift, missedWindowEnds);
             var effectiveClockOut = AttendanceService.ClampEffectiveClockOut(workDate, co, shift, secondHalfAbsentBoundary);
-            var computedHours = AttendanceService.ComputeWorkHours(effectiveClockIn, effectiveClockOut);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
+            var computedHours = AttendanceService.ComputeRegularWorkHours(effectiveClockIn, effectiveClockOut);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
             // 半天假当天设备同步到打卡：按"标准工时 − 已批准的请假小时数"封顶，跟本地打卡/
             // 补卡重算是同一套口径（2026-09-17 支持半天请假）
             record.ActualWorkHours = record.AttendanceStatus == AttendanceStatus.OnLeave
