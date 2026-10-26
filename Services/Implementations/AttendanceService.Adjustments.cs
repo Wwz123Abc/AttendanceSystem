@@ -440,8 +440,10 @@ public partial class AttendanceService
     private async Task ApplyApprovedBusinessTripAsync(ApprovalRequest approval, DateTime tripStart, HashSet<(int Year, int Month)> touchedMonths)
     {
         var sd = DateOnly.FromDateTime(tripStart);
-        var ed = DateOnly.FromDateTime(approval.BusinessTripEndTime ?? tripStart);
+        var tripEnd = approval.BusinessTripEndTime ?? tripStart;
+        var ed = DateOnly.FromDateTime(tripEnd);
         var defaultHours = appOptions.Value.DefaultDailyWorkHours;
+        var tripGroupId = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
 
         // 和上面请假的道理一样：把这段时间已有的考勤记录、以及已有的排班，
         // 都先各查一次整批拿出来，下面循环里直接从内存查，不用每天都各查一次数据库
@@ -457,7 +459,11 @@ public partial class AttendanceService
         {
             // 休息日不算出差：不覆盖原来的休假状态，也不白给一天标准工时和出勤（2026-09-24 用户确认）
             shiftsInRange.TryGetValue(d, out var tripShiftAssign);
-            if (IsShiftWeeklyRestDay(d, tripShiftAssign?.ShiftSchedule)) continue;
+            // 例外（2026-10-26 用户确认"出差和加班一样，给申请的工时"）：出差申请的开始和结束在同一天、这天正好是休息日，
+            // 不跳过，按申请的起止时间扣饭点算出差工时（和加班同一个算法，半小时向下取整）；跨多天的出差落在周末的那几天仍不算。
+            var restDayTrip = IsShiftWeeklyRestDay(d, tripShiftAssign?.ShiftSchedule);
+            var sameDayRestTrip = restDayTrip && sd == ed;
+            if (restDayTrip && !sameDayRestTrip) continue;
 
             if (!recordsInRange.TryGetValue(d, out var record))
             {
@@ -469,7 +475,9 @@ public partial class AttendanceService
             // 有排班就用班次自己的标准工时，没排班就用默认标准工时（不用打卡也要按全勤给工时）
             shiftsInRange.TryGetValue(d, out var shiftAssign);
             record.AttendanceStatus  = AttendanceStatus.BusinessTrip;
-            record.ActualWorkHours   = shiftAssign?.ShiftSchedule.StandardWorkHours ?? defaultHours;
+            record.ActualWorkHours   = sameDayRestTrip
+                ? ComputeWorkHours(tripStart, tripEnd, tripGroupId, shiftAssign?.ShiftSchedule.Id)
+                : shiftAssign?.ShiftSchedule.StandardWorkHours ?? defaultHours;
             // 迟到/早退分钟数清零，理由同请假分支：不然出差前如果已经有过打卡产生的分钟数，会残留在报表里
             record.LateMinutes       = 0;
             record.EarlyLeaveMinutes = 0;
@@ -477,7 +485,8 @@ public partial class AttendanceService
             // 万一这天之前已经有另一张加班申请审批通过、累加过加班时长，这里清零会把已批准的加班顶掉。
             // 新建的记录本来就是 0（实体默认值），不用特意再赋一次。
             AppendApprovalNote(record, $"出差审批通过（{approval.RequestNo}）"
-                + (string.IsNullOrWhiteSpace(approval.BusinessTripDestination) ? "" : $"，目的地：{approval.BusinessTripDestination}"));
+                + (string.IsNullOrWhiteSpace(approval.BusinessTripDestination) ? "" : $"，目的地：{approval.BusinessTripDestination}")
+                + (sameDayRestTrip ? $"，休息日按申请时间计 {record.ActualWorkHours:0.##} 小时" : ""));
             record.UpdatedAt        = clock.LocalNow();
             touchedMonths.Add((d.Year, d.Month));
         }

@@ -106,6 +106,26 @@ public class LeaveAndTripRuleTests : SqliteTestBase
         Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && (r.WorkDate == Sat || r.WorkDate == Sun)));
     }
 
+    [Fact]
+    public async Task 审批通过回写_出差只有休息日一天_按申请时间扣饭点给出差工时()
+    {
+        var (uid, _) = SeedWeekWorld();
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "CC-T-2", ApplicantUserId = uid, ApprovalType = ApprovalType.BusinessTrip, BusinessTripDestination = "邯郸",
+            BusinessTripStartTime = Sun.ToDateTime(new TimeOnly(8, 30)), BusinessTripEndTime = Sun.ToDateTime(new TimeOnly(17, 30)), Reason = "t"
+        });
+
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Sun);
+        Assert.Equal(AttendanceStatus.BusinessTrip, rec.AttendanceStatus);
+        Assert.Equal(8m, rec.ActualWorkHours);   // 08:30–17:30 扣中午 1 小时，和加班同一个算法
+        Assert.Contains("休息日按申请时间计 8 小时", rec.ApprovalNote);
+    }
+
     // ── 请假/出差：开始时间最多只能提前3个月申请（2026-09-30 用户确认，避免选到离谱的未来日期）──
 
     [Fact]

@@ -169,7 +169,8 @@ public partial class AttendanceService
                     // 只认加班单，不然没排班的人（正班不封顶、已含工作日加班）"正班+加班"会把同一段在岗时间算两遍；
                     // 同时也把 9/28 前"休息日既记正班又记加班"的旧记录挡在报表外。
                     var regularHalf = hourlyDay ? FloorToHalf(rec.ActualWorkHours)   // 计时工不封顶
-                                    : isShiftRest ? 0m : FloorToHalf(Math.Min(rec.ActualWorkHours, dailyStdHours));
+                                    : isShiftRest ? (rec.AttendanceStatus == AttendanceStatus.BusinessTrip ? FloorToHalf(rec.ActualWorkHours) : 0m)   // 休息日的出差按申请时间给的工时（2026-10-26）
+                                    : FloorToHalf(Math.Min(rec.ActualWorkHours, dailyStdHours));
                     var otHalf      = rec.OvertimeHours > 0 ? FloorToHalf(rec.OvertimeHours) : 0m;
                     if (regularHalf + otHalf > 0) dayHours = regularHalf + otHalf;   // 每日格子 = 正班 + 加班（半小时取整，不足舍去）
                     totalWork += regularHalf;                                          // 合计按"半小时"为最小单位累加，保证总数只会是整数或 x.5
@@ -303,7 +304,8 @@ public partial class AttendanceService
             shifts.TryGetValue((r.UserId, r.WorkDate), out var shift);
             var std = shift?.StandardWorkHours ?? defaultDailyHours;
             var regular = IsHourlyOn(hourlyStarts, groupOfUser.GetValueOrDefault(r.UserId), r.WorkDate) ? FloorToHalf(r.ActualWorkHours)   // 计时工不封顶、没有休息日
-                        : IsShiftWeeklyRestDay(r.WorkDate, shift) ? 0m : FloorToHalf(Math.Min(r.ActualWorkHours, std));
+                        : IsShiftWeeklyRestDay(r.WorkDate, shift) ? (r.AttendanceStatus == AttendanceStatus.BusinessTrip ? FloorToHalf(r.ActualWorkHours) : 0m)   // 休息日的出差按申请时间给的工时（2026-10-26）
+                        : FloorToHalf(Math.Min(r.ActualWorkHours, std));
             var ot = r.OvertimeHours > 0 ? FloorToHalf(r.OvertimeHours) : 0m;
             r.PayrollRegularHours = regular;
             r.PayrollDayHours = regular + ot;
