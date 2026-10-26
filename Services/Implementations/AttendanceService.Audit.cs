@@ -60,7 +60,7 @@ public partial class AttendanceService
     /// <paramref name="userIds"/> 为空 = 所有人；<paramref name="dryRun"/>=true 只算不写库。幂等。
     /// </summary>
     public async Task<List<HoursRecalcRow>> RecalcHoursForScheduledAsync(
-        IReadOnlyCollection<int>? userIds, DateOnly from, DateOnly to, bool dryRun, CancellationToken ct = default)
+        IReadOnlyCollection<int>? userIds, DateOnly from, DateOnly to, bool dryRun, CancellationToken ct = default, bool onlyUnfrozen = false)
     {
         var result = new List<HoursRecalcRow>();
         var records = await db.AttendanceRecords.Include(r => r.User)
@@ -87,6 +87,10 @@ public partial class AttendanceService
         foreach (var r in records)
         {
             if (!shiftByUserDay.TryGetValue((r.UserId, r.WorkDate), out var shift)) continue;
+            // 每晚自动订正只处理"结算时还没排班、后来补排了班"的记录：这种记录上没有冻结的应上班时间和午间结果。
+            // 有冻结数据的记录是按当时的班次设置结算的，管理员后来改了班次设置不该被夜里悄悄套到历史上
+            // （项目规则：改班次不回头动历史，勾了"同时重算历史工时"才重算；2026-10-26 审查）
+            if (onlyUnfrozen && (r.ScheduledStartTime != null || r.MidCheckResults != null)) continue;
             var hourly = IsHourlyOn(hourlyStarts, r.User.AttendanceGroupId, r.WorkDate);
             var punches = punchesByUser.GetValueOrDefault(r.UserId) ?? [];
             if (ExpectedWorkHoursForAudit(r, shift, hourly, punches, defaultDaily) is not { } expected) continue;
@@ -108,9 +112,9 @@ public partial class AttendanceService
     }
 
     /// <summary>排班补上/改了之后调用：重算这些人这段日期的正班工时，返回被改的人天数。出错只记日志，不影响排班本身。</summary>
-    public async Task<int> RecalcHoursAfterScheduleAsync(IReadOnlyCollection<int> userIds, DateOnly from, DateOnly to)
+    public async Task<int> RecalcHoursAfterScheduleAsync(IReadOnlyCollection<int> userIds, DateOnly from, DateOnly to, bool onlyUnfrozen = false)
     {
-        try { return (await RecalcHoursForScheduledAsync(userIds, from, to, dryRun: false)).Count; }
+        try { return (await RecalcHoursForScheduledAsync(userIds, from, to, dryRun: false, default, onlyUnfrozen)).Count; }
         catch (Exception ex)
         {
             logger.LogError(ex, "排班变更后重算正班工时失败（不影响排班），用户数 {Count}，{From}~{To}", userIds.Count, from, to);

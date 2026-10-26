@@ -7,6 +7,7 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
+using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Admin;
 
@@ -17,8 +18,23 @@ namespace AttendanceSystem.Pages.Admin;
 /// 管理员和文员都能看、都能改（2026-10-26 起；以前只有总部超级管理员能改）。改完只影响之后的计算和重新计算，已经存好的工时不会自己变。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSettingsModel> logger) : PageModel
+public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSettingsModel> logger, IDeptScopeService deptScopeService) : PageModel
 {
+    /// <summary>
+    /// 这个考勤组归不归当前用户管：不受范围限制的（总部）都能管；受范围限制的（分公司管理员/文员），
+    /// 必须"这个考勤组关联的部门都在自己范围内"才能看、能改——跟「考勤组管理」页同一个规则（All 不是 Any，
+    /// 不然跨分公司共用的组会变成双方都能改）。饭点直接影响加班时长，不能让分公司改到别的分公司员工的加班（2026-10-26 审查）。
+    /// </summary>
+    private async Task<bool> IsGroupWritableAsync(int groupId)
+    {
+        var cu = HttpContext.GetRequiredUser();
+        if (!cu.IsScoped) return true;
+        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
+        if (deptIds.Count == 0) return false;
+        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
+        return visibleIds is not null && deptIds.All(id => visibleIds.Contains(id));
+    }
+
     [BindProperty] public int GroupId { get; set; }
     /// <summary>0 = 设置考勤组本身的饭点；&gt;0 = 只设置这个班次的（班次必须属于这个考勤组）。</summary>
     [BindProperty] public int ShiftId { get; set; }
@@ -48,6 +64,7 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
     public async Task<IActionResult> OnPostSaveAsync()
     {
         if (!await db.AttendanceGroups.AnyAsync(g => g.Id == GroupId)) { ErrorMessage = "请先选择考勤组"; await LoadAsync(); return Page(); }
+        if (!await IsGroupWritableAsync(GroupId)) { ErrorMessage = "这个考勤组不在你的管理范围内"; await LoadAsync(); return Page(); }
 
         var windows = new List<(TimeOnly, TimeOnly)>();
         for (var i = 0; i < Math.Max(Starts.Count, Ends.Count); i++)
@@ -81,7 +98,10 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
     /// <summary>这个考勤组恢复默认时段（删掉单独设置）；选的是班次就是"不再单独设置，改用所在考勤组的"。</summary>
     public async Task<IActionResult> OnPostResetAsync()
     {
+        if (!await IsGroupWritableAsync(GroupId)) { ErrorMessage = "这个考勤组不在你的管理范围内"; await LoadAsync(); return Page(); }
         var key = ShiftId > 0 ? UnpaidBreakSettings.KeyForShift(ShiftId) : UnpaidBreakSettings.KeyFor(GroupId);
+        if (ShiftId > 0 && !await db.ShiftSchedules.AnyAsync(s => s.Id == ShiftId && s.AttendanceGroupId == GroupId))
+        { ErrorMessage = "这个班次不属于所选考勤组"; await LoadAsync(); return Page(); }
         var row = await db.SystemSettings.FirstOrDefaultAsync(s => s.Key == key);
         if (row is not null) { db.SystemSettings.Remove(row); await db.SaveChangesAsync(); }
         if (ShiftId > 0) UnpaidBreakSettings.RemoveShift(ShiftId); else UnpaidBreakSettings.Remove(GroupId);
@@ -111,7 +131,10 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
         CanEdit = true;   // 管理员和文员都能改（2026-10-26 用户确认；以前只有总部超级管理员能改）
         var userCounts = await db.Users.Where(u => u.IsActive && u.AttendanceGroupId != null)
             .GroupBy(u => u.AttendanceGroupId!.Value).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N);
-        Groups = (await db.AttendanceGroups.OrderBy(g => g.GroupName).Select(g => new { g.Id, g.GroupName }).ToListAsync())
+        var allGroups = await db.AttendanceGroups.OrderBy(g => g.GroupName).Select(g => new { g.Id, g.GroupName }).ToListAsync();
+        var visibleGroups = new List<(int Id, string GroupName)>();
+        foreach (var g in allGroups) if (await IsGroupWritableAsync(g.Id)) visibleGroups.Add((g.Id, g.GroupName));   // 只列自己范围内的考勤组
+        Groups = visibleGroups
             .Select(g => new GroupRow(g.Id, g.GroupName, userCounts.GetValueOrDefault(g.Id), UnpaidBreakSettings.IsCustomized(g.Id), UnpaidBreakSettings.Describe(g.Id)))
             .ToList();
         if (Groups.All(g => g.Id != GroupId)) GroupId = Groups.FirstOrDefault()?.Id ?? 0;   // 没选/选的不存在：默认第一个考勤组

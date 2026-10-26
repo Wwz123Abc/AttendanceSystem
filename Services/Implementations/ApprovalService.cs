@@ -581,8 +581,11 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
     {
         var now = clock.LocalNow();
         var deadline = now.AddDays(-ApprovalValidDays);
+        // 只作废补卡和转班（2026-10-26 用户确认）：作废后员工能重新提交的只有这两种；加班不能事后补报、请假开始时间最早只能选
+        // 24 小时内、出差不能早于今天，这三种一旦作废就没法再交，所以不自动作废，一直留给审批人处理
         var stale = await db.ApprovalRequests
             .Where(a => (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress)
+                        && (a.ApprovalType == ApprovalType.PunchReplenishment || a.ApprovalType == ApprovalType.ShiftChange)
                         && a.SubmittedAt >= ExpiryAppliesFrom && a.SubmittedAt < deadline)
             .Select(a => new { a.Id, a.ApplicantUserId, a.RequestNo, a.SubmittedAt })
             .ToListAsync();
@@ -603,7 +606,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             db.Notifications.Add(new Notification
             {
                 UserId = a.ApplicantUserId, Title = "申请已作废",
-                Content = $"您的申请 {a.RequestNo}（{a.SubmittedAt:MM/dd} 提交）超过 {ApprovalValidDays} 天没有被处理，已自动作废。如仍需办理，请重新提交，并记得联系审批人。",
+                Content = $"您的申请 {a.RequestNo}（{a.SubmittedAt:MM/dd} 提交）超过 {ApprovalValidDays} 天没有被处理，已自动作废。如仍需办理，请重新提交，并记得联系审批人（转班最多只能补报最近 3 天，日期已过的请联系管理员）。",
                 NotificationType = NotificationTypes.ApprovalResult, RelatedId = a.Id, CreatedAt = now
             });
             expired++;

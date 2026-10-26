@@ -142,9 +142,10 @@ public class AttendanceBackgroundService(
     }
 
     /// <summary>
-    /// 每晚数据核对：核对最近 <see cref="NightlyAuditDays"/> 天，其中"工时与打卡不符"自动按现行规则重算（只改工时，
-    /// 不动状态/迟到早退/加班/请假）、"加班多记"自动对账扣减（只减不增）；重算后再核对一遍，
-    /// 剩下需要人处理的（没排班、排错班、加班少记、时间倒挂、有打卡却记旷工）汇总发给管理员。
+    /// 每晚数据核对：核对最近 <see cref="NightlyAuditDays"/> 天，其中"工时与打卡不符"只自动订正"结算时还没排班、后来补排了班"的记录
+    /// （记录上没有冻结的应上班时间和午间结果；只改工时，不动状态/迟到早退/加班/请假）；
+    /// 其余的（班次设置改过造成的差异、加班多记少记等）只通知不自动改——改班次设置不回头动历史，是项目的规矩（2026-10-26 审查）。
+    /// 订正后再核对一遍，剩下的（没排班、排错班、加班多少记、时间倒挂、有打卡却记旷工）汇总发给管理员。
     /// 每个管理员始终只留最新一条未读，没有疑点就不打扰。
     /// </summary>
     private async Task RunNightlyAuditAsync()
@@ -162,13 +163,10 @@ public class AttendanceBackgroundService(
             var issues = await attendance.AuditAsync(from, to);
             var fixedHours = 0;
             var hourIds = issues.Where(i => i.Type == AttendanceService.AuditHours).Select(i => i.UserId).Distinct().ToList();
-            if (hourIds.Count > 0) fixedHours = await attendance.RecalcHoursAfterScheduleAsync(hourIds, from, to);
-            var fixedOt = 0;
-            var otIds = issues.Where(i => i.Type == AttendanceService.AuditOtOver).Select(i => i.UserId).Distinct().ToList();
-            if (otIds.Count > 0) fixedOt = await attendance.ReconcileOvertimeAfterScheduleAsync(otIds, from, to);
-            if (fixedHours + fixedOt > 0)
+            if (hourIds.Count > 0) fixedHours = await attendance.RecalcHoursAfterScheduleAsync(hourIds, from, to, onlyUnfrozen: true);
+            if (fixedHours > 0)
             {
-                logger.LogInformation("每晚数据核对（{From}~{To}）：自动重算工时 {Hours} 个人天，加班对账 {Ot} 个人天", from, to, fixedHours, fixedOt);
+                logger.LogInformation("每晚数据核对（{From}~{To}）：自动重算工时 {Hours} 个人天（只处理结算时还没排班的）", from, to, fixedHours);
                 issues = await attendance.AuditAsync(from, to);   // 修完再核对一遍，通知里只报还没解决的
             }
 
@@ -180,7 +178,7 @@ public class AttendanceBackgroundService(
 
             var byType = string.Join("、", issues.GroupBy(i => i.Type).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}"));
             var content = $"{from:MM-dd}~{to:MM-dd} 数据核对还有 {issues.Count} 条疑点：{byType}。"
-                + (fixedHours + fixedOt > 0 ? $"（已自动订正工时 {fixedHours}、加班 {fixedOt} 个人天）" : "") + "点击查看明细";
+                + (fixedHours > 0 ? $"（已自动订正工时 {fixedHours} 个人天）" : "") + "点击查看明细";
             var admins = await db.Users.Where(u => u.IsActive && u.Role == UserRole.Admin).Select(u => u.Id).ToListAsync();
             db.Notifications.AddRange(admins.Select(id => new Notification
             {

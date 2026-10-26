@@ -74,6 +74,18 @@ public partial class AttendanceService
         if (approval.ApprovalType == ApprovalType.ShiftChange && approval.ShiftChangeStartDate is { } rs && approval.ShiftChangeEndDate is { } re)
         {
             var ids = new[] { approval.ApplicantUserId };
+            // 先按新班次把这几天"有上下班卡"的记录重新判一遍：工时、迟到/早退分钟数和状态（按旧班次判出的"迟到 690 分钟"
+            // 这类结果不能留着继续算进月度汇总，2026-10-26 审查）；请假/出差/节假日的状态不受影响（见该方法里的保护）
+            var punched = await db.AttendanceRecords
+                .Where(r => r.UserId == approval.ApplicantUserId && r.WorkDate >= rs && r.WorkDate <= re && r.ClockInTime != null && r.ClockOutTime != null)
+                .ToListAsync();
+            foreach (var rec in punched)
+            {
+                await RecalcWorkHoursAfterManualPunchAsync(rec, approval.ApplicantUserId);
+                AppendApprovalNote(rec, $"转班审批通过（{approval.RequestNo}），迟到/早退/工时已按新班次重判");
+                rec.UpdatedAt = clock.LocalNow();
+            }
+            await db.SaveChangesAsync();
             await RecalcHoursAfterScheduleAsync(ids, rs, re);
             await ReconcileOvertimeAfterScheduleAsync(ids, rs, re);
         }

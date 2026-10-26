@@ -87,7 +87,7 @@ public interface IAttendanceService
     Task<(int Checked, int HoursChanged)> RecalcShiftHistoryAsync(int shiftId, DateOnly from);
 
     /// <summary>排班补上/改了之后调用：重算这些人这段日期（有上下班卡、已排班）的正班工时，返回被改的人天数。</summary>
-    Task<int> RecalcHoursAfterScheduleAsync(IReadOnlyCollection<int> userIds, DateOnly from, DateOnly to);
+    Task<int> RecalcHoursAfterScheduleAsync(IReadOnlyCollection<int> userIds, DateOnly from, DateOnly to, bool onlyUnfrozen = false);
 
     /// <summary>数据核对：把一段日期里每条考勤记录按现行规则重新算一遍，和系统里存的工时、加班对比，返回所有疑点。只读，不改数据。</summary>
     Task<List<AuditIssue>> AuditAsync(DateOnly from, DateOnly to, CancellationToken ct = default);

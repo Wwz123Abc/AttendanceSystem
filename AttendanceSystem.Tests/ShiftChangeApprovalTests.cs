@@ -145,4 +145,32 @@ public class ShiftChangeApprovalTests : SqliteTestBase
         Assert.NotEqual(nightId, (await check.ShiftAssignments.SingleAsync(a => a.UserId == uid && a.WorkDate == Sun)).ShiftScheduleId);   // 周日在入职前：不动
         Assert.Equal(nightId, (await check.ShiftAssignments.SingleAsync(a => a.UserId == uid && a.WorkDate == Mon)).ShiftScheduleId);
     }
+
+    [Fact]
+    public async Task 审批通过后_已有打卡按新班次重判迟到状态和分钟数()
+    {
+        var (uid, _, nightId, _, _) = Seed();
+        // 周一排白班 08:30，员工实际 20:20 才来上夜班（打卡 20:20 – 次日 05:40）：按白班判是迟到 710 分钟
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = uid, WorkDate = Mon, AttendanceStatus = AttendanceStatus.Late, LateMinutes = 710,
+                ClockInTime = Mon.ToDateTime(new TimeOnly(20, 20)), ClockOutTime = Mon.AddDays(1).ToDateTime(new TimeOnly(5, 40))
+            });
+            await db.SaveChangesAsync();
+        }
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "ZB-T-3", ApplicantUserId = uid, ApprovalType = ApprovalType.ShiftChange, Reason = "t",
+            ShiftChangeStartDate = Mon, ShiftChangeEndDate = Mon, ShiftChangeTargetShiftId = nightId, ShiftChangeTargetShiftName = "夜班"
+        });
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+        Assert.Equal(20, rec.LateMinutes);                                 // 夜班 20:00 上班：20:20 到 = 迟到 20 分钟，不再是白班 08:30 算出来的 710 分钟
+        Assert.Equal(AttendanceStatus.Late, rec.AttendanceStatus);
+    }
 }

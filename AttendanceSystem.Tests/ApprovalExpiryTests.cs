@@ -10,13 +10,13 @@ namespace AttendanceSystem.Tests;
 /// <summary>申请有效期 15 天、超时自动作废，只对 2026-10-23 起提交的申请生效（2026-10-22 用户确认）。</summary>
 public class ApprovalExpiryTests : SqliteTestBase
 {
-    private async Task<int> AddRequestAsync(string no, DateTime submittedAt, ApprovalStatus status = ApprovalStatus.Pending)
+    private async Task<int> AddRequestAsync(string no, DateTime submittedAt, ApprovalStatus status = ApprovalStatus.Pending, ApprovalType type = ApprovalType.PunchReplenishment)
     {
         var (applicant, _, groupApprover, _) = SeedApprovalWorldOnce();
         using var db = CreateContext();
         var r = new ApprovalRequest
         {
-            RequestNo = no, ApplicantUserId = applicant, ApprovalType = ApprovalType.Leave, ApprovalStatus = status,
+            RequestNo = no, ApplicantUserId = applicant, ApprovalType = type, ApprovalStatus = status,
             SubmittedAt = submittedAt, UpdatedAt = submittedAt, Reason = "t",
             LeaveStartTime = submittedAt, LeaveEndTime = submittedAt.AddHours(4), LeaveDurationHours = 4
         };
@@ -76,5 +76,22 @@ public class ApprovalExpiryTests : SqliteTestBase
         using var db = CreateContext();
         Assert.Equal(ApprovalStatus.Approved, (await db.ApprovalRequests.SingleAsync(a => a.Id == done)).ApprovalStatus);
         Assert.Equal(ApprovalStatus.Expired, (await db.ApprovalRequests.SingleAsync(a => a.Id == open)).ApprovalStatus);
+    }
+
+    [Fact]
+    public async Task 加班请假出差_超过15天也不自动作废_作废后员工没法重新提交()
+    {
+        var old = new DateTime(2026, 11, 1, 9, 0, 0);
+        var ids = new[]
+        {
+            await AddRequestAsync("JB-X-1", old, type: ApprovalType.Overtime),
+            await AddRequestAsync("QJ-X-1", old, type: ApprovalType.Leave),
+            await AddRequestAsync("CC-X-1", old, type: ApprovalType.BusinessTrip),
+        };
+        var keep = await AddRequestAsync("BK-X-1", old);   // 补卡 15 天没处理：会作废
+        Assert.Equal(1, await ExpireAtAsync(old.AddDays(16)));
+        using var db = CreateContext();
+        Assert.All(ids, id => Assert.Equal(ApprovalStatus.Pending, db.ApprovalRequests.Single(r => r.Id == id).ApprovalStatus));
+        Assert.Equal(ApprovalStatus.Expired, db.ApprovalRequests.Single(r => r.Id == keep).ApprovalStatus);
     }
 }

@@ -50,7 +50,7 @@ public class NightlyAuditTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 工时被改乱_每晚核对自动改回_没有剩余疑点就不通知()
+    public async Task 结算时就有班次冻结了窗口的记录_工时被改乱_不自动改_只通知管理员()
     {
         var adminId = AddAdmin();
         var (uid, _) = SeedDayMidWorld();
@@ -64,7 +64,35 @@ public class NightlyAuditTests : SqliteTestBase
         await RunNightlyAuditAsync();
 
         using var check = CreateContext();
-        Assert.Equal(8m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid)).ActualWorkHours);
+        Assert.Equal(12m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid)).ActualWorkHours);   // 记录上有冻结的午间结果：夜里不动它
+        var notice = await check.Notifications.SingleAsync(n => n.UserId == adminId && n.NotificationType == NotificationTypes.DataAudit);
+        Assert.Contains("工时与打卡不符", notice.Content);
+    }
+
+    [Fact]
+    public async Task 结算时还没排班_后来补排了班_每晚核对自动重算工时()
+    {
+        var adminId = AddAdmin();
+        var (uid, shiftId) = SeedDayMidWorld();
+        using (var db = CreateContext())   // 先把排班删掉：打卡结算时没有班次
+        {
+            db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid));
+            await db.SaveChangesAsync();
+        }
+        await SyncAsync(Tue.ToDateTime(new TimeOnly(8, 25)), Tue.ToDateTime(new TimeOnly(12, 20)), Tue.ToDateTime(new TimeOnly(18, 35)));
+        decimal before;
+        using (var db = CreateContext())   // 后来补排了班
+        {
+            before = (await db.AttendanceRecords.SingleAsync(r => r.UserId == uid)).ActualWorkHours;
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = uid, WorkDate = Tue, ShiftScheduleId = shiftId });
+            await db.SaveChangesAsync();
+        }
+        Assert.True(before > 8m);   // 没班次时不封顶：晚走的钟点都算进去了
+
+        await RunNightlyAuditAsync();
+
+        using var check = CreateContext();
+        Assert.Equal(8m, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid)).ActualWorkHours);   // 按班次重算：封顶到下班时间
         Assert.False(await check.Notifications.AnyAsync(n => n.UserId == adminId && n.NotificationType == NotificationTypes.DataAudit));
     }
 
