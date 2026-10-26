@@ -170,6 +170,14 @@ public class ApplySubmitModel(
 
                 await approvalService.SubmitApprovalAsync(CurrentUserId, dto);
                 SuccessMessage = "申请提交成功！" + (AttachmentWarning is null ? "" : $"（{AttachmentWarning}）");
+                if (approvalType == Models.Enums.ApprovalType.ShiftChange && dto.ShiftChangeStartDate is { } scs && dto.ShiftChangeEndDate is { } sce)
+                {
+                    var sdt = scs.ToDateTime(TimeOnly.MinValue); var edt = sce.AddDays(1).ToDateTime(TimeOnly.MinValue);
+                    var busy = await db.ApprovalRequests.AnyAsync(a => a.ApplicantUserId == CurrentUserId && a.ApprovalStatus == Models.Enums.ApprovalStatus.Approved
+                        && ((a.ApprovalType == Models.Enums.ApprovalType.Leave && a.LeaveStartTime < edt && a.LeaveEndTime > sdt)
+                            || (a.ApprovalType == Models.Enums.ApprovalType.BusinessTrip && a.BusinessTripStartTime < edt && a.BusinessTripEndTime > sdt)));
+                    if (busy) SuccessMessage += " 注意：这段日期里你已有批准的请假或出差，那几天的班次不会修改。";
+                }
             }
             catch
             {

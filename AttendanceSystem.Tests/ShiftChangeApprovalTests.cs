@@ -211,4 +211,53 @@ public class ShiftChangeApprovalTests : SqliteTestBase
         Assert.Equal(dayId, (await check.ShiftAssignments.SingleAsync(a => a.UserId == uid && a.WorkDate == Mon)).ShiftScheduleId);   // 周一有请假：班次不动
         Assert.True(await check.Notifications.AnyAsync(n => n.UserId == uid && n.Title == "转班部分日期未改"));
     }
+
+    [Fact]
+    public async Task 白班转夜班_这几天已有打卡_记录备注写原班次_并提醒申请人和管理员核对打卡归属()
+    {
+        var (uid, _, nightId, _, _) = Seed();
+        using (var db = CreateContext())
+        {
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = uid, WorkDate = Mon, AttendanceStatus = AttendanceStatus.Normal,
+                ClockInTime = Mon.ToDateTime(new TimeOnly(8, 28)), ClockOutTime = Mon.ToDateTime(new TimeOnly(17, 35))
+            });
+            await db.SaveChangesAsync();
+        }
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "ZB-T-6", ApplicantUserId = uid, ApprovalType = ApprovalType.ShiftChange, Reason = "t",
+            ShiftChangeStartDate = Mon, ShiftChangeEndDate = Mon, ShiftChangeTargetShiftId = nightId, ShiftChangeTargetShiftName = "夜班"
+        });
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+
+        using var check = CreateContext();
+        Assert.Contains("原班次「白班」", (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon)).ApprovalNote);
+        Assert.True(await check.Notifications.AnyAsync(n => n.UserId == uid && n.Title == "转班后请核对打卡"));
+        Assert.True(await check.Notifications.AnyAsync(n => n.Title == "转班后需核对打卡归属"));   // 管理员（Seed 里有一个兜底管理员）
+    }
+
+    [Fact]
+    public async Task 被标旷工又没打卡的那天_转班后变成休息日_恢复成正常()
+    {
+        var (uid, dayId, nightId, _, _) = Seed();
+        using (var db = CreateContext())   // 周六原本排夜班（不休息），被后台标了旷工
+        {
+            (await db.ShiftAssignments.SingleAsync(a => a.UserId == uid && a.WorkDate == Sat)).ShiftScheduleId = nightId;
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Sat, AttendanceStatus = AttendanceStatus.Absent });
+            await db.SaveChangesAsync();
+        }
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "ZB-T-7", ApplicantUserId = uid, ApprovalType = ApprovalType.ShiftChange, Reason = "t",
+            ShiftChangeStartDate = Sat, ShiftChangeEndDate = Sat, ShiftChangeTargetShiftId = dayId, ShiftChangeTargetShiftName = "白班"   // 白班周六休息
+        });
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance).UpdateAttendanceAfterApprovalAsync(id);
+
+        using var check = CreateContext();
+        Assert.Equal(AttendanceStatus.Normal, (await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Sat)).AttendanceStatus);
+    }
 }
