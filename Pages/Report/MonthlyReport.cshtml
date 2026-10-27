@@ -22,7 +22,7 @@
     string NI(int v)     => v == 0 ? "" : v.ToString();
     string ND(decimal v) => v == 0 ? "" : v.ToString("0.##");
 
-    var totalCols = 6 + Model.Dates.Count + 19;   // 固定列 + 每日格子 + 尾部统计列(18，含请假天数/夜班总工时/正班工时/应出勤天数) + 操作列(1)，空数据行合并单元格用
+    var totalCols = 7 + Model.Dates.Count + 19;   // 固定列 + 每日格子 + 尾部统计列(18，含请假天数/夜班总工时/正班工时/应出勤天数) + 操作列(1)，空数据行合并单元格用
 }
 
 <div class="page-header d-flex justify-content-between align-items-center">
@@ -139,6 +139,7 @@
                         <th rowspan="2" class="bg-light" style="position:sticky;left:80px;z-index:3;min-width:90px">工号</th>
                         <th rowspan="2" style="min-width:90px">职位</th>
                         <th rowspan="2" style="min-width:100px">合同公司</th>
+                        <th rowspan="2" style="min-width:90px">离职日期</th>
                         <th colspan="@Model.Dates.Count" class="text-center">考勤结果</th>
                         <th rowspan="2">出勤天数</th>
                         <th rowspan="2">请假天数</th>
@@ -184,6 +185,7 @@
                             <td class="small text-muted bg-white" style="position:sticky;left:80px;z-index:1">@row.EmployeeNo</td>
                             <td class="small">@row.Position</td>
                             <td class="small">@row.ContractCompany</td>
+                            <td class="small">@(row.ResignDate?.ToString("yyyy-MM-dd"))</td>
                             @for (var i = 0; i < Model.Dates.Count; i++)
                             {
                                 var isWeekend = Model.Dates[i].DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;

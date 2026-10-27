@@ -31,7 +31,7 @@ public class EmployeeRecordModel(AttendanceDbContext db, IDeptScopeService deptS
     public List<Match> Matches { get; set; } = [];
 
     public record Info(int Id, string EmployeeNo, string RealName, string? Dept, string? Position, string? GroupName, DateOnly? HourlyStart,
-        string RoleText, bool Active, bool Exempt, DateOnly? HireDate, string? Supervisor, string? Phone, string? Devices);
+        string RoleText, bool Active, bool Exempt, DateOnly? HireDate, DateOnly? ResignDate, string? Supervisor, string? Phone, string? Devices);
     public Info? Emp { get; set; }
 
     public record ShiftDay(DateOnly Date, string? ShiftName, string? Time, bool IsRest, bool CrossDay, bool Missing, bool HasPunch);
@@ -94,7 +94,7 @@ public class EmployeeRecordModel(AttendanceDbContext db, IDeptScopeService deptS
         Emp = new Info(user.Id, user.EmployeeNo, user.RealName, user.Department?.DeptName, user.Position, user.AttendanceGroup?.GroupName,
             user.AttendanceGroup?.HourlyWorkStartDate,
             user.Role switch { UserRole.Employee => "普通员工（临时工）", UserRole.Admin => "管理员", _ => user.Role.ToString() },
-            user.IsActive, user.IsExemptFromAttendance(), user.HireDate, supervisor, user.Phone,
+            user.IsActive, user.IsExemptFromAttendance(), user.HireDate, user.ResignDate, supervisor, user.Phone,
             devices.Count == 0 ? null : string.Join("、", devices));
 
         await LoadDetailsAsync(user);

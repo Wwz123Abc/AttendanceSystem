@@ -31,9 +31,11 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
     /// <summary>合并成员的一行：某人属于哪个组、哪个部门（部门用于批量排班时按部门筛选，一个考勤组可能横跨多个部门）。</summary>
     public record MemberRow(int UserId, string RealName, string EmployeeNo, int GroupId, string GroupName, string? DeptName);
 
-    /// <summary>一行排班展示：某天某班次有哪些人。</summary>
-    public record AssignmentRow(DateOnly WorkDate, string ShiftName, string Color, List<string> People)
+    /// <summary>一行排班展示：某天某班次有哪些人。按班次编号分行（不再只按名称合并，两个考勤组各有一个叫"白班"的班次时不会被混在一起）；
+    /// ShiftGroupName = 班次所属的考勤组；Foreign = 其中"自己的考勤组 ≠ 班次所属考勤组"的人（被排在别的组的班次上，页面上标红）。</summary>
+    public record AssignmentRow(DateOnly WorkDate, string ShiftName, string Color, List<string> People, string ShiftGroupName, List<(string Name, string OwnGroup)> Foreign)
     {
+        public bool IsForeign(string name) => Foreign.Any(f => f.Name == name);
         public string WeekText => WorkDate.DayOfWeek switch
         {
             DayOfWeek.Monday    => "周一", DayOfWeek.Tuesday => "周二", DayOfWeek.Wednesday => "周三",
@@ -153,14 +155,20 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                      && a.User.AttendanceGroupId != null
                      && SelectedGroupIds.Contains(a.User.AttendanceGroupId.Value)
                      && (visibleIds == null || (a.User.DepartmentId != null && visibleIds.Contains(a.User.DepartmentId.Value))))
-            .Select(a => new { a.WorkDate, a.ShiftSchedule.ShiftName, a.ShiftSchedule.Color, a.User.RealName })
+            .Select(a => new
+            {
+                a.WorkDate, a.ShiftScheduleId, a.ShiftSchedule.ShiftName, a.ShiftSchedule.Color, a.User.RealName,
+                ShiftGroupId = a.ShiftSchedule.AttendanceGroupId, ShiftGroupName = a.ShiftSchedule.AttendanceGroup.GroupName,
+                OwnGroupId = a.User.AttendanceGroupId, OwnGroupName = a.User.AttendanceGroup!.GroupName
+            })
             .ToListAsync();
 
         Assignments = rows
-            .GroupBy(r => new { r.WorkDate, r.ShiftName, r.Color })
-            .OrderBy(g => g.Key.WorkDate).ThenBy(g => g.Key.ShiftName)
+            .GroupBy(r => new { r.WorkDate, r.ShiftScheduleId, r.ShiftName, r.Color, r.ShiftGroupName })
+            .OrderBy(g => g.Key.WorkDate).ThenBy(g => g.Key.ShiftName).ThenBy(g => g.Key.ShiftGroupName)
             .Select(g => new AssignmentRow(g.Key.WorkDate, g.Key.ShiftName, g.Key.Color,
-                g.Select(x => x.RealName).OrderBy(n => n).ToList()))
+                g.Select(x => x.RealName).OrderBy(n => n).ToList(), g.Key.ShiftGroupName,
+                g.Where(x => x.OwnGroupId != x.ShiftGroupId).Select(x => (x.RealName, x.OwnGroupName)).ToList()))
             .ToList();
     }
 

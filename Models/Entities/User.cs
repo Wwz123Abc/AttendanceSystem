@@ -99,6 +99,7 @@ public class User
     public string? AvatarUrl { get; set; }                  // 头像图片地址
 
     public DateOnly? HireDate { get; set; }                 // 入职日期
+    public DateOnly? ResignDate { get; set; }               // 离职日期（停用时默认填当天，也可以手工改；重新启用会清空）
 
     public bool IsActive { get; set; } = true;              // 是否在职（false=已停用，不能登录）
 

@@ -116,6 +116,7 @@ public partial class AttendanceService
                 EmployeeNo      = user.EmployeeNo,
                 Position        = user.Position,
                 ContractCompany = user.ContractCompany,
+                ResignDate      = user.ResignDate,
                 NightShiftDays  = night.GetValueOrDefault(user.Id)
             };
 

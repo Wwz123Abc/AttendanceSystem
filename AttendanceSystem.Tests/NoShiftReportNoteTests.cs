@@ -47,7 +47,7 @@ public class NoShiftReportNoteTests : SqliteTestBase
     }
 
     [Fact]
-    public void 模板汇总导出_没排班的人最后一列有标注_原有列位置不变()
+    public void 模板汇总导出_没排班的人倒数第二列有标注_原有列位置不变()
     {
         var day = new DateOnly(2026, 9, 28);
         TemplateReportRowDtoBuilder Row(string name, int noShift) => new(name, noShift);
@@ -60,7 +60,7 @@ public class NoShiftReportNoteTests : SqliteTestBase
         using var wb = new NPOI.XSSF.UserModel.XSSFWorkbook(new MemoryStream(bytes));
         var sheet = wb.GetSheetAt(0);
         var nameRow = sheet.GetRow(3);
-        var last = nameRow.LastCellNum - 1;
+        var last = nameRow.LastCellNum - 2;   // 最后一列现在是"离职日期"（2026-10-27 新加，新列只能加在最后），"排班说明"是倒数第二列
         Assert.Equal("排班说明", nameRow.GetCell(last).StringCellValue);
         Assert.Equal("应出勤天数", nameRow.GetCell(last - 2).StringCellValue.Replace(Environment.NewLine, "").Replace("\n", ""));
         Assert.Equal("实际总工时(h)", nameRow.GetCell(last - 1).StringCellValue.Replace(Environment.NewLine, "").Replace("\n", ""));   // 原来的最后一列"应出勤天数"位置不变

@@ -257,9 +257,28 @@
                 {
                     <tr>
                         <td>@a.WorkDate.ToString("yyyy-MM-dd") <small class="text-muted">@a.WeekText</small></td>
-                        <td><span class="badge" style="background:@a.Color">@a.ShiftName</span></td>
+                        <td>
+                            <span class="badge" style="background:@a.Color">@a.ShiftName</span>
+                            <div class="small @(a.Foreign.Count > 0 ? "text-danger" : "text-muted")" title="这个班次属于哪个考勤组">@a.ShiftGroupName</div>
+                        </td>
                         <td>@a.People.Count</td>
-                        <td class="small">@string.Join("、", a.People)</td>
+                        <td class="small">
+                            @for (var pi = 0; pi < a.People.Count; pi++)
+                            {
+                                var pn = a.People[pi];
+                                if (a.IsForeign(pn))
+                                {
+                                    var own = a.Foreign.First(f => f.Name == pn).OwnGroup;
+                                    <span class="text-danger fw-semibold" title="他的考勤组是「@own」，排的却是「@a.ShiftGroupName」的班次">@pn</span>
+                                }
+                                else { @pn }
+                                if (pi < a.People.Count - 1) { <text>、</text> }
+                            }
+                            @if (a.Foreign.Count > 0)
+                            {
+                                <div class="text-danger mt-1">红色的 @a.Foreign.Count 人：自己的考勤组不是「@a.ShiftGroupName」，排在了别的考勤组的班次上，请核对。</div>
+                            }
+                        </td>
                     </tr>
                 }
                 @if (!Model.Assignments.Any())

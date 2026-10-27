@@ -325,6 +325,7 @@ public class UserService(
         existing.IdNumber           = user.IdNumber;
         existing.ContractCompany    = user.ContractCompany;
         existing.HireDate           = user.HireDate;
+        existing.ResignDate         = user.ResignDate;
         existing.HomeAddress            = user.HomeAddress;
         existing.EmergencyContactName   = user.EmergencyContactName;
         existing.EmergencyContactPhone  = user.EmergencyContactPhone;
@@ -354,6 +355,7 @@ public class UserService(
 
         user.IsActive      = false;
         user.DeactivatedAt = clock.LocalNow();
+        user.ResignDate  ??= DateOnly.FromDateTime(clock.LocalNow());   // 离职日期没填过就默认当天，之后可在员工管理里改
         user.UpdatedAt     = clock.LocalNow();
         await db.SaveChangesAsync();
         await TryReassignPendingApprovalsAsync([user.Id]);
@@ -387,6 +389,7 @@ public class UserService(
 
         user.IsActive      = true;
         user.DeactivatedAt = null;   // 重新启用，清空停用时间
+        user.ResignDate    = null;   // 也清空离职日期
         user.UpdatedAt     = clock.LocalNow();
         await db.SaveChangesAsync();
         await TryPushToZKDeviceAsync(user);
@@ -404,6 +407,7 @@ public class UserService(
         user.IsBlacklisted = true;
         user.IsActive      = false;   // 黑名单必然禁止登录
         user.DeactivatedAt = clock.LocalNow();
+        user.ResignDate  ??= DateOnly.FromDateTime(clock.LocalNow());
         user.UpdatedAt     = clock.LocalNow();
         await db.SaveChangesAsync();
         await TryReassignPendingApprovalsAsync([user.Id]);
@@ -499,6 +503,7 @@ public class UserService(
 
             u.IsActive      = active;
             u.DeactivatedAt = active ? null : clock.LocalNow();
+            u.ResignDate    = active ? null : u.ResignDate ?? DateOnly.FromDateTime(clock.LocalNow());
             u.UpdatedAt     = clock.LocalNow();
             if (!active) deactivatedEmployeeNos.Add((u.EmployeeNo, u.Id));
             else activatedUsers.Add(u);

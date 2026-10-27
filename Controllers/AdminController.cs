@@ -128,6 +128,7 @@ public class AdminController(
             Email             = req.Email,
             IdNumber          = string.IsNullOrWhiteSpace(req.IdNumber) ? null : req.IdNumber.Trim().ToUpperInvariant(),
             HireDate          = req.HireDate,
+            ResignDate        = current?.ResignDate,   // 接口不改离职日期，保持原值
             ContractCompany        = current?.ContractCompany,
             HomeAddress             = current?.HomeAddress,
             EmergencyContactName    = current?.EmergencyContactName,

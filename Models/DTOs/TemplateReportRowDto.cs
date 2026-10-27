@@ -13,6 +13,7 @@ public class TemplateReportRowDto
     public string? EmployeeNo      { get; set; }   // 工号
     public string? Position        { get; set; }   // 职位
     public string? ContractCompany { get; set; }   // 合同公司
+    public DateOnly? ResignDate { get; set; }      // 离职日期
 
     /// <summary>标准工时（取这段时间里用得最多的那个班次的标准工时，没排过班就是空）</summary>
     public decimal? StandardDailyHours { get; set; }

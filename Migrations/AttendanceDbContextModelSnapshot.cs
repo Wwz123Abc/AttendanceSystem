@@ -1662,6 +1662,10 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("varchar(50)")
                         .HasColumnName("RealName");
 
+                    b.Property<DateOnly?>("ResignDate")
+                        .HasColumnType("date")
+                        .HasColumnName("ResignDate");
+
                     b.Property<int>("Role")
                         .HasColumnType("int")
                         .HasColumnName("Role");

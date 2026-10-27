@@ -193,7 +193,7 @@ public static class ExcelExportHelper
             "出勤天数", "请假天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
             "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
             "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
-            "应出勤天数", "实际总工时(h)", "排班说明"
+            "应出勤天数", "实际总工时(h)", "排班说明", "离职日期"
         ];
         var tailCols   = tailHeaders.Length;      // 直接取表头个数，不再手写数字
         var totalCols  = fixedCols + dayCount + tailCols;
@@ -291,6 +291,7 @@ public static class ExcelExportHelper
             ("对照",                           tailStart + 16, tailStart + 16, "DDEBF7", HorizontalAlignment.Center),
             ("发薪工时（正班+加班）",              tailStart + 17, tailStart + 17, "FFF2CC", HorizontalAlignment.Center),
             ("说明",                           tailStart + 18, tailStart + 18, "EDEDED", HorizontalAlignment.Center),
+            ("离职",                           tailStart + 19, tailStart + 19, "EDEDED", HorizontalAlignment.Center),
         ];
         foreach (var g in groups)
         {
@@ -342,7 +343,8 @@ public static class ExcelExportHelper
         for (var i = 0; i < fixedCols; i++) sheet.SetColumnWidth(i, fixedWidths[i] * 256);
         for (var i = 0; i < dayCount; i++) sheet.SetColumnWidth(fixedCols + i, (int)(4.8 * 256));
         for (var i = 0; i < tailCols; i++) sheet.SetColumnWidth(tailStart + i, (int)(8.2 * 256));
-        sheet.SetColumnWidth(totalCols - 1, 60 * 256);   // 最后一列"排班说明"是整句文字，放宽
+        sheet.SetColumnWidth(totalCols - 2, 60 * 256);   // "排班说明"是整句文字，放宽
+        sheet.SetColumnWidth(totalCols - 1, 12 * 256);   // 最后一列"离职日期"
         ApplyLookAndFeel(sheet, freezeCols: fixedCols, freezeRows: 4, repeatHeaderRows: 4);   // 冻结前 6 列（姓名..合同公司）+ 前 4 行
         // 打印：这份表 56 列，只有 A3 横向才看得清；页边距收窄、水平居中、每页加页码和打印日期（只设这份报表，不影响其它导出）
         sheet.PrintSetup.PaperSize = 8;   // 8 = A3
@@ -432,7 +434,8 @@ public static class ExcelExportHelper
             payCell.CellStyle = st.Get(font: "1F3864", bold: true, format: HourFormat, edge: edgeCols.Contains(c), fill: "FFF9E5");
             payCell.SetCellValue((double)row.PayableHours); c++;
             // 排班说明：没排班的人，告诉用户正班是怎么算的（正班已按规则处理，不会和加班重复）
-            SetCell(xRow, c, NoShiftPayrollNote(row.NoShiftDays), row.NoShiftDays > 0 ? st.Get(font: orange, h: HorizontalAlignment.Left, indent: 1) : Txt(true, c));
+            SetCell(xRow, c, NoShiftPayrollNote(row.NoShiftDays), row.NoShiftDays > 0 ? st.Get(font: orange, h: HorizontalAlignment.Left, indent: 1) : Txt(true, c)); c++;
+            SetCell(xRow, c, row.ResignDate?.ToString("yyyy-MM-dd") ?? "", Txt(false, c));   // 离职日期（新列只能加在最后）
         }
     }
 
@@ -463,7 +466,7 @@ public static class ExcelExportHelper
             sheet.AddMergedRegion(new CellRangeAddress(totalRowIndex, totalRowIndex, 0, fixedCols - 1));
             var firstExcelRow = 5;                       // Excel 行号 = 下标 + 1；第一条数据的下标是 4
             var lastExcelRow  = 4 + result.Rows.Count;   // 最后一条数据的下标是 3 + Rows.Count，对应 Excel 行号 4 + Rows.Count
-            for (var col = fixedCols; col < totalCols - 1; col++)   // 最后一列是文字说明，不求和
+            for (var col = fixedCols; col < totalCols - 2; col++)   // 最后两列是文字（排班说明、离职日期），不求和
             {
                 var letter = CellReference.ConvertNumToColString(col);
                 var isDay  = col < tailStart;
@@ -814,7 +817,7 @@ public static class ExcelExportHelper
         string[] headers =
         [
             "工号", "姓名", "角色", "用工性质", "状态", "部门", "考勤组", "岗位",
-            "手机号", "身份证号", "合同公司", "入职日期", "停用/离职时间", "家庭住址",
+            "手机号", "身份证号", "合同公司", "入职日期", "离职日期", "停用/离职时间", "家庭住址",
             "紧急联系人", "紧急联系人电话"
         ];
 
@@ -850,10 +853,11 @@ public static class ExcelExportHelper
             SetCell(row, 9,  u.IdNumber ?? "", baseStyle);
             SetCell(row, 10, u.ContractCompany ?? "", baseStyle);
             SetCell(row, 11, u.HireDate?.ToString("yyyy-MM-dd") ?? "", baseStyle);
-            SetCell(row, 12, u.DeactivatedAt?.ToString("yyyy-MM-dd HH:mm") ?? "", baseStyle);
-            SetCell(row, 13, u.HomeAddress ?? "", baseStyle);
-            SetCell(row, 14, u.EmergencyContactName ?? "", baseStyle);
-            SetCell(row, 15, u.EmergencyContactPhone ?? "", baseStyle);
+            SetCell(row, 12, u.ResignDate?.ToString("yyyy-MM-dd") ?? "", baseStyle);
+            SetCell(row, 13, u.DeactivatedAt?.ToString("yyyy-MM-dd HH:mm") ?? "", baseStyle);
+            SetCell(row, 14, u.HomeAddress ?? "", baseStyle);
+            SetCell(row, 15, u.EmergencyContactName ?? "", baseStyle);
+            SetCell(row, 16, u.EmergencyContactPhone ?? "", baseStyle);
         }
 
         return ToBytes(wb);

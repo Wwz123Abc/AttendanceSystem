@@ -190,7 +190,7 @@ function openAdd() {
     document.getElementById('fEditUserId').value = 0;
     document.getElementById('fRegistrationId').value = '';   // 不是在确认扫码登记，清空关联
     document.getElementById('pwdRow').style.display = '';
-    ['fEmployeeNo','fRealName','fPhone','fIdNumber','fContractCompany','fHireDate',
+    ['fEmployeeNo','fRealName','fPhone','fIdNumber','fContractCompany','fHireDate','fResignDate',
      'fHomeAddress','fEmergencyContactName','fEmergencyContactPhone']
         .forEach(id => document.getElementById(id).value = '');
     setPosition('');
@@ -382,6 +382,7 @@ function openEdit(data) {
     document.getElementById('fIdNumber').value   = data.idNumber || '';
     document.getElementById('fContractCompany').value = data.contractCompany || '';
     document.getElementById('fHireDate').value   = data.hireDate;
+    document.getElementById('fResignDate').value = data.resignDate || '';
     document.getElementById('fHomeAddress').value = data.homeAddress || '';
     document.getElementById('fEmergencyContactName').value  = data.emergencyContactName || '';
     document.getElementById('fEmergencyContactPhone').value = data.emergencyContactPhone || '';

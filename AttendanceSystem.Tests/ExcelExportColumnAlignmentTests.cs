@@ -23,7 +23,7 @@ public class ExcelExportColumnAlignmentTests
         "出勤天数", "请假天数", "正班工时(h)", "迟到时长(分)", "早退次数", "迟到次数", "早退时长(分)",
         "上班缺卡次数", "下班缺卡次数", "旷工天数", "出差时长(h)", "夜班次数", "夜班总工时(h)",
         "加班总时长(h)", "工作日加班(h)", "休息日加班(h)",
-        "应出勤天数", "实际总工时(h)", "排班说明"
+        "应出勤天数", "实际总工时(h)", "排班说明", "离职日期"
     ];
 
     private static TemplateReportRowDto FullRow(string name, string no, decimal dayHours = 8) => new()
@@ -227,8 +227,8 @@ public class ExcelExportColumnAlignmentTests
 
         // 第 3 行是分组行，按 6 组合并
         var band = sheet.GetRow(2);
-        string[] names = ["基本信息", "考勤结果（每日工时，单位：小时）", "出勤与工时", "迟到 · 早退 · 缺卡 · 旷工", "出差 · 夜班 · 加班", "对照", "发薪工时（正班+加班）", "说明"];
-        int[] firsts = [0, 6, 37, 40, 47, 53, 54, 55];
+        string[] names = ["基本信息", "考勤结果（每日工时，单位：小时）", "出勤与工时", "迟到 · 早退 · 缺卡 · 旷工", "出差 · 夜班 · 加班", "对照", "发薪工时（正班+加班）", "说明", "离职"];
+        int[] firsts = [0, 6, 37, 40, 47, 53, 54, 55, 56];
         for (var i = 0; i < names.Length; i++) Assert.Equal(names[i], band.GetCell(firsts[i]).StringCellValue);
         var merged = Enumerable.Range(0, sheet.NumMergedRegions).Select(i => sheet.GetMergedRegion(i)).ToList();
         Assert.Contains(merged, m => m.FirstRow == 2 && m.LastRow == 2 && m.FirstColumn == 0 && m.LastColumn == 5);

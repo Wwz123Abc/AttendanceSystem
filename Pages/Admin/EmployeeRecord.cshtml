@@ -89,6 +89,7 @@
                 <div class="col-6 col-md-3"><span class="text-muted">角色</span><br />@e.RoleText</div>
                 <div class="col-6 col-md-3"><span class="text-muted">账号状态</span><br />@(e.Active ? "在职" : "已停用")@(e.Exempt ? "（免考勤）" : "")</div>
                 <div class="col-6 col-md-3"><span class="text-muted">入职日期</span><br />@(e.HireDate?.ToString("yyyy-MM-dd") ?? "—")</div>
+                <div class="col-6 col-md-3"><span class="text-muted">离职日期</span><br />@(e.ResignDate?.ToString("yyyy-MM-dd") ?? "—")</div>
                 <div class="col-6 col-md-3"><span class="text-muted">直属上级</span><br />@(e.Supervisor ?? "—")</div>
                 <div class="col-6 col-md-3"><span class="text-muted">手机号</span><br />@(e.Phone ?? "—")</div>
                 <div class="col-6 col-md-3"><span class="text-muted">绑定的考勤机</span><br />@(e.Devices ?? "无（只能手机人脸打卡）")</div>

@@ -94,6 +94,7 @@ public class UserManageModel(
     [BindProperty] public string? IdNumber       { get; set; }
     [BindProperty] public string? ContractCompany { get; set; }
     [BindProperty] public string? HireDate       { get; set; }
+    [BindProperty] public string? ResignDate     { get; set; }
     [BindProperty] public string? HomeAddress            { get; set; }
     [BindProperty] public string? EmergencyContactName   { get; set; }
     [BindProperty] public string? EmergencyContactPhone  { get; set; }
@@ -704,6 +705,11 @@ public class UserManageModel(
             throw new BusinessException("请选择正确的角色");
         if (!string.IsNullOrEmpty(HireDate) && !DateOnly.TryParse(HireDate, out _))
             throw new BusinessException("入职日期格式不正确");
+        if (!string.IsNullOrEmpty(ResignDate) && !DateOnly.TryParse(ResignDate, out var resign))
+            throw new BusinessException("离职日期格式不正确");
+        else if (!string.IsNullOrEmpty(ResignDate) && !string.IsNullOrEmpty(HireDate) && DateOnly.TryParse(HireDate, out var hireForCheck)
+                 && DateOnly.TryParse(ResignDate, out var resignForCheck) && resignForCheck < hireForCheck)
+            throw new BusinessException("离职日期不能早于入职日期");
         if (requireSupervisor && !SuperId.HasValue)
             throw new BusinessException("请选择直属上级");
         if (requireDept && !DeptId.HasValue)
@@ -741,6 +747,7 @@ public class UserManageModel(
         IdNumber          = string.IsNullOrWhiteSpace(IdNumber)       ? null : IdNumber.Trim().ToUpperInvariant(),
         ContractCompany   = string.IsNullOrWhiteSpace(ContractCompany) ? null : ContractCompany.Trim(),
         HireDate          = !string.IsNullOrEmpty(HireDate) && DateOnly.TryParse(HireDate, out var hd) ? hd : null,
+        ResignDate        = !string.IsNullOrEmpty(ResignDate) && DateOnly.TryParse(ResignDate, out var rd) ? rd : null,
         HomeAddress            = string.IsNullOrWhiteSpace(HomeAddress)           ? null : HomeAddress.Trim(),
         EmergencyContactName   = string.IsNullOrWhiteSpace(EmergencyContactName)  ? null : EmergencyContactName.Trim(),
         EmergencyContactPhone  = string.IsNullOrWhiteSpace(EmergencyContactPhone) ? null : EmergencyContactPhone.Trim(),
