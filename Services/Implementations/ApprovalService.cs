@@ -202,6 +202,9 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             throw new BusinessException("补卡日期不能晚于今天");
         var type = dto.PunchType.Value;
         var date = dto.PunchDate.Value;
+        // 每月最多补 3 次（按已通过算；文员、管理员不限）
+        if (await PunchReplenishmentRules.FindQuotaProblemAsync(db, applicantUserId, date) is { } quotaProblem)
+            throw new BusinessException(quotaProblem);
         // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点（2026-09-29 审查发现 M5：员工早上就能提交
         // "今天 17:30 下班卡"，批得快就能中午提前走人按 17:30 结算工时）
         var ctx = await PunchReplenishmentRules.LoadAsync(db, applicantUserId, date);

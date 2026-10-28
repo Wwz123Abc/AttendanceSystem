@@ -127,6 +127,9 @@ public partial class AttendanceService
     private async Task ApplyApprovedPunchReplenishmentAsync(ApprovalRequest approval, DateOnly punchDate, TimeOnly punchTime, HashSet<(int Year, int Month)> touchedMonths)
     {
         var type = approval.PunchType ?? PunchType.ClockOut;   // 提交时必填；老数据没有类型的按下班处理（原行为）
+        // 每月补卡次数上限的兜底：提交时还有名额，排队期间同一个人别的补卡单先通过了，这张就不能再通过（事务整单回滚）
+        if (await PunchReplenishmentRules.FindQuotaProblemAsync(db, approval.ApplicantUserId, punchDate, approval.Id) is { } quotaProblem)
+            throw new BusinessException("不能通过：" + quotaProblem);
         var ctx = await PunchReplenishmentRules.LoadAsync(db, approval.ApplicantUserId, punchDate);
         var punchDt = PunchReplenishmentRules.ResolveTime(type, punchDate, punchTime, ctx.ClockIn, ctx.Shift);
         // 提交时已经按同一套规则查过一次，这里是审批时的兜底：提交之后、审批之前现状可能变了（员工又补上了上班卡、

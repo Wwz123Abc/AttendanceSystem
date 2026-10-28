@@ -27,6 +27,33 @@ public sealed record ReplenishmentContext(
 /// </summary>
 public static class PunchReplenishmentRules
 {
+    /// <summary>普通员工每个月最多能补几次卡（按"已通过"的补卡单算，补卡日期落在哪个月就算哪个月）。文员、管理员不受限制。</summary>
+    public const int MaxPerMonth = 3;
+
+    /// <summary>次数限制从这一天（含）起的补卡日期才算：上线时 10 月已有 146 人补卡超过 3 次，若 10 月也套用，这些人当月就不能再补卡、
+    /// 还在排队的 10 月补卡单也批不了，所以先从下个月开始。要提前或推后，改这个日期即可。</summary>
+    public static readonly DateOnly QuotaAppliesFrom = new(2026, 11, 1);
+
+    /// <summary>
+    /// 这个人这个月的补卡次数用完了吗：用完了返回提示语，没用完（或不受限）返回 null。
+    /// 提交申请时查一遍，审批通过回写时再查一遍（提交时还有名额、排队期间别的单子先通过了的情况）。
+    /// excludeRequestId：审批回写时这张单自己已经是"已通过"，不能把自己算进去。
+    /// </summary>
+    public static async Task<string?> FindQuotaProblemAsync(AttendanceDbContext db, int applicantUserId, DateOnly punchDate, int? excludeRequestId = null, CancellationToken ct = default)
+    {
+        if (punchDate < QuotaAppliesFrom) return null;
+        var role = await db.Users.Where(u => u.Id == applicantUserId).Select(u => u.Role).FirstOrDefaultAsync(ct);
+        if (role is UserRole.Admin or UserRole.Clerk) return null;
+        var monthStart = new DateOnly(punchDate.Year, punchDate.Month, 1);
+        var used = await db.ApprovalRequests.CountAsync(a => a.ApplicantUserId == applicantUserId
+            && a.ApprovalType == ApprovalType.PunchReplenishment && a.ApprovalStatus == ApprovalStatus.Approved
+            && a.PunchDate >= monthStart && a.PunchDate < monthStart.AddMonths(1)
+            && (excludeRequestId == null || a.Id != excludeRequestId), ct);
+        return used >= MaxPerMonth
+            ? $"{punchDate.Month} 月的补卡已经通过 {used} 次，达到每月 {MaxPerMonth} 次的上限，不能再补；确实漏打卡的请联系文员或管理员直接补卡"
+            : null;
+    }
+
     /// <summary>补卡类型的中文名（上班/下班/午间），用于提示语和列表显示。</summary>
     public static string TypeText(PunchType? type) => type switch
     {
