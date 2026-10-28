@@ -146,7 +146,7 @@ public static class UnpaidBreakSettings
         var nextShift = new Dictionary<int, (TimeOnly, TimeOnly)[]>();
         foreach (var row in rows)
         {
-            var isShift = row.Key.StartsWith(ShiftKeyPrefix);
+            var isShift = row.Key.StartsWith(ShiftKeyPrefix, StringComparison.Ordinal);
             if (!int.TryParse(row.Key[(isShift ? ShiftKeyPrefix.Length : KeyPrefix.Length)..], out var id)) continue;
             var parsed = TryParse(row.Value);
             if (parsed is null || Validate(parsed) is not null) continue;

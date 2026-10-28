@@ -226,7 +226,7 @@ public class AgentService(
                 // 把模型这次的"工具请求"原样回显（OpenAI 协议要求 assistant 消息带 tool_calls）
                 messages.Add(new AgentChatMessage("assistant", result.Content, calls));
                 logger.LogInformation("AGENT 会话 {Conv} 第 {Round} 轮：模型请求 {N} 个工具调用", conversationId, round + 1, calls.Count);
-                if (calls.Any(c => c.Name.EndsWith("_propose"))) proposedThisTurn = true;
+                if (calls.Any(c => c.Name.EndsWith("_propose", StringComparison.Ordinal))) proposedThisTurn = true;
 
                 foreach (var call in calls)
                 {
@@ -331,7 +331,7 @@ public class AgentService(
             {
                 messages.Add(new AgentChatMessage("assistant", result.Content, calls));
                 logger.LogInformation("AGENT 会话 {Conv} 第 {Round} 轮：模型请求 {N} 个工具调用", conversationId, round + 1, calls.Count);
-                if (calls.Any(c => c.Name.EndsWith("_propose"))) proposedThisTurn = true;
+                if (calls.Any(c => c.Name.EndsWith("_propose", StringComparison.Ordinal))) proposedThisTurn = true;
                 foreach (var call in calls)
                 {
                     toolTrace.Add($"{call.Name}({(call.ArgumentsJson.Length > 60 ? call.ArgumentsJson[..60] + "…" : call.ArgumentsJson)})");

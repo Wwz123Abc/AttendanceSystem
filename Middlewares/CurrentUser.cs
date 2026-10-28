@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Enums;

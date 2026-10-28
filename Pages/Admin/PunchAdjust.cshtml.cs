@@ -164,9 +164,9 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
     private static string PunchSourceText(string? deviceInfo) => deviceInfo switch
     {
         null or "" => "",
-        var s when s.StartsWith("ZKDevice") => "·考勤机",
-        var s when s.StartsWith("Mobile") => "·手机",
-        var s when s.StartsWith("补卡") || s.StartsWith("管理员补卡") => "·补卡",
+        var s when s.StartsWith("ZKDevice", StringComparison.Ordinal) => "·考勤机",
+        var s when s.StartsWith("Mobile", StringComparison.Ordinal) => "·手机",
+        var s when s.StartsWith("补卡", StringComparison.Ordinal) || s.StartsWith("管理员补卡", StringComparison.Ordinal) => "·补卡",
         _ => ""
     };
 

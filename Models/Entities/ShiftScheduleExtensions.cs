@@ -1,4 +1,3 @@
-using AttendanceSystem.Models.Enums;
 
 namespace AttendanceSystem.Models.Entities;
 

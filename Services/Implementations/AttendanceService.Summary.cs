@@ -1,10 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
-using AttendanceSystem.Models.Options;
 using AttendanceSystem.Services.Interfaces;
 using AttendanceSystem.Models.Exceptions;
 using AttendanceSystem.Helpers;

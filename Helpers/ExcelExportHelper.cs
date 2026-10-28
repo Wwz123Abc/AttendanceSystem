@@ -1151,17 +1151,6 @@ public static class ExcelExportHelper
         var c = row.CreateCell(col); c.SetCellValue(value); c.CellStyle = style;
     }
 
-    // 值为 0 时不写（留空白格子），非 0 才写——模板月度汇总表里，迟到/早退/缺卡/旷工这类"异常次数"
-    // 统一按这个规则显示，0 次留空更方便肉眼一眼看出哪些人有问题，不用满屏都是 0。
-    private static void SetCellIfNonZero(IRow row, int col, int value, ICellStyle style)
-    {
-        if (value != 0) SetCell(row, col, value, style);
-    }
-    private static void SetCellIfNonZero(IRow row, int col, double value, ICellStyle style)
-    {
-        if (value != 0) SetCell(row, col, value, style);
-    }
-
     // 把内存里拼好的 Excel 写成字节数组返回
     private static byte[] ToBytes(XSSFWorkbook wb)
     {

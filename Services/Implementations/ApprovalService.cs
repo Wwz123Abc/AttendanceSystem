@@ -950,18 +950,6 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         await db.SaveChangesAsync();
     }
 
-    /// <summary>
-    /// 兜底审批人：没审批流也没上级时，指派一名在职管理员/文员来审。
-    /// 优先同考勤组的，其次随便一个，并排除申请人自己，避免”无人可审”。
-    /// 候选人必须”管得到”申请人所在部门——总部超级管理员（ScopedDepartmentId 为空）恒可以；
-    /// 分公司管理员/文员只有申请人部门落在自己范围内才算数。不加这道限制的话，没配审批人名单、
-    /// 又没设直属上级的员工，申请单可能被指派给完全不相干的别的分公司管理员去审，对方还能看到
-    /// 申请人的请假/出差理由等隐私信息，通过后还会回写到本不该他管的考勤记录上。
-    /// 申请人自己没有部门（DepartmentId 为空）时，只有总部超级管理员能兜底——跟”无部门归属的数据
-    /// 只总部可见”是同一个口径。
-    /// </summary>
-    private Task<int?> ResolveFallbackApproverAsync(User applicant) => ApproverResolver.ResolveFallbackApproverAsync(db, applicant);
-
     /// <summary>取某部门自己 + 一路向上所有祖先部门的 id 集合（deptId 为空时返回空集合）——
     /// 用来判断”某个 ScopedDepartmentId 是否覆盖这个部门”：只要 ScopedDepartmentId 出现在这个集合里，
     /// 说明这个部门是那个范围根节点的自己或下级，落在对方的管理范围内。</summary>

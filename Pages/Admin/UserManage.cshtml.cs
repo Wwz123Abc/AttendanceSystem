@@ -705,7 +705,7 @@ public class UserManageModel(
             throw new BusinessException("请选择正确的角色");
         if (!string.IsNullOrEmpty(HireDate) && !DateOnly.TryParse(HireDate, out _))
             throw new BusinessException("入职日期格式不正确");
-        if (!string.IsNullOrEmpty(ResignDate) && !DateOnly.TryParse(ResignDate, out var resign))
+        if (!string.IsNullOrEmpty(ResignDate) && !DateOnly.TryParse(ResignDate, out _))
             throw new BusinessException("离职日期格式不正确");
         else if (!string.IsNullOrEmpty(ResignDate) && !string.IsNullOrEmpty(HireDate) && DateOnly.TryParse(HireDate, out var hireForCheck)
                  && DateOnly.TryParse(ResignDate, out var resignForCheck) && resignForCheck < hireForCheck)

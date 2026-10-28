@@ -1,4 +1,3 @@
-using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;

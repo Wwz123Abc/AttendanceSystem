@@ -193,7 +193,7 @@ public class DeepSeekAgentEngine(
 
         using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream, Encoding.UTF8);
-        while (!reader.EndOfStream)
+        while (true)   // 不用 EndOfStream：它在网络流上会同步阻塞线程；读到 null 就是流结束，下面会 break
         {
             cts.Token.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);

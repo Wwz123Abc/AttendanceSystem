@@ -167,22 +167,10 @@ public class GroupManageModel(
             .ToDictionary(g => g.Key, g => g.Select(d => d.Id).ToList());
     }
 
-    /// <summary>某个考勤组是否在当前登录者的管理范围内：不受限一律可以；受限的话，看这个组关联的部门
-    /// 有没有落在自己范围内——一个部门都没关联（还没分配给任何分公司）的组，当成全公司通用组，
-    /// 所有管理员都能看到/编辑（跟看板/节假日那边的口径一致）。</summary>
-    private async Task<bool> IsGroupInScopeAsync(CurrentUser cu, int groupId)
-    {
-        if (!cu.IsScoped) return true;
-        var deptIds = await db.Departments.Where(d => d.AttendanceGroupId == groupId).Select(d => d.Id).ToListAsync();
-        if (deptIds.Count == 0) return true;
-        var visibleIds = await deptScopeService.GetVisibleDeptIdsAsync(cu);
-        return deptIds.Any(id => visibleIds!.Contains(id));
-    }
-
     /// <summary>某个考勤组是否允许当前登录者"写"（修改/停用/删除这个组本身）：不受限一律可以；
     /// 受限管理员只能写"关联部门都在自己范围内"的组——完全没关联部门的全局/共享考勤组（可能有多个
     /// 分公司在用）只有总部管理员能改，避免分公司管理员动了别的分公司也在用的共用配置（可见，但不能
-    /// 改，跟上面 IsGroupInScopeAsync 的"能看到"口径区分开）。</summary>
+    /// 改，跟"能看到"的口径区分开）。</summary>
     private async Task<bool> IsGroupWritableAsync(CurrentUser cu, int groupId)
     {
         if (!cu.IsScoped) return true;

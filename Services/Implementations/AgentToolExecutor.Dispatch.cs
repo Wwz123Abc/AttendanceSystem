@@ -1,10 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
-using AttendanceSystem.Services.Interfaces;
 using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
@@ -128,9 +126,6 @@ public partial class AgentToolExecutor
         UserRole.TeamLeader => "班组长",
         _                   => "员工"
     };
-
-    private static string UserStateText(User u) =>
-        u.IsBlacklisted ? "黑名单" : u.IsActive ? "在职" : "停用";
 
     private static string AttStatusText(AttendanceStatus s) => s switch
     {

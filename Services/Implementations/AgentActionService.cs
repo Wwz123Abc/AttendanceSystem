@@ -1,12 +1,9 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
-using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
-using AttendanceSystem.Models.Exceptions;
 using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
