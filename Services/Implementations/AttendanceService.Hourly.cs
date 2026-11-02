@@ -135,25 +135,22 @@ public partial class AttendanceService
         if (shift is not null && midResults is { Count: > 0 })
             midResults = DropWindowsEndedBeforeArrival(workDate, shift, midResults, clockIn);
 
-        // ④ 夜班漏打：新口径按"下半个班没来"，有效下班截到窗口结束
-        var nightMissedCutAtWindowEnd = false;
-        if (newRule && shift is not null && IsHourlyNightShift(shift) && midResults is { Count: > 0 })
-        {
-            var windows = shift.ParseMidCheckWindows();
-            var last = midResults[^1];
-            if (windows.Count > 0 && !last.IsSatisfied)
-            {
-                var windowEnd = ResolveShiftTime(workDate, windows[^1].End, shift);
-                if (windowEnd < effOut) { effOut = windowEnd; nightMissedCutAtWindowEnd = true; }
-            }
-        }
-
-        if (!nightMissedCutAtWindowEnd && shift is not null && midResults is { Count: > 0 })
+        // ④ 漏打处理：前面几段漏打照旧把有效上班顺延到窗口结束；**最后一段**按口径处理——
+        //    新口径的夜班截到"窗口结束"（只丢后半班），其它情况仍截到"窗口开始"（原来是 ResolveSecondHalfAbsentBoundary 的行为）。
+        //    ★ 用过滤后结果里自带的 WindowStart/WindowEnd，不能再用配置数组的下标：DropWindowsEndedBeforeArrival 会把
+        //      "到岗前就结束"的窗口剔掉，过滤后下标和原始窗口对不上（2026-11-02 上线前自查发现）。
+        if (shift is not null && midResults is { Count: > 0 })
         {
             foreach (var missedEnd in ResolveMissedNonLastWindowEnds(workDate, shift, midResults))
                 if (missedEnd > effIn) effIn = missedEnd;
-            if (ResolveSecondHalfAbsentBoundary(workDate, shift, midResults) is { } boundary && boundary < effOut)
-                effOut = boundary;
+
+            var last = midResults[^1];
+            if (!last.IsSatisfied)
+            {
+                var cutAt = newRule && IsHourlyNightShift(shift) ? last.WindowEnd : last.WindowStart;
+                var boundary = ResolveShiftTime(workDate, cutAt, shift);
+                if (boundary < effOut) effOut = boundary;
+            }
         }
 
         // 夜班（跨天班次）：下班卡最晚算到次日上限（2026-11-03 起 18:00，之前 10:00）
