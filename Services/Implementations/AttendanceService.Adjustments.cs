@@ -357,7 +357,7 @@ public partial class AttendanceService
     private async Task<Dictionary<DateOnly, (string OldName, bool OldCross)>> ApplyApprovedShiftChangeAsync(ApprovalRequest approval, DateOnly start, DateOnly end, int shiftId, HashSet<(int Year, int Month)> touchedMonths)
     {
         var changed = new Dictionary<DateOnly, (string OldName, bool OldCross)>();
-        var applicant = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => new { u.HireDate }).FirstOrDefaultAsync();
+        var applicant = await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => new { u.HireDate, u.AttendanceGroupId }).FirstOrDefaultAsync();
         if (applicant is null) return changed;
         if (!await db.ShiftSchedules.AnyAsync(s => s.Id == shiftId && s.IsActive))
         {
@@ -371,8 +371,9 @@ public partial class AttendanceService
             });
             return changed;
         }
+        // 前后各多取一天：夜班次日不得排白班的校验要看区间外的相邻日（计时工口径 2026-11-03 第 18 条）
         var existing = await db.ShiftAssignments.Include(a => a.ShiftSchedule)
-            .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= start && a.WorkDate <= end)
+            .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= start.AddDays(-1) && a.WorkDate <= end.AddDays(1))
             .ToDictionaryAsync(a => a.WorkDate);
         // 这几天已经有已通过的请假/出差的，不改班次：请假小时是按原班次记的，换了班次再按新班次的标准工时去减会对不上
         var startDt = start.ToDateTime(TimeOnly.MinValue); var endDt = end.AddDays(1).ToDateTime(TimeOnly.MinValue);
@@ -383,10 +384,27 @@ public partial class AttendanceService
                 .Select(a => new { S = a.LeaveStartTime ?? a.BusinessTripStartTime, E = a.LeaveEndTime ?? a.BusinessTripEndTime }).ToListAsync())
             .Where(x => x.S != null && x.E != null).Select(x => (S: DateOnly.FromDateTime(x.S!.Value), E: DateOnly.FromDateTime(x.E!.Value))).ToList();
         var skipped = new List<DateOnly>();
+        var targetShiftForGuard = await db.ShiftSchedules.FirstOrDefaultAsync(s => s.Id == shiftId);   // 夜班次日白班校验用
         for (var d = start; d <= end; d = d.AddDays(1))
         {
             if (busyRanges.Any(r => r.S <= d && d <= r.E)) { skipped.Add(d); continue; }
             if (applicant.HireDate is { } hire && hire > d) continue;
+
+            // 计时工口径（2026-11-03 第 18 条）：夜班员工次日不得排白班。转班也要拦，否则转班能把排班改成违规组合。
+            if (IsNewHourlyRule(d) && IsHourlyOn(await LoadHourlyGroupStartsAsync(), applicant.AttendanceGroupId, d))
+            {
+                ShiftSchedule? Neighbour(int offset)
+                {
+                    var day = d.AddDays(offset);
+                    return day >= start && day <= end
+                        ? targetShiftForGuard
+                        : (existing.TryGetValue(day, out var nb) ? nb.ShiftSchedule : null);
+                }
+                var conflictText = FindNightThenDayConflictText(d, targetShiftForGuard, Neighbour(-1), Neighbour(1), "");
+                if (conflictText is not null)
+                    throw new BusinessException("转班被拒绝（计时工口径）：" + conflictText);
+            }
+
             if (existing.TryGetValue(d, out var a))
             {
                 if (a.ShiftScheduleId != shiftId) changed[d] = (a.ShiftSchedule.ShiftName, a.ShiftSchedule.IsCrossDay);

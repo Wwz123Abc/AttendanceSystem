@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
@@ -26,24 +26,37 @@ public partial class AttendanceService
 
     /// <summary>计时工夜班（排的是跨天班次）：上班日这个钟点（含）之后才有效。</summary>
     public const int HourlyNightEarliestHour = 19;
-    /// <summary>计时工夜班：次日这个钟点（不含）之前才有效，下班卡最晚算到这里，再晚的时间不计入工时。</summary>
-    public const int HourlyNightLatestHour = 10;
+    /// <summary>计时工夜班：次日这个钟点（不含）之前才有效，下班卡最晚算到这里，再晚的时间不计入工时。
+    /// 2026-11-03 起改为次日 18:00（计时工口径表第 5、10 条）；之前的考勤日仍按次日 10:00（<see cref="OldHourlyNightLatestHour"/>）。</summary>
+    public const int HourlyNightLatestHour = 18;
+
+    /// <summary>旧口径（2026-11-02 及以前）的夜班次日上限。</summary>
+    public const int OldHourlyNightLatestHour = 10;
+
+    /// <summary>新计时工口径的生效日（按考勤日，2026-11-03）。早到不计工时、夜班次日 18:00 上限、夜班饭点按重叠扣、
+    /// 夜班漏打截到窗口结束、取整前加 5 分钟宽限，都只对这个日期及以后生效（见 docs/口径/计时工口径_2026-11-03.md）。</summary>
+    public static readonly DateOnly NewHourlyRulesFrom = new(2026, 11, 3);
+
+    /// <summary>这个考勤日适不适用新计时工口径。</summary>
+    public static bool IsNewHourlyRule(DateOnly workDate) => workDate >= NewHourlyRulesFrom;
 
     /// <summary>计时工夜班要扣的饭点（都在上班日的次日）：00:00–01:00、05:30–06:00。</summary>
     public static readonly (TimeOnly From, TimeOnly To)[] HourlyNightMealWindows =
         [(new TimeOnly(0, 0), new TimeOnly(1, 0)), (new TimeOnly(5, 30), new TimeOnly(6, 0))];
 
-    public const string HourlyNightInvalidTimeMessage = "夜班计时工的有效打卡时间是上班日 19:00 到次日 10:00，现在不在这个时间范围内";
+    public const string HourlyNightInvalidTimeMessage = "夜班计时工的有效打卡时间是上班日 19:00 到次日下班（2026-11-03 起最晚次日 18:00，之前是次日 10:00），现在不在这个时间范围内";
 
     /// <summary>
     /// 计时工的一次打卡归属哪个考勤日；返回 null 表示这次打卡无效（2026-10-21 起支持夜班）。
-    /// 昨天排的是跨天班次（夜班）→ 次日 10:00 之前的打卡算昨天的延续；今天排的是跨天班次 → 19:00 起才有效；
-    /// 其余（白班/没排班）按原规则：当天 07:00 起有效，00:00–07:00 无效。
+    /// 昨天排的是跨天班次（夜班）→ 次日上限之前的打卡算昨天的延续（2026-11-03 起上限 18:00，之前 10:00）；
+    /// 今天排的是跨天班次 → 19:00 起才有效；其余（白班/没排班）按原规则：当天 07:00 起有效，00:00–07:00 无效。
     /// </summary>
     public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift)
     {
         var d = DateOnly.FromDateTime(punchTime);
-        if (IsHourlyNightShift(prevShift) && punchTime.Hour < HourlyNightLatestHour) return d.AddDays(-1);
+        // 夜班次日上限：2026-11-03 起是次日 18:00，之前的考勤日仍是 10:00（避免重算历史时口径变）
+        var latestHour = IsNewHourlyRule(d) ? HourlyNightLatestHour : OldHourlyNightLatestHour;
+        if (IsHourlyNightShift(prevShift) && punchTime.Hour < latestHour) return d.AddDays(-1);
         if (IsHourlyNightShift(todayShift)) return punchTime.Hour >= HourlyNightEarliestHour ? d : null;
         return IsHourlyPunchTimeValid(punchTime) ? d : null;
     }
@@ -95,33 +108,64 @@ public partial class AttendanceService
     }
 
     /// <summary>
-    /// 计时工的工时：最后一次下班卡 − 第一次上班卡，扣午饭/晚饭（<see cref="ComputeWorkHours"/> 按默认饭点重叠扣减），
-    /// 不按班次标准工时封顶、不把早到晚走裁剪到班次时间；午间窗口漏打：只算窗口开始之前
-    /// （跟原来的 <see cref="ResolveSecondHalfAbsentBoundary"/> 同一口径）；当天 23:59:59 之后的时间不算。
+    /// 计时工的工时：最后一次下班卡 − 有效上班，扣饭点后向下取整到半小时，不按班次标准工时封顶。
+    /// <para>2026-11-03 起按新口径（docs/口径/计时工口径_2026-11-03.md）：</para>
+    /// ① 有效上班 = max(实际上班卡, 班次应上班时间)，早到不计工时；迟到仍按实际打卡判；
+    /// ② 夜班（跨天且上班 ≥17:00）下班最晚算到次日 18:00；
+    /// ③ 饭点按"与在岗区间重叠的默认饭点"扣（跨到次日中午/傍晚也照扣），不再只扣夜班那两段；
+    /// ④ 夜班漏打午间卡 → 有效下班截到窗口结束（只丢后半班）；白班仍截到窗口开始；
+    /// ⑤ 取整前加 5 分钟宽限（与普通正班同一口径）。
+    /// 2026-11-02 及以前仍按老口径（早到计入、夜班次日 10:00、固定扣 1.5h、漏打截窗口开始、无宽限），重算历史时结果不变。
     /// </summary>
     public static decimal ComputeHourlyWorkHours(DateOnly workDate, DateTime clockIn, DateTime clockOut, ShiftSchedule? shift, List<MidCheckWindowResult>? midResults)
     {
+        var newRule = IsNewHourlyRule(workDate);
         var effIn = clockIn;
         var effOut = clockOut;
+
+        // ① 早到不计工时：有效上班不早于班次应上班时间（没排班时沿用实际打卡）
+        if (newRule && shift is not null)
+        {
+            var shiftStart = ResolveShiftTime(workDate, shift.WorkStartTime, shift);
+            if (shiftStart > effIn) effIn = shiftStart;
+        }
+
         // 午间窗口只对"到岗时窗口还没结束"的人生效：窗口结束（含 30 分钟宽限）之后才到岗的人，根本没有机会打这次午间卡，
         // 不能按"漏打"把下午的工时扣掉（2026-10-21：李小勇 10/19 18:04 才到岗，12:00–13:00 的窗口被判漏打，在岗 3 小时被算成 0）
         if (shift is not null && midResults is { Count: > 0 })
             midResults = DropWindowsEndedBeforeArrival(workDate, shift, midResults, clockIn);
-        if (shift is not null && midResults is { Count: > 0 })
+
+        // ④ 夜班漏打：新口径按"下半个班没来"，有效下班截到窗口结束
+        var nightMissedCutAtWindowEnd = false;
+        if (newRule && shift is not null && IsHourlyNightShift(shift) && midResults is { Count: > 0 })
+        {
+            var windows = shift.ParseMidCheckWindows();
+            var last = midResults[^1];
+            if (windows.Count > 0 && !last.IsSatisfied)
+            {
+                var windowEnd = ResolveShiftTime(workDate, windows[^1].End, shift);
+                if (windowEnd < effOut) { effOut = windowEnd; nightMissedCutAtWindowEnd = true; }
+            }
+        }
+
+        if (!nightMissedCutAtWindowEnd && shift is not null && midResults is { Count: > 0 })
         {
             foreach (var missedEnd in ResolveMissedNonLastWindowEnds(workDate, shift, midResults))
                 if (missedEnd > effIn) effIn = missedEnd;
             if (ResolveSecondHalfAbsentBoundary(workDate, shift, midResults) is { } boundary && boundary < effOut)
                 effOut = boundary;
         }
-        // 夜班（跨天班次）：下班卡最晚算到次日 10:00；扣次日 00:00–01:00（1 小时）和 05:30–06:00（0.5 小时）两段饭
-        // （2026-10-21 用户确认：00:00–01:00，再加上系统默认的 05:30–06:00），不再按白班的 12:00–13:00、17:30–18:00 扣；不封顶。
-        // 班次配了午间窗口（比如 00:00–01:00）的话，漏打也按计时工统一规则：只算窗口开始之前的工时（上面已经处理）
+
+        // 夜班（跨天班次）：下班卡最晚算到次日上限（2026-11-03 起 18:00，之前 10:00）
         if (IsHourlyNightShift(shift))
         {
-            var nightLatest = workDate.AddDays(1).ToDateTime(new TimeOnly(HourlyNightLatestHour, 0));
+            var latestHour = newRule ? HourlyNightLatestHour : OldHourlyNightLatestHour;
+            var nightLatest = workDate.AddDays(1).ToDateTime(new TimeOnly(latestHour, 0));
             if (effOut > nightLatest) effOut = nightLatest;
             if (effOut <= effIn) return 0;
+            // ③ 新口径：饭点按默认饭点与在岗区间的重叠扣（跨到次日中午/傍晚也扣），取整前 +5 分钟宽限
+            if (newRule) return ComputeRegularWorkHours(effIn, effOut);
+            // 旧口径（2026-11-02 及以前）：固定扣次日 00:00–01:00 + 05:30–06:00 两段饭
             var nextMidnight = workDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
             decimal mealMinutes = 0m;
             foreach (var (mealFrom, mealTo) in HourlyNightMealWindows)
@@ -136,7 +180,8 @@ public partial class AttendanceService
         }
         var dayEnd = workDate.ToDateTime(new TimeOnly(23, 59, 59));
         if (effOut > dayEnd) effOut = dayEnd;
-        return effOut <= effIn ? 0 : ComputeWorkHours(effIn, effOut);
+        if (effOut <= effIn) return 0;
+        return newRule ? ComputeRegularWorkHours(effIn, effOut) : ComputeWorkHours(effIn, effOut);
     }
 
     /// <summary>
@@ -269,5 +314,31 @@ public partial class AttendanceService
                 await GenerateMonthlySummaryAsync(g.Key.Year, g.Key.Month, g.Select(r => r.UserId).Distinct().ToList());
         }
         return result;
+    }
+
+    /// <summary>计时工口径（2026-11-03 第 18 条）：夜班员工次日不得排白班。纯判断，排班页和转班审批共用这一处，避免两份规则漂移。
+    /// <paramref name="prevEffective"/> / <paramref name="nextEffective"/> 是"最终会生效的"前后一天班次
+    /// （同一批排班里的日期，要先把本批要排的班次算进去）。返回给用户看的提示，没冲突返回 null。</summary>
+    public static string? FindNightThenDayConflictText(DateOnly day, ShiftSchedule? target, ShiftSchedule? prevEffective, ShiftSchedule? nextEffective, string who)
+    {
+        if (target is null || !IsNewHourlyRule(day)) return null;
+        if (!IsHourlyNightShift(target) && IsHourlyNightShift(prevEffective))
+            return $"{who}{day:MM-dd} 排的是白班，但前一天是夜班（20 点后上班的跨天班次）：夜班员工次日不允许排白班（计时工口径 2026-11-03）";
+        if (IsHourlyNightShift(target) && nextEffective is not null && !IsHourlyNightShift(nextEffective))
+            return $"{who}{day:MM-dd} 排的是夜班，但次日是白班：夜班员工次日不允许排白班（计时工口径 2026-11-03）";
+        return null;
+    }
+
+    /// <summary>同上，按库里现有排班查前后一天（单条排班 / 转班审批用）。不是计时工、或不在生效期就返回 null。</summary>
+    public async Task<string?> FindNightThenDayConflictAsync(int userId, DateOnly day, ShiftSchedule? target, string who, CancellationToken ct = default)
+    {
+        if (target is null || !IsNewHourlyRule(day)) return null;
+        var groupId = await db.Users.Where(u => u.Id == userId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(ct);
+        if (!IsHourlyOn(await LoadHourlyGroupStartsAsync(), groupId, day)) return null;
+        var prev = await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate == day.AddDays(-1))
+            .Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
+        var next = await db.ShiftAssignments.Where(a => a.UserId == userId && a.WorkDate == day.AddDays(1))
+            .Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
+        return FindNightThenDayConflictText(day, target, prev, next, who);
     }
 }

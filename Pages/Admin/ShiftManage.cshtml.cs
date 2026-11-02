@@ -6,6 +6,7 @@ using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.Entities;
+using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
 
 namespace AttendanceSystem.Pages.Admin;
@@ -523,6 +524,42 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             // 取这些人的入职日期：还没入职的日子不排班
             var hireDates = await db.Users.Where(u => userIds.Contains(u.Id))
                 .ToDictionaryAsync(u => u.Id, u => u.HireDate);
+
+            // 计时工口径（2026-11-03 第 18 条）：夜班员工次日不得排白班。
+            // 先把区间前后各一天已有的排班一次性查出来，再把"本批要排的这个班次"当作这两天实际生效的班次，
+            // 逐人逐天判断；有冲突就整批拒绝（不做"部分排进去"，否则管理员看不出哪些天没排上）。
+            var hourlyStarts = await db.AttendanceGroups.Where(g => g.HourlyWorkStartDate != null)
+                .ToDictionaryAsync(g => g.Id, g => g.HourlyWorkStartDate!.Value);
+            var guardUsers = await db.Users.Where(u => userIds.Contains(u.Id))
+                .Select(u => new { u.Id, u.RealName, u.EmployeeNo, u.AttendanceGroupId }).ToListAsync();
+            var guardMap = (await db.ShiftAssignments.Include(a => a.ShiftSchedule)
+                    .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start.AddDays(-1) && a.WorkDate <= end.AddDays(1))
+                    .ToListAsync())
+                .ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+            var conflicts = new List<string>();
+            foreach (var gu in guardUsers)
+            {
+                if (gu.AttendanceGroupId is not { } guardGid) continue;
+                if (!AttendanceService.IsHourlyOn(hourlyStarts, guardGid, start) && !AttendanceService.IsHourlyOn(hourlyStarts, guardGid, end))
+                    continue;   // 只约束计时工组的考勤日
+                for (var gd = start; gd <= end; gd = gd.AddDays(1))
+                {
+                    ShiftSchedule? EffectiveNeighbour(int offset)
+                    {
+                        var day = gd.AddDays(offset);
+                        if (day >= start && day <= end) return shift;   // 本批统一排同一个班次
+                        return guardMap.GetValueOrDefault((gu.Id, day));
+                    }
+                    var text = AttendanceService.FindNightThenDayConflictText(
+                        gd, shift, EffectiveNeighbour(-1), EffectiveNeighbour(1), $"{gu.RealName}（{gu.EmployeeNo}）");
+                    if (text is null) continue;
+                    conflicts.Add(text);
+                    break;
+                }
+                if (conflicts.Count >= 3) break;
+            }
+            if (conflicts.Count > 0)
+                throw new Exception("排班被拒绝（计时工口径 2026-11-03）：" + string.Join("；", conflicts));
 
             // 下面是"每一天 × 每个员工"的双重循环，把这段时间内这些员工已有的排班记录先一次性整批查出来，
             // 按"员工+日期"存进字典。原来的写法是循环里对每个人每一天都单独查一次数据库——
