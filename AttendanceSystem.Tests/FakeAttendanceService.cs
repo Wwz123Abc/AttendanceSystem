@@ -47,4 +47,7 @@ public class FakeAttendanceService : IAttendanceService
     public Task<TemplateReportRowDto?> GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<TemplateReportResultDto> GenerateTemplateReportAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default, IReadOnlyCollection<int>? onlyUserIds = null) => throw new NotImplementedException();
     public Task<List<AttendanceRecordDto>> GetClockTimeSheetAsync(DateOnly start, DateOnly end, List<int>? deptIds, CancellationToken ct = default, IReadOnlyCollection<int>? onlyUserIds = null) => throw new NotImplementedException();
+    public Task SaveNightlyAuditLogAsync(DateOnly runDate, IReadOnlyCollection<AuditIssue> issues, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<List<AuditIssueLog>> GetAuditIssueLogsAsync(DateOnly fromRunDate, DateOnly toRunDate, CancellationToken ct = default) => Task.FromResult(new List<AuditIssueLog>());
+    public Task<int> PurgeAuditIssueLogsAsync(DateOnly keepFromWorkDate, CancellationToken ct = default) => Task.FromResult(0);
 }

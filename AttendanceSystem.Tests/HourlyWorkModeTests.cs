@@ -372,10 +372,48 @@ public class HourlyWorkModeTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 普通班次_窗口开始前到岗没打午间卡_仍按漏打只算上午()
+    public async Task 历史重建_夜班次日下班卡归上班那天_不再清零()
     {
-        var (uid, _) = SeedHourly(hourlyOn: false);
-        await SyncAsync(At(8, 25), At(17, 35));   // 窗口开始前就到岗，之后没打午间卡 → 规则不变
-        Assert.InRange((await TueRecordAsync(uid)).ActualWorkHours, 3m, 3.6m);   // 08:30–12:00
+        var (uid, gid) = SeedHourly();
+        using (var db = CreateContext())
+        {
+            // 把班次换成夜班 20:00–05:30（跨天），只给这个人排周二
+            var night = new ShiftSchedule
+            {
+                ShiftName = "夜班", ShiftType = ShiftType.Fixed,
+                WorkStartTime = new TimeOnly(20, 0), WorkEndTime = new TimeOnly(5, 30),
+                LateToleranceMinutes = 5, EarlyLeaveToleranceMinutes = 5, EarliestClockInMinutes = 60,
+                OvertimeThresholdMinutes = 30, IsCrossDay = true, StandardWorkHours = 8,
+                Color = "#000000", RestDaysOfWeek = "0,6", IsActive = true, AttendanceGroupId = gid
+            };
+            db.ShiftSchedules.Add(night);
+            await db.SaveChangesAsync();
+
+            db.ShiftAssignments.RemoveRange(db.ShiftAssignments.Where(a => a.UserId == uid));
+            db.ShiftAssignments.Add(new ShiftAssignment
+            {
+                UserId = uid, ShiftScheduleId = night.Id, WorkDate = Tue, IsAutoAssigned = false, CreatedAt = DateTime.Now
+            });
+            // 真实打卡：周二 19:30 上班、次日 08:04 下班
+            db.AttendancePunches.AddRange(
+                new AttendancePunch { UserId = uid, PunchTime = At(19, 30), PunchType = PunchType.ClockIn, IsValid = true },
+                new AttendancePunch { UserId = uid, PunchTime = Tue.AddDays(1).ToDateTime(new TimeOnly(8, 4)), PunchType = PunchType.ClockOut, IsValid = true });
+            // 记录是"被旧逻辑算成 0"的样子
+            db.AttendanceRecords.Add(new AttendanceRecord { UserId = uid, WorkDate = Tue, AttendanceStatus = AttendanceStatus.Normal, ActualWorkHours = 0m });
+            await db.SaveChangesAsync();
+        }
+
+        using (var db = CreateContext())   // 预览：不写库
+        {
+            var rows = await Svc(db).RebuildHourlyRecordsAsync([gid], Tue, Tue, dryRun: true);
+            var row = rows.Single(r => r.WorkDate == Tue);
+            Assert.Equal(At(19, 30), row.NewIn);
+            Assert.Equal(Tue.AddDays(1).ToDateTime(new TimeOnly(8, 4)), row.NewOut);
+            Assert.Equal(10.5m, row.NewHours);   // 20:00–次日 08:04 扣 1.5 小时；以前按日历日分组、次日卡还被 07:00 规则过滤 → 算成 0
+        }
+
+        using (var db = CreateContext())
+            await Svc(db).RebuildHourlyRecordsAsync([gid], Tue, Tue, dryRun: false);
+        Assert.Equal(10.5m, (await TueRecordAsync(uid)).ActualWorkHours);
     }
 }

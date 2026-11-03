@@ -207,9 +207,10 @@ public partial class AttendanceService
     /// <summary>
     /// 一次性维护：把某几个考勤组在 [from, to] 这段历史，按计时工规则从原始打卡重建考勤记录
     /// （2026-10-20 用户要求：成都鹰诺深圳分公司 9/25–10/19 的记录也按计时工口径重算）。不属于常规流程，由维护工具调用。
-    /// 每个人每一天：有效打卡 = 当天 07:00 到 23:59 之间的原始打卡，加上记录里已有的上下班时间（补卡补出来的）
-    /// 只要也落在这个时段；上班 = 最早一次，下班 = 最晚一次（只有一次则没有下班）；工时按 <see cref="ComputeHourlyWorkHours"/>
-    /// 算（午间窗口取记录里当时冻结的窗口，多段只取第一段）；加班一律清零（计时工没有加班，在岗时间已经全部算进工时）；
+    /// 打卡先按"归属哪个考勤日"分组（复用打卡规则 <see cref="ResolveHourlyWorkDate"/>：夜班的次日下班卡归上班那天），
+    /// 再取这天最早一次为上班、最晚一次为下班（只有一次则没有下班）；记录里已有的上下班时间（补卡补出来的）也一并参与。
+    /// 工时按 <see cref="ComputeHourlyWorkHours"/> 算（午间窗口取记录里当时冻结的窗口，多段只取第一段）；
+    /// 加班一律清零（计时工没有加班，在岗时间已经全部算进工时）；
     /// 旷工/未打卡/早退的状态改成正常、迟到照常判断；请假/出差/节假日状态和请假小时不动。
     /// <paramref name="dryRun"/>=true 只计算不写库。幂等：重复跑结果一样。
     /// </summary>
@@ -223,30 +224,54 @@ public partial class AttendanceService
                 && (onlyUserIds == null || onlyUserIds.Contains(u.Id)))
             .Select(u => new { u.Id, u.EmployeeNo, u.RealName }).ToListAsync(ct);
         var userIds = users.Select(u => u.Id).ToList();
-        var fromDt = from.ToDateTime(TimeOnly.MinValue);
-        var toDt   = to.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        // 打卡往前多取一天、往后多取两天：夜班（20:00–05:30）的次日下班卡要归到"上班那天"，区间最后一天也不会漏
+        var fromDt = from.AddDays(-1).ToDateTime(TimeOnly.MinValue);
+        var toDt   = to.AddDays(3).ToDateTime(TimeOnly.MinValue);
 
         var records = (await db.AttendanceRecords.Where(r => userIds.Contains(r.UserId) && r.WorkDate >= from && r.WorkDate <= to).ToListAsync(ct))
             .ToDictionary(r => (r.UserId, r.WorkDate));
-        var punchesByUserDay = (await db.AttendancePunches
-                .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= fromDt && p.PunchTime < toDt && p.IsValid)
-                .Select(p => new { p.UserId, p.PunchTime }).ToListAsync(ct))
-            .GroupBy(p => (p.UserId, DateOnly.FromDateTime(p.PunchTime)))
-            .ToDictionary(g => g.Key, g => g.Select(x => x.PunchTime).Distinct().OrderBy(x => x).ToList());
         var shifts = (await db.ShiftAssignments.Include(a => a.ShiftSchedule)
-                .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= from && a.WorkDate <= to).ToListAsync(ct))
+                .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= from.AddDays(-1) && a.WorkDate <= to.AddDays(1)).ToListAsync(ct))
             .ToDictionary(a => (a.UserId, a.WorkDate), a => a.ShiftSchedule);
+
+        // ★ 打卡按"归属哪个考勤日"分组（复用打卡时的同一套规则 ResolveHourlyWorkDate），
+        //   不能按打卡的日历日分组：夜班的次日下班卡否则会被分到第二天、还被 07:00 的规则过滤掉，
+        //   上班那天只剩一张上班卡 → 工时会算成 0（2026-11-03 审查修）。
+        //   前一天排夜班且确实上过（有 19 点后的卡）才算续接，避免"排了夜班人没来、次日早上的白班卡被吸到前一天"。
+        var rawPunches = await db.AttendancePunches
+            .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= fromDt && p.PunchTime < toDt && p.IsValid)
+            .Select(p => new { p.UserId, p.PunchTime }).ToListAsync(ct);
+        var nightWorkedOn = rawPunches
+            .Where(p => p.PunchTime.Hour >= HourlyNightEarliestHour)
+            .Select(p => (p.UserId, Day: DateOnly.FromDateTime(p.PunchTime)))
+            .ToHashSet();
+        var candsByUserDay = new Dictionary<(int UserId, DateOnly Day), List<DateTime>>();
+        foreach (var p in rawPunches.OrderBy(x => x.PunchTime))
+        {
+            var punchDay  = DateOnly.FromDateTime(p.PunchTime);
+            var todayShift = shifts.GetValueOrDefault((p.UserId, punchDay));
+            var prevShift  = shifts.GetValueOrDefault((p.UserId, punchDay.AddDays(-1)));
+            if (prevShift is not null && !nightWorkedOn.Contains((p.UserId, punchDay.AddDays(-1))))
+                prevShift = null;   // 前一天排了夜班但没上：按今天的规则判断，不续接
+            if (ResolveHourlyWorkDate(p.PunchTime, todayShift, prevShift) is not { } wd || wd < from || wd > to) continue;
+            var key = (p.UserId, wd);
+            if (!candsByUserDay.TryGetValue(key, out var list)) candsByUserDay[key] = list = [];
+            if (!list.Contains(p.PunchTime)) list.Add(p.PunchTime);
+        }
 
         var result = new List<HourlyRebuildRow>();
         foreach (var u in users)
         for (var d = from; d <= to; d = d.AddDays(1))
         {
             records.TryGetValue((u.Id, d), out var rec);
-            punchesByUserDay.TryGetValue((u.Id, d), out var rawPunches);
-            var punches = (rawPunches ?? []).Where(IsHourlyPunchTimeValid).ToList();
+            candsByUserDay.TryGetValue((u.Id, d), out var dayPunches);
+            var punches = dayPunches ?? [];
+            // 候选时刻：这天的打卡（已按归属日分好）+ 记录上已有的上下班时间（补卡审批只改记录、不一定有打卡流水；
+            // 夜班的下班时间本来就在次日，这里不再按"同一天"过滤）
             var cands = new List<DateTime>(punches);
-            if (rec?.ClockInTime is { } rci && DateOnly.FromDateTime(rci) == d && IsHourlyPunchTimeValid(rci)) cands.Add(rci);
-            if (rec?.ClockOutTime is { } rco && DateOnly.FromDateTime(rco) == d && IsHourlyPunchTimeValid(rco)) cands.Add(rco);
+            if (rec?.ClockInTime is { } rci0) cands.Add(rci0);
+            if (rec?.ClockOutTime is { } rco0) cands.Add(rco0);
+            cands = cands.Distinct().OrderBy(x => x).ToList();
             if (rec is null && cands.Count == 0) continue;
 
             shifts.TryGetValue((u.Id, d), out var shift);
