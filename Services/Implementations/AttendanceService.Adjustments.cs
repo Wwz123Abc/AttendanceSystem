@@ -385,22 +385,30 @@ public partial class AttendanceService
             .Where(x => x.S != null && x.E != null).Select(x => (S: DateOnly.FromDateTime(x.S!.Value), E: DateOnly.FromDateTime(x.E!.Value))).ToList();
         var skipped = new List<DateOnly>();
         var targetShiftForGuard = await db.ShiftSchedules.FirstOrDefaultAsync(s => s.Id == shiftId);   // 夜班次日白班校验用
+        var hourlyStartsForGuard = await LoadHourlyGroupStartsAsync();
+
+        // "这一天转班后最终会生效的班次"：区间内、且没被请假/出差/入职前跳过的日子 → 目标班次；
+        // 被跳过的那天保持原班次（它压根不会改）；区间外就看库里现有排班。
+        bool WillChangeOn(DateOnly day) => day >= start && day <= end
+            && !busyRanges.Any(r => r.S <= day && day <= r.E)
+            && !(applicant.HireDate is { } h && h > day);
+        ShiftSchedule? EffectiveShiftOn(DateOnly day) =>
+            WillChangeOn(day) ? targetShiftForGuard
+                              : (existing.TryGetValue(day, out var ex) ? ex.ShiftSchedule : null);
+
         for (var d = start; d <= end; d = d.AddDays(1))
         {
             if (busyRanges.Any(r => r.S <= d && d <= r.E)) { skipped.Add(d); continue; }
             if (applicant.HireDate is { } hire && hire > d) continue;
 
             // 计时工口径（2026-11-03 第 18 条）：夜班员工次日不得排白班。转班也要拦，否则转班能把排班改成违规组合。
-            if (IsNewHourlyRule(d) && IsHourlyOn(await LoadHourlyGroupStartsAsync(), applicant.AttendanceGroupId, d))
+            // ★ 邻日必须用"最终会生效的班次"：被请假/出差跳过的那天保持原班次，不能一律当成目标班次，
+            //   否则"被跳过的夜班日 + 次日改成白班"会漏判（2026-11-03 审查发现）。
+            // ★ 是否计时工按"这一天"判断，不能用区间起点代表整段。
+            if (IsHourlyOn(hourlyStartsForGuard, applicant.AttendanceGroupId, d))
             {
-                ShiftSchedule? Neighbour(int offset)
-                {
-                    var day = d.AddDays(offset);
-                    return day >= start && day <= end
-                        ? targetShiftForGuard
-                        : (existing.TryGetValue(day, out var nb) ? nb.ShiftSchedule : null);
-                }
-                var conflictText = FindNightThenDayConflictText(d, targetShiftForGuard, Neighbour(-1), Neighbour(1), "");
+                var conflictText = FindNightThenDayConflictText(
+                    d, EffectiveShiftOn(d), EffectiveShiftOn(d.AddDays(-1)), EffectiveShiftOn(d.AddDays(1)), "");
                 if (conflictText is not null)
                     throw new BusinessException("转班被拒绝（计时工口径）：" + conflictText);
             }

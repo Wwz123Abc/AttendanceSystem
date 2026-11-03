@@ -54,9 +54,12 @@ public partial class AttendanceService
     public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift)
     {
         var d = DateOnly.FromDateTime(punchTime);
-        // 夜班次日上限：2026-11-03 起是次日 18:00，之前的考勤日仍是 10:00（避免重算历史时口径变）
-        var latestHour = IsNewHourlyRule(d) ? HourlyNightLatestHour : OldHourlyNightLatestHour;
-        if (IsHourlyNightShift(prevShift) && punchTime.Hour < latestHour) return d.AddDays(-1);
+        // 夜班次日上限按"这次打卡将要归到的考勤日"选：2026-11-03 及以后的考勤日 18:00，之前仍是 10:00。
+        // ★ 不能用打卡的日历日判断：切换日（11-03）凌晨/傍晚的卡要归到 11-02，而 11-02 仍该用 10:00 上限；
+        //   用日历日会把 11-03 17:00 这种卡按 18:00 判断、错误地归到 11-02（2026-11-03 审查发现）。
+        var prevWorkDate = d.AddDays(-1);
+        var latestHour = IsNewHourlyRule(prevWorkDate) ? HourlyNightLatestHour : OldHourlyNightLatestHour;
+        if (IsHourlyNightShift(prevShift) && punchTime.Hour < latestHour) return prevWorkDate;
         if (IsHourlyNightShift(todayShift)) return punchTime.Hour >= HourlyNightEarliestHour ? d : null;
         return IsHourlyPunchTimeValid(punchTime) ? d : null;
     }

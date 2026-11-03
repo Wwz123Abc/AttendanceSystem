@@ -540,10 +540,11 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
             foreach (var gu in guardUsers)
             {
                 if (gu.AttendanceGroupId is not { } guardGid) continue;
-                if (!AttendanceService.IsHourlyOn(hourlyStarts, guardGid, start) && !AttendanceService.IsHourlyOn(hourlyStarts, guardGid, end))
-                    continue;   // 只约束计时工组的考勤日
                 for (var gd = start; gd <= end; gd = gd.AddDays(1))
                 {
+                    // 按"那一天"判断这个组是否已启用计时工：启用日可能正好落在排班区间中间，
+                    // 用区间起点/终点代表整段，会把启用日之前的日期也误校验（2026-11-03 审查发现）
+                    if (!AttendanceService.IsHourlyOn(hourlyStarts, guardGid, gd)) continue;
                     ShiftSchedule? EffectiveNeighbour(int offset)
                     {
                         var day = gd.AddDays(offset);
