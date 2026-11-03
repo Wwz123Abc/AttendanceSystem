@@ -848,6 +848,86 @@ namespace AttendanceSystem.Migrations
                     b.ToTable("AttendanceRecord");
                 });
 
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AuditIssueLog", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("CreatedAt");
+
+                    b.Property<string>("Detail")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)")
+                        .HasColumnName("Detail");
+
+                    b.Property<string>("EmployeeNo")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("EmployeeNo");
+
+                    b.Property<decimal?>("Expected")
+                        .HasColumnType("decimal(65,30)")
+                        .HasColumnName("Expected");
+
+                    b.Property<string>("GroupName")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("GroupName");
+
+                    b.Property<string>("IssueType")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)")
+                        .HasColumnName("IssueType");
+
+                    b.Property<string>("RealName")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("RealName");
+
+                    b.Property<DateOnly>("RunDate")
+                        .HasColumnType("date")
+                        .HasColumnName("RunDate");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("Severity");
+
+                    b.Property<decimal?>("Stored")
+                        .HasColumnType("decimal(65,30)")
+                        .HasColumnName("Stored");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int")
+                        .HasColumnName("UserId");
+
+                    b.Property<DateOnly>("WorkDate")
+                        .HasColumnType("date")
+                        .HasColumnName("WorkDate");
+
+                    b.HasKey("Id")
+                        .HasName("PK_AuditIssueLog");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("WorkDate");
+
+                    b.HasIndex("RunDate", "WorkDate");
+
+                    b.ToTable("AuditIssueLog");
+                });
+
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Department", b =>
                 {
                     b.Property<int>("Id")
@@ -1996,6 +2076,15 @@ namespace AttendanceSystem.Migrations
                         .HasConstraintName("FK_AttendanceRecord_User_UserId");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AuditIssueLog", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.Department", b =>

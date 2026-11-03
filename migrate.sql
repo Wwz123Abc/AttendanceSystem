@@ -3361,5 +3361,92 @@ DELIMITER ;
 CALL MigrationsScript();
 DROP PROCEDURE MigrationsScript;
 
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103053532_AddAuditIssueLog') THEN
+
+    CREATE TABLE `AuditIssueLog` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `RunDate` date NOT NULL,
+        `WorkDate` date NOT NULL,
+        `UserId` int NOT NULL,
+        `EmployeeNo` varchar(50) CHARACTER SET utf8mb4 NOT NULL,
+        `RealName` varchar(50) CHARACTER SET utf8mb4 NOT NULL,
+        `GroupName` varchar(50) CHARACTER SET utf8mb4 NULL,
+        `IssueType` varchar(40) CHARACTER SET utf8mb4 NOT NULL,
+        `Severity` varchar(10) CHARACTER SET utf8mb4 NOT NULL,
+        `Detail` varchar(1000) CHARACTER SET utf8mb4 NOT NULL,
+        `Stored` decimal(65,30) NULL,
+        `Expected` decimal(65,30) NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        CONSTRAINT `PK_AuditIssueLog` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_AuditIssueLog_User_UserId` FOREIGN KEY (`UserId`) REFERENCES `User` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103053532_AddAuditIssueLog') THEN
+
+    CREATE INDEX `IX_AuditIssueLog_RunDate_WorkDate` ON `AuditIssueLog` (`RunDate`, `WorkDate`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103053532_AddAuditIssueLog') THEN
+
+    CREATE INDEX `IX_AuditIssueLog_UserId` ON `AuditIssueLog` (`UserId`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103053532_AddAuditIssueLog') THEN
+
+    CREATE INDEX `IX_AuditIssueLog_WorkDate` ON `AuditIssueLog` (`WorkDate`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103053532_AddAuditIssueLog') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20261103053532_AddAuditIssueLog', '9.0.20');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
 COMMIT;
 

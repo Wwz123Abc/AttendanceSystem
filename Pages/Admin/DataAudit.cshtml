@@ -45,6 +45,60 @@
     }
 </div>
 
+@{
+    var logDanger = Model.WeeklyLogs.Count(l => l.Severity == "danger");
+}
+<div class="card mb-3">
+    <div class="card-header py-2 d-flex justify-content-between align-items-center">
+        <span class="fw-semibold"><i class="bi bi-moon-stars me-1"></i>本周每晚核对留档（@Model.WeekStart.ToString("MM-dd") ~ 今天）</span>
+        <span class="text-muted small">每晚 04:00 自动核对并留档；每周日 23:30 自动清掉上周，只留当前周</span>
+    </div>
+    @if (Model.WeeklyLogSummary.Count == 0)
+    {
+        <div class="card-body py-2 text-muted small">本周还没有核对留档（每天夜里跑完会写进来）。也可以看下方"实时核对"。</div>
+    }
+    else
+    {
+        <div class="card-body py-2">
+            <div class="d-flex flex-wrap gap-2 mb-2">
+                @foreach (var d in Model.WeeklyLogSummary)
+                {
+                    <span class="badge bg-light text-dark border">@d.RunDate.ToString("MM-dd") 共 @d.Count 条 · @d.ByType</span>
+                }
+                @if (logDanger > 0)
+                {
+                    <span class="badge bg-danger">其中工资可能算错 @logDanger 条</span>
+                }
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0 align-middle" style="font-size:.86rem">
+                    <thead class="table-light"><tr><th>核对日</th><th>考勤日</th><th>工号</th><th>姓名</th><th>考勤组</th><th>类型</th><th>系统里</th><th>应为</th><th>说明</th></tr></thead>
+                    <tbody>
+                    @foreach (var l in Model.WeeklyLogs)
+                    {
+                        <tr class="@(l.Severity == "danger" ? "table-danger" : "table-warning")">
+                            <td>@l.RunDate.ToString("MM-dd")</td>
+                            <td>@l.WorkDate.ToString("MM-dd")</td>
+                            <td><a href="/Admin/EmployeeRecord?keyword=@Uri.EscapeDataString(l.EmployeeNo)">@l.EmployeeNo</a></td>
+                            <td>@l.RealName</td>
+                            <td>@l.GroupName</td>
+                            <td>@l.IssueType</td>
+                            <td>@(l.Stored?.ToString("0.##"))</td>
+                            <td>@(l.Expected?.ToString("0.##"))</td>
+                            <td class="text-muted" style="max-width:520px">@l.Detail</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+            @if (Model.WeeklyLogTruncated)
+            {
+                <div class="text-muted small mt-1">只显示前 @Model.WeeklyLogs.Count 条，共 @Model.WeeklyLogTotal 条。</div>
+            }
+        </div>
+    }
+</div>
+
 @if (Model.Issues.Count > 0)
 {
     <div class="card">

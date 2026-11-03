@@ -39,6 +39,7 @@ public class AttendanceBackgroundService(
     private DateTime _lastApprovalReminderAt    = DateTime.MinValue;
     private DateTime _lastAuditDate             = DateTime.MinValue;
     private DateTime _lastAuditAttemptAt        = DateTime.MinValue;   // 核对失败后隔多久重试，免得持续出错时每分钟狂试
+    private DateOnly? _lastAuditPurgeWeek;                              // 已清理过核对留档的周（周一那天），避免同一周重复清
 
     /// <summary>每晚自动核对最近多少天（含今天之前一天）。</summary>
     private const int NightlyAuditDays = 14;
@@ -122,6 +123,17 @@ public class AttendanceBackgroundService(
                     if (await RunNightlyAuditAsync()) _lastAuditDate = now;
                 }
 
+                // 每周日 23:30 之后清一次核对留档：只保留当前周（周一~周日）的数据，上周的删掉
+                if (now.DayOfWeek == DayOfWeek.Sunday && now.Hour >= 23)
+                {
+                    var weekStart = WeekStartOf(now);
+                    if (_lastAuditPurgeWeek != weekStart)
+                    {
+                        await PurgeAuditLogsAsync(weekStart);
+                        _lastAuditPurgeWeek = weekStart;
+                    }
+                }
+
                 // 距上次提醒过去满 4 小时（程序刚启动、_lastApprovalReminderAt 还是最小值时，
                 // 差值必然超过 4 小时，所以启动后很快就会先跑一次，不用等真的攒够 4 小时）
                 if (now - _lastApprovalReminderAt >= TimeSpan.FromHours(4))
@@ -169,6 +181,9 @@ public class AttendanceBackgroundService(
             if (hourIds.Count > 0)   // 只要试过订正就再核对一遍（重算内部出错会返回 0，也要以订正后的实际状态为准），通知里只报还没解决的
                 issues = await attendance.AuditAsync(from, to);
 
+            // 每晚核对的疑点留档：数据核对页按"当前周"展示这些记录；每周日夜里把上周的清掉
+            await attendance.SaveNightlyAuditLogAsync(DateOnly.FromDateTime(now.Date), issues);
+
             // 先发新通知、再把更早的标已读：中途出错最多多一条重复，不会出现"旧的已读、新的没发"让管理员收不到
             var newNotices = new List<Notification>();
             if (issues.Count > 0)
@@ -194,6 +209,27 @@ public class AttendanceBackgroundService(
 
         }
         catch (Exception ex) { logger.LogError(ex, "每晚数据核对失败"); return false; }
+    }
+
+    /// <summary>某个时刻所在那一周的周一（中文习惯：周一到周日算一周）。</summary>
+    private static DateOnly WeekStartOf(DateTime now)
+    {
+        var day = DateOnly.FromDateTime(now);
+        var offset = ((int)day.DayOfWeek + 6) % 7;   // 周一=0、周日=6
+        return day.AddDays(-offset);
+    }
+
+    /// <summary>删掉考勤日早于"本周一"的核对留档（每周日夜里跑，只保留当前周数据）。失败只记日志。</summary>
+    private async Task PurgeAuditLogsAsync(DateOnly keepFromWorkDate)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var attendance = scope.ServiceProvider.GetRequiredService<IAttendanceService>();
+            var n = await attendance.PurgeAuditIssueLogsAsync(keepFromWorkDate);
+            logger.LogInformation("每周清理：删除了 {Count} 条考勤日早于 {From} 的核对留档（只留当前周）", n, keepFromWorkDate.ToString("yyyy-MM-dd"));
+        }
+        catch (Exception ex) { logger.LogError(ex, "清理核对留档失败"); }
     }
 
     /// <summary>申请有效期 15 天，超时自动作废（只对 2026-10-23 起提交的申请生效）。失败只记日志，不影响后面的提醒。</summary>

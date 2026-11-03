@@ -209,4 +209,40 @@ public partial class AttendanceService
             .OrderBy(i => i.Severity == "danger" ? 0 : 1).ThenBy(i => i.Type).ThenBy(i => i.EmployeeNo).ThenBy(i => i.WorkDate)
             .ToList();
     }
+
+    // ── 每晚核对结果的留档（2026-11-03 用户要求：每晚核对、页面只留当前周、周日夜里清上周）──────────────
+
+    /// <summary>把某一晚核对出来的疑点存下来（同一天重跑先清掉旧的，保证幂等）。</summary>
+    public async Task SaveNightlyAuditLogAsync(DateOnly runDate, IReadOnlyCollection<AuditIssue> issues, CancellationToken ct = default)
+    {
+        await db.AuditIssueLogs.Where(x => x.RunDate == runDate).ExecuteDeleteAsync(ct);
+        if (issues.Count == 0) return;
+        db.AuditIssueLogs.AddRange(issues.Select(i => new AuditIssueLog
+        {
+            RunDate    = runDate,
+            WorkDate   = i.WorkDate,
+            UserId     = i.UserId,
+            EmployeeNo = i.EmployeeNo,
+            RealName   = i.RealName,
+            GroupName  = i.GroupName,
+            IssueType  = i.Type,
+            Severity   = i.Severity,
+            Detail     = i.Detail.Length > 1000 ? i.Detail[..1000] : i.Detail,
+            Stored     = i.Stored,
+            Expected   = i.Expected,
+            CreatedAt  = clock.LocalNow()
+        }));
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>取一段"运行日"范围内的留档（数据核对页用）。</summary>
+    public async Task<List<AuditIssueLog>> GetAuditIssueLogsAsync(DateOnly fromRunDate, DateOnly toRunDate, CancellationToken ct = default)
+        => await db.AuditIssueLogs.AsNoTracking()
+            .Where(x => x.RunDate >= fromRunDate && x.RunDate <= toRunDate)
+            .OrderByDescending(x => x.RunDate).ThenBy(x => x.WorkDate).ThenBy(x => x.EmployeeNo)
+            .ToListAsync(ct);
+
+    /// <summary>删掉考勤日早于 <paramref name="keepFromWorkDate"/> 的留档（每周日夜里调用，只留当前周）。返回删除条数。</summary>
+    public async Task<int> PurgeAuditIssueLogsAsync(DateOnly keepFromWorkDate, CancellationToken ct = default)
+        => await db.AuditIssueLogs.Where(x => x.WorkDate < keepFromWorkDate).ExecuteDeleteAsync(ct);
 }
