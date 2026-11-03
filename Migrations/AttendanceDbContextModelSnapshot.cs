@@ -543,6 +543,87 @@ namespace AttendanceSystem.Migrations
                     b.ToTable("ApprovalStep");
                 });
 
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceDispute", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("CreatedAt");
+
+                    b.Property<string>("ExpectedText")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)")
+                        .HasColumnName("ExpectedText");
+
+                    b.Property<DateTime?>("HandledAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("HandledAt");
+
+                    b.Property<string>("HandlerName")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("HandlerName");
+
+                    b.Property<int?>("HandlerUserId")
+                        .HasColumnType("int")
+                        .HasColumnName("HandlerUserId");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("Reason");
+
+                    b.Property<int?>("RecordId")
+                        .HasColumnType("int")
+                        .HasColumnName("RecordId");
+
+                    b.Property<string>("Reply")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("Reply");
+
+                    b.Property<string>("Snapshot")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("Snapshot");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int")
+                        .HasColumnName("Status");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("int")
+                        .HasColumnName("Type");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("UpdatedAt");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int")
+                        .HasColumnName("UserId");
+
+                    b.Property<DateOnly>("WorkDate")
+                        .HasColumnType("date")
+                        .HasColumnName("WorkDate");
+
+                    b.HasKey("Id")
+                        .HasName("PK_AttendanceDispute");
+
+                    b.HasIndex("Status", "CreatedAt");
+
+                    b.HasIndex("UserId", "WorkDate");
+
+                    b.ToTable("AttendanceDispute");
+                });
+
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroup", b =>
                 {
                     b.Property<int>("Id")
@@ -2019,6 +2100,15 @@ namespace AttendanceSystem.Migrations
                     b.Navigation("ApprovalRequest");
 
                     b.Navigation("Approver");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceDispute", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.AttendanceGroupApprover", b =>

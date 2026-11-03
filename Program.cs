@@ -177,6 +177,7 @@ builder.Services.AddScoped<IAttendanceGroupService, AttendanceGroupService>();
 builder.Services.AddScoped<IEmployeeRegistrationService, EmployeeRegistrationService>();
 builder.Services.AddScoped<IAnnouncementService,   AnnouncementService>();
 builder.Services.AddScoped<IDeptScopeService,      DeptScopeService>();
+builder.Services.AddScoped<IAttendanceDisputeService, AttendanceDisputeService>();
 
 // ── 阿里云人脸识别（打卡用：活体检测 + 1:1 人脸比对）────────────────────────────────
 builder.Services.Configure<AliyunFaceOptions>(

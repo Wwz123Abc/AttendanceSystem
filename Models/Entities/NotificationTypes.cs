@@ -21,4 +21,7 @@ public static class NotificationTypes
 
     /// <summary>每晚自动数据核对的结果（只发给管理员）。</summary>
     public const string DataAudit = "DataAudit";
+
+    /// <summary>员工考勤核对提出的异议（发给管理员/文员；处理完再发给员工）。</summary>
+    public const string AttendanceDispute = "AttendanceDispute";
 }

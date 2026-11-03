@@ -3448,5 +3448,80 @@ DELIMITER ;
 CALL MigrationsScript();
 DROP PROCEDURE MigrationsScript;
 
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103081005_AddAttendanceDispute') THEN
+
+    CREATE TABLE `AttendanceDispute` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `UserId` int NOT NULL,
+        `WorkDate` date NOT NULL,
+        `RecordId` int NULL,
+        `Snapshot` varchar(500) CHARACTER SET utf8mb4 NULL,
+        `Type` int NOT NULL,
+        `Reason` varchar(500) CHARACTER SET utf8mb4 NOT NULL,
+        `ExpectedText` varchar(200) CHARACTER SET utf8mb4 NULL,
+        `Status` int NOT NULL,
+        `HandlerUserId` int NULL,
+        `HandlerName` varchar(50) CHARACTER SET utf8mb4 NULL,
+        `HandledAt` datetime(6) NULL,
+        `Reply` varchar(500) CHARACTER SET utf8mb4 NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        `UpdatedAt` datetime(6) NOT NULL,
+        CONSTRAINT `PK_AttendanceDispute` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_AttendanceDispute_User_UserId` FOREIGN KEY (`UserId`) REFERENCES `User` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103081005_AddAttendanceDispute') THEN
+
+    CREATE INDEX `IX_AttendanceDispute_Status_CreatedAt` ON `AttendanceDispute` (`Status`, `CreatedAt`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103081005_AddAttendanceDispute') THEN
+
+    CREATE INDEX `IX_AttendanceDispute_UserId_WorkDate` ON `AttendanceDispute` (`UserId`, `WorkDate`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261103081005_AddAttendanceDispute') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20261103081005_AddAttendanceDispute', '9.0.20');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
 COMMIT;
 

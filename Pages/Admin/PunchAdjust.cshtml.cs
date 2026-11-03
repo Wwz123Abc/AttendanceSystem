@@ -20,7 +20,7 @@ namespace AttendanceSystem.Pages.Admin;
 /// 范围内的员工补卡。
 /// </summary>
 [Authorize(Policy = "ManagePolicy")]
-public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeService deptScopeService, AttendanceDbContext db, ILogger<PunchAdjustModel> logger) : PageModel
+public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeService deptScopeService, IAttendanceDisputeService disputeService, AttendanceDbContext db, ILogger<PunchAdjustModel> logger) : PageModel
 {
     [BindProperty] public int      UserId       { get; set; }
     [BindProperty] public DateOnly WorkDate     { get; set; } = DateOnly.FromDateTime(DateTime.Today);
@@ -74,6 +74,9 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
             var operatorName = User.FindFirstValue("RealName");
             await attendanceService.AdminReplenishPunchAsync(UserId, WorkDate, type, punchAt, AllowOverwrite, Remark, operatorName);
             SuccessMessage = $"已为 {user.RealName}（{user.EmployeeNo}）补录 {WorkDate:yyyy-MM-dd} 的{PunchReplenishmentRules.TypeText(type)}卡（{punchAt:MM-dd HH:mm}），已按班次规则重算工时";
+            // 改完记录后，把这天员工提的、还在处理中的考勤异议自动关掉并通知他（2026-11-03 考勤核对功能）
+            var closedDisputes = await disputeService.AutoResolveAsync(UserId, WorkDate, "管理员/文员已手动补卡调整");
+            if (closedDisputes > 0) SuccessMessage += $"；并自动关闭该员工这一天 {closedDisputes} 张考勤异议";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
         catch (Exception ex)

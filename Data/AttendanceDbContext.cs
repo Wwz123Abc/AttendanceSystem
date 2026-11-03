@@ -46,6 +46,7 @@ public class AttendanceDbContext : DbContext
     public DbSet<PunchAdjustLog>            PunchAdjustLogs            => Set<PunchAdjustLog>();
     public DbSet<SystemSetting>             SystemSettings             => Set<SystemSetting>();
     public DbSet<AuditIssueLog>             AuditIssueLogs             => Set<AuditIssueLog>();
+    public DbSet<AttendanceDispute>         AttendanceDisputes         => Set<AttendanceDispute>();
 
     // 这个方法在“建立数据库模型”时被调用，用来配置表名、关系、索引、唯一约束等。
     protected override void OnModelCreating(ModelBuilder modelBuilder)

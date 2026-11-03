@@ -1,0 +1,106 @@
+@page
+@model AttendanceSystem.Pages.Admin.DisputesModel
+@using AttendanceSystem.Models.Enums
+@{
+    ViewData["Title"] = "考勤异议";
+    var current = Model.Status;
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-flag me-2 text-warning"></i>考勤异议</h4>
+    <span class="text-muted small">员工在「考勤核对」里提交，处理结果会通知员工</span>
+</div>
+
+@if (Model.SuccessMessage is not null)
+{
+    <div class="alert alert-success py-2">@Model.SuccessMessage</div>
+}
+@if (Model.ErrorMessage is not null)
+{
+    <div class="alert alert-danger py-2">@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
+        <a class="btn btn-sm @(current is null ? "btn-dark" : "btn-outline-dark")" href="?">全部</a>
+        <a class="btn btn-sm @(current == 1 ? "btn-warning" : "btn-outline-warning")" href="?Status=1">
+            待处理 @(Model.Result.PendingTotal > 0 ? $"（{Model.Result.PendingTotal}）" : "")
+        </a>
+        <a class="btn btn-sm @(current == 3 ? "btn-success" : "btn-outline-success")" href="?Status=3">已处理</a>
+        <a class="btn btn-sm @(current == 4 ? "btn-secondary" : "btn-outline-secondary")" href="?Status=4">已驳回</a>
+        <a class="btn btn-sm @(current == 5 ? "btn-light border" : "btn-outline-secondary")" href="?Status=5">已撤回</a>
+        <span class="ms-auto text-muted small">共 @Model.Result.Total 条</span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle" style="font-size:.86rem">
+            <thead class="table-light">
+                <tr>
+                    <th>提交时间</th><th>员工</th><th>考勤日</th><th>类型</th>
+                    <th>说明</th><th>提交时的记录</th><th>状态</th><th style="min-width:260px">处理</th>
+                </tr>
+            </thead>
+            <tbody>
+            @if (Model.Result.Items.Count == 0)
+            {
+                <tr><td colspan="8" class="text-center text-muted py-3">没有异议记录</td></tr>
+            }
+            @foreach (var d in Model.Result.Items)
+            {
+                <tr class="@(d.Status == AttendanceDisputeStatus.Pending ? "table-warning" : "")">
+                    <td class="text-nowrap">@d.CreatedAt.ToString("MM-dd HH:mm")</td>
+                    <td>
+                        <a href="/Admin/EmployeeRecord?keyword=@Uri.EscapeDataString(d.EmployeeNo)">@d.EmployeeNo</a>
+                        <div>@d.RealName</div>
+                        <div class="small text-muted">@d.DeptName</div>
+                    </td>
+                    <td class="text-nowrap">@d.WorkDate.ToString("MM-dd")<div class="small text-muted">@d.DayOfWeekText</div></td>
+                    <td>@d.TypeText</td>
+                    <td style="max-width:260px">
+                        <div>@d.Reason</div>
+                        @if (!string.IsNullOrWhiteSpace(d.ExpectedText))
+                        {
+                            <div class="small text-muted">期望：@d.ExpectedText</div>
+                        }
+                    </td>
+                    <td class="small text-muted" style="max-width:240px">@d.Snapshot</td>
+                    <td>
+                        <span class="badge @d.StatusCssClass">@d.StatusText</span>
+                        @if (d.Status is AttendanceDisputeStatus.Resolved or AttendanceDisputeStatus.Rejected)
+                        {
+                            <div class="small text-muted">@(d.HandlerName) @(d.HandledAt?.ToString("MM-dd HH:mm"))</div>
+                            <div class="small">@d.Reply</div>
+                        }
+                    </td>
+                    <td>
+                        @if (d.Status is AttendanceDisputeStatus.Pending or AttendanceDisputeStatus.Processing)
+                        {
+                            <a class="btn btn-outline-primary btn-sm py-0 mb-1"
+                               href="/Admin/PunchAdjust?userId=@d.UserId&workDate=@d.WorkDate.ToString("yyyy-MM-dd")">
+                                <i class="bi bi-clock-history me-1"></i>去补卡/调整
+                            </a>
+                            <form method="post" asp-page-handler="Handle" class="d-flex flex-column gap-1"
+                                  onsubmit="return confirm('提交后员工会收到处理结果通知，确定吗？');">
+                                <input type="hidden" name="id" value="@d.Id" />
+                                <select name="accept" class="form-select form-select-sm py-0">
+                                    <option value="true">已处理（同意/已调整考勤）</option>
+                                    <option value="false">驳回（核对后记录无误）</option>
+                                </select>
+                                <input name="reply" class="form-control form-control-sm py-0" maxlength="500" required
+                                       placeholder="处理结果/理由（员工会看到）" />
+                                <button type="submit" class="btn btn-warning btn-sm py-0">提交处理</button>
+                            </form>
+                        }
+                        else
+                        {
+                            <span class="text-muted small">已结束</span>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</div>

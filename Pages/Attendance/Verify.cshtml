@@ -1,0 +1,183 @@
+@page
+@model AttendanceSystem.Pages.Attendance.VerifyModel
+@using AttendanceSystem.Models.Enums
+@{
+    ViewData["Title"] = "考勤核对";
+    string[] week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+}
+
+<div class="page-header d-flex justify-content-between align-items-center">
+    <h4><i class="bi bi-clipboard-check me-2 text-primary"></i>考勤核对</h4>
+</div>
+
+@if (Model.SuccessMessage is not null)
+{
+    <div class="alert alert-success py-2">@Model.SuccessMessage</div>
+}
+@if (Model.ErrorMessage is not null)
+{
+    <div class="alert alert-danger py-2">@Model.ErrorMessage</div>
+}
+
+<div class="alert alert-info py-2 small">
+    <div class="mb-1"><i class="bi bi-info-circle me-1"></i><b>怎么核对</b>：下面是你最近 <b>@Model.VerifyDays 天</b>的考勤记录。</div>
+    <ul class="mb-1 ps-4">
+        <li><b>不操作 = 认可系统记录</b>，不需要点"确认"。</li>
+        <li>哪一天觉得不对，点那一天的「有异议」，选问题类型、写清原因后提交。</li>
+        <li>提交后 <b>管理员和文员</b>会收到提醒并处理，处理结果会显示在下面的表格里，也会收到站内通知。</li>
+        <li><b>加班</b>：加班要等加班单<b>审批通过</b>后才计入工时；还在审批中的加班会在下面单独标出来，不是漏算。</li>
+    </ul>
+    <div class="text-danger"><i class="bi bi-exclamation-triangle me-1"></i><b>请如实核对</b>：恶意提交（明知记录正确仍反复提异议）会被记录，按公司规定处理。</div>
+</div>
+
+@if (Model.SelectableDays.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header py-2"><i class="bi bi-flag me-1"></i>提出异议</div>
+        <div class="card-body py-3">
+            <form method="post" asp-page-handler="Submit" class="row g-2 align-items-end" id="disputeForm">
+                <div class="col-sm-3">
+                    <label class="form-label small mb-1">哪一天</label>
+                    <select name="workDate" class="form-select form-select-sm" required>
+                        <option value="">请选择日期</option>
+                        @foreach (var d in Model.SelectableDays)
+                        {
+                            <option value="@d.WorkDate.ToString("yyyy-MM-dd")">@d.WorkDate.ToString("MM-dd")（@d.DayOfWeekText）</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-sm-3">
+                    <label class="form-label small mb-1">问题类型</label>
+                    <select name="type" class="form-select form-select-sm" required>
+                        <option value="">请选择</option>
+                        @foreach (var t in Enum.GetValues<AttendanceDisputeType>())
+                        {
+                            <option value="@((int)t)">@t.Text()</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-sm-4">
+                    <label class="form-label small mb-1">期望（可选）</label>
+                    <input name="expected" class="form-control form-control-sm" maxlength="200" placeholder="比如：我 18:20 才下班" />
+                </div>
+                <div class="col-12">
+                    <label class="form-label small mb-1">说明原因（必填，至少 5 个字）</label>
+                    <textarea name="reason" class="form-control form-control-sm" rows="2" maxlength="500" required
+                              placeholder="请写清楚情况，方便管理员核对，比如：11-02 我上夜班，07:10 打了下班卡但系统没记"></textarea>
+                </div>
+                <div class="col-12 d-flex justify-content-between align-items-center">
+                    <div class="form-text small mb-0">提交后会通知管理员/文员；同一天有一张处理中的异议时不能重复提交。</div>
+                    <button type="submit" class="btn btn-warning btn-sm"><i class="bi bi-send me-1"></i>提交异议</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+<div class="card">
+    <div class="card-header py-2">近 @Model.VerifyDays 天考勤记录</div>
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle" style="font-size:.88rem">
+            <thead class="table-light">
+                <tr>
+                    <th>日期</th><th>班次</th><th>上班卡</th><th>下班卡</th>
+                    <th>正班</th><th>加班</th><th>状态</th><th>异议 / 操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            @if (Model.Rows.Count == 0)
+            {
+                <tr><td colspan="8" class="text-muted text-center py-3">最近 @Model.VerifyDays 天没有考勤记录，也没有排班。</td></tr>
+            }
+            @foreach (var r in Model.Rows)
+            {
+                <tr>
+                    <td>@r.WorkDate.ToString("MM-dd")（@r.DayOfWeekText）</td>
+                    <td>
+                        @if (r.ShiftName is not null)
+                        {
+                            <span>@r.ShiftName</span>
+                            <div class="small text-muted">@r.ShiftTimeText</div>
+                        }
+                        else
+                        {
+                            <span class="text-muted small">没排班</span>
+                        }
+                    </td>
+                    <td>@r.ClockInText</td>
+                    <td>@r.ClockOutText</td>
+                    <td>@(r.HasRecord ? r.WorkHours.ToString("0.##") + " h" : "--")</td>
+                    <td>
+                        @if (r.HasRecord)
+                        {
+                            <span>@r.OvertimeHours.ToString("0.##") h</span>
+                        }
+                        else
+                        {
+                            <span>--</span>
+                        }
+                        @if (r.PendingOvertimeHours > 0)
+                        {
+                            <div class="small text-warning">
+                                <i class="bi bi-hourglass-split"></i>另 @r.PendingOvertimeTexts.Count 张加班单待审批（合计 @r.PendingOvertimeHours.ToString("0.##") h），审批通过后才计入
+                            </div>
+                        }
+                    </td>
+                    <td>
+                        <span class="badge @r.StatusCssClass">@r.StatusText</span>
+                        @if (r.LateMinutes > 0)
+                        {
+                            <div class="small text-muted">迟到 @r.LateMinutes 分钟</div>
+                        }
+                        @if (r.EarlyLeaveMinutes > 0)
+                        {
+                            <div class="small text-muted">早退 @r.EarlyLeaveMinutes 分钟</div>
+                        }
+                    </td>
+                    <td>
+                        @if (r.DisputeStatus is null)
+                        {
+                            <button type="button" class="btn btn-outline-warning btn-sm pick-date"
+                                    data-date="@r.WorkDate.ToString("yyyy-MM-dd")">
+                                <i class="bi bi-flag me-1"></i>有异议
+                            </button>
+                        }
+                        else
+                        {
+                            <span class="badge @r.DisputeStatusCssClass">@r.DisputeStatusText</span>
+                            <div class="small text-muted">@r.DisputeTypeText</div>
+                            @if (!string.IsNullOrWhiteSpace(r.DisputeReply))
+                            {
+                                <div class="small text-dark">回复：@r.DisputeReply</div>
+                            }
+                            @if (r.DisputeStatus == AttendanceDisputeStatus.Pending)
+                            {
+                                <form method="post" asp-page-handler="Cancel" class="mt-1"
+                                      onsubmit="return confirm('确定撤回这一天的异议吗？');">
+                                    <input type="hidden" name="id" value="@r.DisputeId" />
+                                    <button type="submit" class="btn btn-outline-secondary btn-sm py-0">撤回</button>
+                                </form>
+                            }
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // 点某一天的「有异议」→ 自动把上面表单的日期选成那一天
+    document.querySelectorAll('.pick-date').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var form = document.getElementById('disputeForm');
+            if (!form) return;
+            var sel = form.querySelector('select[name="workDate"]');
+            if (sel) sel.value = btn.getAttribute('data-date');
+            form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            var reason = form.querySelector('textarea[name="reason"]');
+            if (reason) reason.focus();
+        });
+    });
+</script>
