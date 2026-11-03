@@ -70,6 +70,37 @@
                     <button type="submit" class="btn btn-warning btn-sm"><i class="bi bi-send me-1"></i>提交异议</button>
                 </div>
             </form>
+
+            @{
+                var mine = Model.Rows.Where(r => r.DisputeStatus is not null).ToList();
+            }
+            @if (mine.Count > 0)
+            {
+                <hr class="my-2" />
+                <div class="small fw-semibold mb-1">已提交的异议</div>
+                <ul class="list-unstyled mb-0 small">
+                    @foreach (var r in mine)
+                    {
+                        <li class="mb-1">
+                            <span class="text-muted">@r.WorkDate.ToString("MM-dd")（@r.DayOfWeekText）</span>
+                            <span class="badge @r.DisputeStatusCssClass">@r.DisputeStatusText</span>
+                            <span class="text-muted">@r.DisputeTypeText</span>
+                            @if (!string.IsNullOrWhiteSpace(r.DisputeReply))
+                            {
+                                <span>· 回复：@r.DisputeReply</span>
+                            }
+                            @if (r.DisputeStatus == AttendanceDisputeStatus.Pending)
+                            {
+                                <form method="post" asp-page-handler="Cancel" class="d-inline"
+                                      onsubmit="return confirm('确定撤回这一天的异议吗？');">
+                                    <input type="hidden" name="id" value="@r.DisputeId" />
+                                    <button type="submit" class="btn btn-outline-secondary btn-sm py-0 ms-1">撤回</button>
+                                </form>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
         </div>
     </div>
 }
@@ -81,13 +112,13 @@
             <thead class="table-light">
                 <tr>
                     <th>日期</th><th>班次</th><th>上班卡</th><th>下班卡</th>
-                    <th>正班</th><th>加班</th><th>状态</th><th>异议 / 操作</th>
+                    <th>正班</th><th>加班</th><th>状态</th>
                 </tr>
             </thead>
             <tbody>
             @if (Model.Rows.Count == 0)
             {
-                <tr><td colspan="8" class="text-muted text-center py-3">最近 @Model.VerifyDays 天没有考勤记录，也没有排班。</td></tr>
+                <tr><td colspan="7" class="text-muted text-center py-3">最近 @Model.VerifyDays 天没有考勤记录，也没有排班。</td></tr>
             }
             @foreach (var r in Model.Rows)
             {
@@ -134,32 +165,6 @@
                             <div class="small text-muted">早退 @r.EarlyLeaveMinutes 分钟</div>
                         }
                     </td>
-                    <td>
-                        @if (r.DisputeStatus is null)
-                        {
-                            <button type="button" class="btn btn-outline-warning btn-sm pick-date"
-                                    data-date="@r.WorkDate.ToString("yyyy-MM-dd")">
-                                <i class="bi bi-flag me-1"></i>有异议
-                            </button>
-                        }
-                        else
-                        {
-                            <span class="badge @r.DisputeStatusCssClass">@r.DisputeStatusText</span>
-                            <div class="small text-muted">@r.DisputeTypeText</div>
-                            @if (!string.IsNullOrWhiteSpace(r.DisputeReply))
-                            {
-                                <div class="small text-dark">回复：@r.DisputeReply</div>
-                            }
-                            @if (r.DisputeStatus == AttendanceDisputeStatus.Pending)
-                            {
-                                <form method="post" asp-page-handler="Cancel" class="mt-1"
-                                      onsubmit="return confirm('确定撤回这一天的异议吗？');">
-                                    <input type="hidden" name="id" value="@r.DisputeId" />
-                                    <button type="submit" class="btn btn-outline-secondary btn-sm py-0">撤回</button>
-                                </form>
-                            }
-                        }
-                    </td>
                 </tr>
             }
             </tbody>
@@ -167,17 +172,3 @@
     </div>
 </div>
 
-<script>
-    // 点某一天的「有异议」→ 自动把上面表单的日期选成那一天
-    document.querySelectorAll('.pick-date').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var form = document.getElementById('disputeForm');
-            if (!form) return;
-            var sel = form.querySelector('select[name="workDate"]');
-            if (sel) sel.value = btn.getAttribute('data-date');
-            form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            var reason = form.querySelector('textarea[name="reason"]');
-            if (reason) reason.focus();
-        });
-    });
-</script>
