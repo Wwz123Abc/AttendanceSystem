@@ -26,13 +26,13 @@ public class VerifyModel(IAttendanceDisputeService disputeService) : AppPageMode
 
     public async Task OnGetAsync(CancellationToken ct) => Rows = await disputeService.GetVerifyListAsync(CurrentUserId, ct);
 
-    public async Task<IActionResult> OnPostSubmitAsync(DateOnly workDate, int type, string? reason, string? expected, CancellationToken ct)
+    public async Task<IActionResult> OnPostSubmitAsync(DateOnly workDate, int type, string? reason, CancellationToken ct)
     {
         try
         {
             if (!Enum.IsDefined(typeof(AttendanceDisputeType), type))
                 throw new BusinessException("请选择问题类型");
-            await disputeService.SubmitAsync(CurrentUserId, workDate, (AttendanceDisputeType)type, reason ?? "", expected, ct);
+            await disputeService.SubmitAsync(CurrentUserId, workDate, (AttendanceDisputeType)type, reason ?? "", null, ct);
             SuccessMessage = $"{workDate:MM-dd} 的异议已提交，管理员/文员会尽快核对处理，处理结果会通知你";
         }
         catch (InvalidOperationException ex) { ErrorMessage = ex.Message; }
