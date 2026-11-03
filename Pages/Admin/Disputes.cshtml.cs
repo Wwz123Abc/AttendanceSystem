@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Enums;
@@ -25,17 +26,20 @@ public class DisputesModel(IAttendanceDisputeService disputeService, IDeptScopeS
 
     public AttendanceDisputeListResultDto Result { get; set; } = new();
 
-    public async Task OnGetAsync(CancellationToken ct)
+    public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
+        if (!AttendanceDisputeFeature.Enabled) return NotFound();   // 功能已下线（2026-11-03 用户要求）
         var cu = HttpContext.GetRequiredUser();
         var allowed = await deptScopeService.GetVisibleDeptIdsAsync(cu);
         var st = Status is { } s && Enum.IsDefined(typeof(AttendanceDisputeStatus), s) ? (AttendanceDisputeStatus?)s : null;
         Result = await disputeService.ListForHandlerAsync(
             new AttendanceDisputeQueryDto { Status = st, Page = PageIndex, PageSize = 50 }, allowed, ct);
+        return Page();
     }
 
     public async Task<IActionResult> OnPostHandleAsync(int id, bool accept, string? reply, CancellationToken ct)
     {
+        if (!AttendanceDisputeFeature.Enabled) return NotFound();
         try
         {
             var cu = HttpContext.GetRequiredUser();

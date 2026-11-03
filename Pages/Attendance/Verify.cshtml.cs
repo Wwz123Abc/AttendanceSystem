@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Models.Exceptions;
@@ -24,10 +25,16 @@ public class VerifyModel(IAttendanceDisputeService disputeService) : AppPageMode
     /// <summary>可以在页面上选的日期（近 7 天里"有记录或有排班"的那些天）。</summary>
     public List<AttendanceVerifyRowDto> SelectableDays => Rows.Where(r => r.DisputeStatus is null or AttendanceDisputeStatus.Rejected or AttendanceDisputeStatus.Cancelled).ToList();
 
-    public async Task OnGetAsync(CancellationToken ct) => Rows = await disputeService.GetVerifyListAsync(CurrentUserId, ct);
+    public async Task<IActionResult> OnGetAsync(CancellationToken ct)
+    {
+        if (!AttendanceDisputeFeature.Enabled) return NotFound();   // 功能已下线（2026-11-03 用户要求）
+        Rows = await disputeService.GetVerifyListAsync(CurrentUserId, ct);
+        return Page();
+    }
 
     public async Task<IActionResult> OnPostSubmitAsync(DateOnly workDate, int type, string? reason, CancellationToken ct)
     {
+        if (!AttendanceDisputeFeature.Enabled) return NotFound();
         try
         {
             if (!Enum.IsDefined(typeof(AttendanceDisputeType), type))
@@ -42,6 +49,7 @@ public class VerifyModel(IAttendanceDisputeService disputeService) : AppPageMode
 
     public async Task<IActionResult> OnPostCancelAsync(int id, CancellationToken ct)
     {
+        if (!AttendanceDisputeFeature.Enabled) return NotFound();
         try
         {
             await disputeService.CancelAsync(CurrentUserId, id, ct);

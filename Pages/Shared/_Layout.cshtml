@@ -372,12 +372,15 @@
                         <i class="bi bi-journal-text"></i>我的记录
                     </a>
                 </li>
-                <li>
-                    <a class="nav-link @(currentPath.StartsWith("/Attendance/Verify") ? "active" : "")"
-                       href="/Attendance/Verify">
-                        <i class="bi bi-clipboard-check"></i>考勤核对
-                    </a>
-                </li>
+                @if (AttendanceSystem.Helpers.AttendanceDisputeFeature.Enabled)
+                {
+                    <li>
+                        <a class="nav-link @(currentPath.StartsWith("/Attendance/Verify") ? "active" : "")"
+                           href="/Attendance/Verify">
+                            <i class="bi bi-clipboard-check"></i>考勤核对
+                        </a>
+                    </li>
+                }
                 <li>
                     <a class="nav-link @(currentPath.StartsWith("/Attendance/MyCalendar") ? "active" : "")"
                        href="/Attendance/MyCalendar">
@@ -459,12 +462,15 @@
                             <i class="bi bi-clipboard2-check"></i>数据核对
                         </a>
                     </li>
-                    <li>
-                        <a class="nav-link @(currentPath.StartsWith("/Admin/Disputes") ? "active" : "")"
-                           href="/Admin/Disputes">
-                            <i class="bi bi-flag"></i>考勤异议
-                        </a>
-                    </li>
+                    @if (AttendanceSystem.Helpers.AttendanceDisputeFeature.Enabled)
+                    {
+                        <li>
+                            <a class="nav-link @(currentPath.StartsWith("/Admin/Disputes") ? "active" : "")"
+                               href="/Admin/Disputes">
+                                <i class="bi bi-flag"></i>考勤异议
+                            </a>
+                        </li>
+                    }
                     <li>
                         <a class="nav-link @(currentPath.StartsWith("/Admin/PunchAdjust") ? "active" : "")"
                            href="/Admin/PunchAdjust">
