@@ -12,7 +12,8 @@ namespace AttendanceSystem.Services.Implementations;
 /// <param name="PrevDayClockOut">前一天考勤记录里的下班时间（夜班的下班在这天早上）。</param>
 /// <param name="NextBoundary">下一个上班的边界：下一天已有的上班打卡；没有就取下一天排班的"最早可打上班卡"时刻；都没有为 null。</param>
 /// <param name="DayPunches">这天前后（前一天到后天）所有原始打卡时刻，用来判断午间窗口有没有命中。</param>
-/// <param name="Hourly">这天是不是按计时工模式算（考勤组开了计时工模式且考勤日不早于起始日）：计时工的补卡时间必须落在当天 07:00–23:59。</param>
+/// <param name="Hourly">这天是不是按计时工模式算（考勤组开了计时工模式且考勤日不早于起始日）：计时工白班补卡时间必须落在当天 07:00–23:59；
+/// 夜班（跨天班次）可以补齐次日的下班卡，最晚到次日下班上限（2026-11-03 起的考勤日 18:00，之前的考勤日 10:00）。</param>
 public sealed record ReplenishmentContext(
     ShiftSchedule? Shift, DateTime? ClockIn, DateTime? ClockOut, DateTime? PrevDayClockOut, DateTime? NextBoundary, List<DateTime> DayPunches,
     bool Hourly = false);
@@ -122,14 +123,18 @@ public static class PunchReplenishmentRules
     /// （其余的位置检查——不能越过下班卡、前一天下班卡、下一个上班的边界——照样检查）；午间卡不受影响。</param>
     public static string? FindProblem(PunchType type, DateOnly date, DateTime punchAt, ReplenishmentContext ctx, bool allowOverwrite = false)
     {
-        // 计时工：没有夜班/跨天，补的时间必须在当天 07:00 到 23:59 之间（不能补到第二天凌晨）
+        // 计时工：白班只能补当天的卡；夜班（跨天班次）可以补齐次日的下班卡，最晚到"次日下班上限"
         if (ctx.Hourly && AttendanceService.IsHourlyNightShift(ctx.Shift))
         {
-            // 夜班计时工：补的时间必须在上班日 19:00 到次日 10:00 之间
+            // 夜班计时工：上班日 19:00 起；最晚到次日下班上限——2026-11-03 起的考勤日 18:00，之前的考勤日仍是 10:00
+            // （跟打卡归属/工时计算同一套口径，见 AttendanceService.IsNewHourlyRule；2026-11-03 用户要求对齐）
+            var latestHour = AttendanceService.IsNewHourlyRule(date)
+                ? AttendanceService.HourlyNightLatestHour
+                : AttendanceService.OldHourlyNightLatestHour;
             var nightFrom = date.ToDateTime(new TimeOnly(AttendanceService.HourlyNightEarliestHour, 0));
-            var nightTo   = date.AddDays(1).ToDateTime(new TimeOnly(AttendanceService.HourlyNightLatestHour, 0));
+            var nightTo   = date.AddDays(1).ToDateTime(new TimeOnly(latestHour, 0));
             if (punchAt < nightFrom || punchAt >= nightTo)
-                return $"夜班计时工补卡的时间必须在上班日 {AttendanceService.HourlyNightEarliestHour:00}:00 到次日 {AttendanceService.HourlyNightLatestHour:00}:00 之间，请重新选择时间";
+                return $"夜班计时工补卡的时间必须在上班日 {AttendanceService.HourlyNightEarliestHour:00}:00 到次日 {latestHour:00}:00 之间，请重新选择时间";
         }
         else if (ctx.Hourly && (DateOnly.FromDateTime(punchAt) != date || !AttendanceService.IsHourlyPunchTimeValid(punchAt)))
             return $"计时工补卡的时间必须在当天 {AttendanceService.HourlyEarliestPunchHour:00}:00 到 23:59 之间，请重新选择时间（不能选第二天）";

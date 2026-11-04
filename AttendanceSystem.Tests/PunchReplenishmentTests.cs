@@ -256,4 +256,45 @@ public class PunchReplenishmentTests : SqliteTestBase
         var dto = new ApprovalRequestDto { ApprovalType = ApprovalType.PunchReplenishment, PunchType = PunchType.MidCheck, PunchDate = Tue, PunchTime = new TimeOnly(12, 30) };
         Assert.Equal("补午间卡 2026-09-08 12:30", dto.ContentText);
     }
+
+    // ── 计时工夜班补卡（2026-11-03 用户要求：放宽到"次日 18:00 前"，与夜班工时上限口径对齐）────────
+
+    /// <summary>造一个"计时工夜班"的补卡现场：班次 20:00–次日 08:00，上班日 19:40 已打上班卡。</summary>
+    private static ReplenishmentContext NightHourlyCtx(DateOnly date, DateTime? clockIn = null)
+        => new(NightShift(), clockIn ?? date.ToDateTime(new TimeOnly(19, 40)), null, null, null, [], Hourly: true);
+
+    [Theory]
+    [InlineData(2026, 11, 2, 8, 0, true)]    // 旧口径（11-03 之前的考勤日）：次日 08:00 可以
+    [InlineData(2026, 11, 2, 9, 59, true)]   // 旧口径：次日 09:59 仍可以
+    [InlineData(2026, 11, 2, 10, 0, false)]  // 旧口径：次日 10:00 是边界，不含
+    [InlineData(2026, 11, 2, 12, 0, false)]  // 旧口径：次日中午不行
+    [InlineData(2026, 11, 3, 8, 0, true)]    // 新口径：次日 08:00 可以
+    [InlineData(2026, 11, 3, 17, 0, true)]   // 新口径：次日 17:00 可以
+    [InlineData(2026, 11, 3, 18, 0, false)]  // 新口径：次日 18:00 是边界，不含
+    public void 夜班计时工补下班卡_次日上限按考勤日切换(int y, int m, int d, int hour, int minute, bool ok)
+    {
+        var date = new DateOnly(y, m, d);
+        var ctx = NightHourlyCtx(date);
+        var punchAt = date.AddDays(1).ToDateTime(new TimeOnly(hour, minute));
+        var problem = PunchReplenishmentRules.FindProblem(PunchType.ClockOut, date, punchAt, ctx);
+        Assert.Equal(ok, problem is null);
+        if (!ok) Assert.Contains("次日", problem);   // 拒绝时要说明次日上限
+    }
+
+    [Fact]
+    public void 夜班计时工_上班日19点之前不能补()
+    {
+        var ctx = NightHourlyCtx(Tue, clockIn: null);
+        Assert.Contains("19:00", PunchReplenishmentRules.FindProblem(PunchType.ClockIn, Tue, At(Tue, 18, 0), ctx));
+        Assert.Null(PunchReplenishmentRules.FindProblem(PunchType.ClockIn, Tue, At(Tue, 19, 0), ctx));
+    }
+
+    [Fact]
+    public void 白班计时工仍然不能补次日的卡()
+    {
+        var ctx = new ReplenishmentContext(DayShift(), At(Tue, 8, 30), null, null, null, [], Hourly: true);
+        var problem = PunchReplenishmentRules.FindProblem(PunchType.ClockOut, Tue, At(Tue.AddDays(1), 8, 0), ctx);
+        Assert.NotNull(problem);
+        Assert.Contains("当天", problem);
+    }
 }
