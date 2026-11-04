@@ -127,19 +127,9 @@ public partial class AgentToolExecutor
         _                   => "员工"
     };
 
-    private static string AttStatusText(AttendanceStatus s) => s switch
-    {
-        AttendanceStatus.Late        => "迟到",
-        AttendanceStatus.EarlyLeave  => "早退",
-        AttendanceStatus.Absent      => "旷工",
-        AttendanceStatus.NotPunched  => "缺卡",
-        AttendanceStatus.Normal      => "正常",
-        AttendanceStatus.Holiday     => "休假",
-        AttendanceStatus.OnLeave     => "请假",
-        AttendanceStatus.Overtime    => "加班",
-        AttendanceStatus.BusinessTrip=> "出差",
-        _                            => s.ToString()
-    };
+    // 状态中文统一走 AttendanceService.StatusText，只有"缺卡"这个说法 AGENT 里保留（和页面上的"未打卡"同义）。
+    private static string AttStatusText(AttendanceStatus s)
+        => s == AttendanceStatus.NotPunched ? "缺卡" : AttendanceService.StatusText(s);
 
     private static string Truncate(string text, int max)
         => text.Length <= max ? text : text[..max] + "\n…（结果过长已截断，请缩小查询范围）";

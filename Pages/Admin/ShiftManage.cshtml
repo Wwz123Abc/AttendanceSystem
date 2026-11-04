@@ -79,7 +79,6 @@
                         <tr><th>班次</th><th>所属组</th><th>上/下班</th><th>每周休息</th><th>操作</th></tr>
                     </thead>
                     <tbody>
-                        @{ string[] weekShort = ["日", "一", "二", "三", "四", "五", "六"]; }
                         @foreach (var s in Model.Shifts)
                         {
                             var restDays = s.ParseRestDays();
@@ -99,7 +98,7 @@
                                 </td>
                                 <td class="small text-muted">
                                     @(restDays.Count > 0
-                                        ? "周" + string.Join("、", restDays.OrderBy(d => (int)d).Select(d => weekShort[(int)d]))
+                                        ? "周" + string.Join("、", restDays.OrderBy(d => (int)d).Select(d => AttendanceSystem.Helpers.WeekdayText.ZhShort(d)))
                                         : "无休")
                                 </td>
                                 <td>
@@ -363,15 +362,12 @@
                                 每周休息日 <small class="text-muted fw-normal">（勾选的这几天不用上班；三班倒等特殊班次可以自由选，不用局限于周六周日）</small>
                             </label>
                             <div class="d-flex flex-wrap gap-3 rest-day-group">
-                                @{
-                                    string[] weekLabels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-                                }
                                 @for (var i = 0; i < 7; i++)
                                 {
                                     <div class="form-check">
                                         <input class="form-check-input rest-day-chk" type="checkbox"
                                                name="RestDays" value="@i" id="fRest@i" />
-                                        <label class="form-check-label" for="fRest@i">@weekLabels[i]</label>
+                                        <label class="form-check-label" for="fRest@i">@AttendanceSystem.Helpers.WeekdayText.Zh((DayOfWeek)i)</label>
                                     </div>
                                 }
                             </div>

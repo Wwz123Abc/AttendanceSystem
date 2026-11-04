@@ -31,25 +31,21 @@ public class AttendanceDisputeService(AttendanceDbContext db, IDeptScopeService 
 
     private static DateOnly Today(TimeProvider c) => DateOnly.FromDateTime(c.LocalNow());
 
-    private static string DayText(DateOnly d) => d.DayOfWeek switch
-    {
-        DayOfWeek.Monday    => "周一", DayOfWeek.Tuesday => "周二", DayOfWeek.Wednesday => "周三",
-        DayOfWeek.Thursday  => "周四", DayOfWeek.Friday  => "周五", DayOfWeek.Saturday  => "周六",
-        _                   => "周日"
-    };
+    private static string DayText(DateOnly d) => WeekdayText.Zh(d);
 
-    private static (string Text, string Css) StatusOf(AttendanceStatus s) => s switch
+    /// <summary>状态徽标样式（Bootstrap）。文字统一用 <see cref="AttendanceService.StatusText"/>，避免和报表/页面说法不一致。</summary>
+    private static string BadgeCss(AttendanceStatus s) => s switch
     {
-        AttendanceStatus.Normal      => ("正常", "bg-success"),
-        AttendanceStatus.Late        => ("迟到", "bg-warning text-dark"),
-        AttendanceStatus.EarlyLeave  => ("早退", "bg-warning text-dark"),
-        AttendanceStatus.Absent      => ("旷工", "bg-danger"),
-        AttendanceStatus.Holiday     => ("节假日", "bg-info text-dark"),
-        AttendanceStatus.OnLeave     => ("请假", "bg-info text-dark"),
-        AttendanceStatus.Overtime    => ("加班", "bg-primary"),
-        AttendanceStatus.NotPunched  => ("未打卡", "bg-secondary"),
-        AttendanceStatus.BusinessTrip => ("出差", "bg-info text-dark"),
-        _                            => (s.ToString(), "bg-light text-dark")
+        AttendanceStatus.Normal       => "bg-success",
+        AttendanceStatus.Late         => "bg-warning text-dark",
+        AttendanceStatus.EarlyLeave   => "bg-warning text-dark",
+        AttendanceStatus.Absent       => "bg-danger",
+        AttendanceStatus.Holiday      => "bg-info text-dark",
+        AttendanceStatus.OnLeave      => "bg-info text-dark",
+        AttendanceStatus.Overtime     => "bg-primary",
+        AttendanceStatus.NotPunched   => "bg-secondary",
+        AttendanceStatus.BusinessTrip => "bg-info text-dark",
+        _                             => "bg-light text-dark"
     };
 
     private static string TimeText(DateTime? t, DateOnly workDate)
@@ -111,7 +107,8 @@ public class AttendanceDisputeService(AttendanceDbContext db, IDeptScopeService 
                 row.OvertimeHours    = rec.OvertimeHours;
                 row.LateMinutes      = rec.LateMinutes;
                 row.EarlyLeaveMinutes = rec.EarlyLeaveMinutes;
-                (row.StatusText, row.StatusCssClass) = StatusOf(rec.AttendanceStatus);
+                row.StatusText       = AttendanceService.StatusText(rec.AttendanceStatus);
+                row.StatusCssClass   = BadgeCss(rec.AttendanceStatus);
             }
             else
             {
@@ -180,7 +177,7 @@ public class AttendanceDisputeService(AttendanceDbContext db, IDeptScopeService 
         var snapshot = rec is null
             ? "（提交时这一天没有考勤记录）"
             : $"上班 {TimeText(rec.ClockInTime, workDate)}、下班 {TimeText(rec.ClockOutTime, workDate)}；"
-              + $"正班 {rec.ActualWorkHours:0.##}h、加班 {rec.OvertimeHours:0.##}h；状态 {StatusOf(rec.AttendanceStatus).Text}"
+              + $"正班 {rec.ActualWorkHours:0.##}h、加班 {rec.OvertimeHours:0.##}h；状态 {AttendanceService.StatusText(rec.AttendanceStatus)}"
               + (string.IsNullOrWhiteSpace(rec.ApprovalNote) ? "" : $"；说明 {rec.ApprovalNote}");
 
         var dispute = new AttendanceDispute

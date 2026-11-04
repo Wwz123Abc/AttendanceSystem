@@ -90,7 +90,7 @@ public class EmployeeRecordModel(AttendanceDbContext db, IDeptScopeService deptS
         }
         UserId = user.Id;
         var supervisor = user.SupervisorUserId is { } sid ? await db.Users.Where(u => u.Id == sid).Select(u => u.RealName).FirstOrDefaultAsync() : null;
-        var devices = await db.UserZKDevices.Where(m => m.UserId == user.Id).Select(m => m.ZKDevice.SN).ToListAsync();
+        var devices = await db.UserZKDevices.Where(m => m.UserId == user.Id).Select(m => m.ZKDevice!.SN).ToListAsync();
         Emp = new Info(user.Id, user.EmployeeNo, user.RealName, user.Department?.DeptName, user.Position, user.AttendanceGroup?.GroupName,
             user.AttendanceGroup?.HourlyWorkStartDate,
             user.Role switch { UserRole.Employee => "普通员工（临时工）", UserRole.Admin => "管理员", _ => user.Role.ToString() },

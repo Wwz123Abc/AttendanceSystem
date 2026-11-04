@@ -8,6 +8,9 @@ namespace AttendanceSystem.Helpers;
 /// </summary>
 public static class AttendanceDisputeFeature
 {
-    /// <summary>是否启用考勤核对功能。</summary>
-    public const bool Enabled = false;
+    /// <summary>是否启用考勤核对功能。
+    /// 注意：故意用 <c>static readonly</c> 而不是 <c>const</c>——用 const 时编译器把"关闭"当成编译期常量，
+    /// 页面里 <c>if (!Enabled) return NotFound();</c> 之后的业务代码会全部变成"不可达代码"（CS0162 警告），
+    /// 重新打开功能时也容易被误删。</summary>
+    public static readonly bool Enabled = false;
 }

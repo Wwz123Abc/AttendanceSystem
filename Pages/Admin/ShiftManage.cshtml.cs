@@ -37,12 +37,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
     public record AssignmentRow(DateOnly WorkDate, string ShiftName, string Color, List<string> People, string ShiftGroupName, List<(string Name, string OwnGroup)> Foreign)
     {
         public bool IsForeign(string name) => Foreign.Any(f => f.Name == name);
-        public string WeekText => WorkDate.DayOfWeek switch
-        {
-            DayOfWeek.Monday    => "周一", DayOfWeek.Tuesday => "周二", DayOfWeek.Wednesday => "周三",
-            DayOfWeek.Thursday  => "周四", DayOfWeek.Friday  => "周五", DayOfWeek.Saturday  => "周六",
-            _                   => "周日"
-        };
+        public string WeekText => Helpers.WeekdayText.Zh(WorkDate);
     }
 
     [TempData] public string? SuccessMessage { get; set; }

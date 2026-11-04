@@ -3,7 +3,6 @@
 @{
     ViewData["Title"] = "员工记录查询";
     var e = Model.Emp;
-    string[] week = ["日", "一", "二", "三", "四", "五", "六"];
     string Q(int id) => $"?keyword={Uri.EscapeDataString(Model.Keyword ?? "")}&id={id}&start={Model.Start:yyyy-MM-dd}&end={Model.End:yyyy-MM-dd}";
 }
 
@@ -109,7 +108,7 @@
                 {
                     <tr class="@(s.Missing ? "table-danger" : s.Date == Model.Today ? "table-primary" : "")">
                         <td>@s.Date.ToString("yyyy-MM-dd")@(s.Date == Model.Today ? "（今天）" : "")</td>
-                        <td>周@(week[(int)s.Date.DayOfWeek])</td>
+                        <td>@AttendanceSystem.Helpers.WeekdayText.Zh(s.Date)</td>
                         <td>@(s.ShiftName ?? (s.Missing ? "未排班" : "—"))</td>
                         <td>@s.Time@(s.CrossDay ? "（跨天）" : "")</td>
                         <td>@(s.IsRest ? "休息日" : "")@(s.Missing && s.HasPunch ? "有打卡但没排班" : "")</td>
@@ -132,7 +131,7 @@
                 @foreach (var r in Model.Records)
                 {
                     <tr class="@(r.Status == "旷工" ? "table-danger" : r.NoShift ? "table-warning" : "")">
-                        <td>@r.Date.ToString("MM-dd")（周@(week[(int)r.Date.DayOfWeek])）</td>
+                        <td>@r.Date.ToString("MM-dd")（@AttendanceSystem.Helpers.WeekdayText.Zh(r.Date)）</td>
                         <td>@(r.ShiftName ?? (r.NoShift ? "未排班" : "—"))</td>
                         <td>@r.In?.ToString("MM-dd HH:mm")</td>
                         <td>@r.Out?.ToString("MM-dd HH:mm")</td>
@@ -165,7 +164,7 @@
                         @foreach (var p in Model.Punches)
                         {
                             <tr class="@(p.Valid ? "" : "text-decoration-line-through text-muted")">
-                                <td>@p.Time.ToString("MM-dd HH:mm")（周@(week[(int)p.Time.DayOfWeek])）</td>
+                                <td>@p.Time.ToString("MM-dd HH:mm")（@AttendanceSystem.Helpers.WeekdayText.Zh(p.Time.DayOfWeek)）</td>
                                 <td>@p.Type</td><td>@p.Source</td><td class="text-muted">@p.Address</td>
                             </tr>
                         }

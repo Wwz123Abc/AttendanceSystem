@@ -18,13 +18,7 @@ public class AttendanceRecordDto
 
     // 下面这些 => 是“计算属性”：自动根据上面的值算出来，给页面直接显示
     public string WorkDateText  => WorkDate.ToString("yyyy-MM-dd");   // 日期文字
-    public string DayOfWeekText => WorkDate.DayOfWeek switch          // 星期几（中文）
-    {
-        DayOfWeek.Monday    => "周一", DayOfWeek.Tuesday  => "周二",
-        DayOfWeek.Wednesday => "周三", DayOfWeek.Thursday => "周四",
-        DayOfWeek.Friday    => "周五", DayOfWeek.Saturday => "周六",
-        _                   => "周日"
-    };
+    public string DayOfWeekText => Helpers.WeekdayText.Zh(WorkDate);   // 星期几（中文）
 
     public DateTime? ClockInTime  { get; set; }
     public DateTime? ClockOutTime { get; set; }
