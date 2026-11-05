@@ -476,15 +476,16 @@ public partial class AttendanceService
 
     // ── 没打下班卡时把午间卡当天下班（2026-11-05 用户口径）────────────────────────────────
 
-    /// <summary>「没打下班卡时，把午间卡当成下班卡、只算上半段工时」从这一天起生效。
-    /// 之前的考勤日不套用，避免把 9/10 月已经发过薪的工时改掉。</summary>
-    public static readonly DateOnly MidCheckAsClockOutFrom = new(2026, 11, 1);
+    /// <summary>「没打下班卡时，把午间卡当成下班卡、只算上半段工时」从这一天起生效（2026-11-05 用户改为 10-24 起，
+    /// 并把这段时间受影响的历史记录全部按新口径重算）。</summary>
+    public static readonly DateOnly MidCheckAsClockOutFrom = new(2026, 10, 24);
 
     /// <summary>
     /// 某一天"打了上班卡 + 午间卡、但没打下班卡"时按用户口径结算：把**最后一段命中的午间打卡**
     /// 当成当天的下班时间，只算上半段工时；状态按 <see cref="CalcClockOutStatus"/> 判（一般是早退）。
     /// 只改工时/状态/备注，**不伪造 ClockOutTime**（打卡时间仍然显示为空，备注里写明按哪张午间卡算的）。
-    /// 返回 true 表示这条已结算（false = 不适用：没上班卡/已有下班卡/没午间卡命中/休息日/请假出差等）。
+    /// 普通员工和计时工都适用（计时工本来就没有休息日，正班按实际在岗算）。
+    /// 返回 true 表示这条已结算（false = 不适用：没上班卡/已有下班卡/没午间卡命中/没排班/休息日/请假出差等）。
     /// </summary>
     public async Task<bool> SettleHalfDayByMidCheckAsync(int userId, DateOnly workDate, CancellationToken ct = default)
     {
@@ -496,21 +497,24 @@ public partial class AttendanceService
         if (record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.Holiday
             or AttendanceStatus.BusinessTrip or AttendanceStatus.Absent) return false;
 
+        var groupId = await db.Users.Where(u => u.Id == userId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(ct);
         var shift = await db.ShiftAssignments
             .Where(a => a.UserId == userId && a.WorkDate == workDate)
             .Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
-        if (shift is null || IsNonCompRestDay(workDate, shift)) return false;   // 没排班/休息日：正班本来就是 0
+        if (shift is null) return false;   // 没排班：没有班次可对照
+        // 休息日正班本来就是 0；但计时工没有休息日概念（跟发薪表同一口径），休息日来上班照常按实际在岗算
+        if (!await IsHourlyOnAsync(groupId, workDate) && IsNonCompRestDay(workDate, shift)) return false;
 
         var results = await LoadMidCheckResultsAsync(userId, workDate, shift);
         if (results is not { Count: > 0 }) return false;
-        // 午间卡命中的钟点 → 当天的具体时刻（夜班的午间窗口在午夜之后，ResolveShiftTime 会顺延到次日）
-        var midHitTime = results.Where(r => r.HitTime.HasValue).Select(r => r.HitTime!.Value)
-            .DefaultIfEmpty().Max();
-        if (midHitTime == default) return false;   // 没打午间卡
-        var midHit = ResolveShiftTime(workDate, midHitTime, shift);
+        // 午间卡命中的钟点 → 当天的具体时刻（夜班的午间窗口在午夜之后，ResolveShiftTime 会顺延到次日）。
+        // ★ 用可空 TimeOnly 取 Max：TimeOnly 的默认值就是 00:00，正好午夜打的午间卡会被误判成"没打"（2026-11-05 修）。
+        var midHitTime = results.Where(r => r.HitTime.HasValue)
+            .Select(r => (TimeOnly?)r.HitTime!.Value).Max();
+        if (midHitTime is not { } hitTime) return false;   // 没打午间卡
+        var midHit = ResolveShiftTime(workDate, hitTime, shift);
         if (midHit <= clockIn) return false;       // 午间卡在上班卡之前：不适用
 
-        var groupId = await db.Users.Where(u => u.Id == userId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(ct);
         var hours = await ComputeDailyWorkHoursAsync(record, workDate, clockIn, midHit, shift, groupId);
         record.ActualWorkHours = await CapWorkHoursForLeaveAsync(record, hours, shift, groupId);
 

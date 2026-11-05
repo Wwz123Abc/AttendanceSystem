@@ -327,18 +327,21 @@ public partial class AttendanceService
             // 通常不会再打下班卡。上面那个 RecalcWorkHoursAfterManualPunchAsync 要求同时有
             // 上下班卡才会重算，这种情况下会直接跳过不处理，ActualWorkHours 停在上面设的
             // 占位值 0，上午真实工作的工时就永久丢失了、也没有任何自愈机制能补回来。
-            // 这里用"上班卡 → 这天请假开始的时间点"估算这一段真实工作时长，按标准工时封顶
-            // （发现于 2026-09-18 数据核查）。
-            // 计时工不走这条估算：只有上班卡、没有下班卡的当天工时就是 0（跟计时工的统一规则一致）
-            if (record.ClockInTime is { } workedCi && record.ClockOutTime is null
-                && !await IsHourlyOnAsync(await db.Users.Where(u => u.Id == approval.ApplicantUserId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(), d))
+            // 这里用"上班卡 → 这天请假开始的时间点"估算这一段真实工作时长，普通员工按
+            // "标准工时 − 请假小时"封顶；计时工不封顶（跟计时工统一口径：工时就是实际在岗）。
+            // 2026-11-05 用户确认：计时工也按半天算，不再排除计时工。
+            if (record.ClockInTime is { } workedCi && record.ClockOutTime is null)
             {
                 var dayStart      = d.ToDateTime(TimeOnly.MinValue);
                 var leaveSegStart = leaveStart > dayStart ? leaveStart : dayStart;
                 if (workedCi < leaveSegStart)
                 {
-                    var estimatedWork = ComputeRegularWorkHours(workedCi, leaveSegStart);
-                    record.ActualWorkHours = ApplyLeaveHoursCap(estimatedWork, record.LeaveHours, dailyCap);
+                    var groupIdNow = await db.Users.Where(u => u.Id == approval.ApplicantUserId)
+                        .Select(u => u.AttendanceGroupId).FirstOrDefaultAsync();
+                    var hourlyNow = await IsHourlyOnAsync(groupIdNow, d);
+                    record.ActualWorkHours = hourlyNow
+                        ? ComputeHourlyWorkHours(d, workedCi, leaveSegStart, leaveShift, null)
+                        : ApplyLeaveHoursCap(ComputeRegularWorkHours(workedCi, leaveSegStart), record.LeaveHours, dailyCap);
                 }
             }
 

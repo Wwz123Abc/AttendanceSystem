@@ -60,7 +60,7 @@ public class AttendanceBackgroundService(
                 if (!_startupBackfillDone)
                 {
                     _startupBackfillDone = true;
-                    await BackfillMidCheckAsync(now.Date.AddDays(-14), now.Date.AddDays(-1));
+                    await BackfillMidCheckAsync(now.Date.AddDays(-30), now.Date.AddDays(-1));
                 }
 
                 // 到 23:55-23:59 且今天还没标记过 → 标记旷工。窗口从原来的 23:58-23:59（2 分钟）
