@@ -241,7 +241,8 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             throw new BusinessException("这段时间的请假申请已经提交过了，不能重复提交");
         // 和已批准的加班时段重叠：同一段时间既批假又报加班会重复算钱（2026-11-05 用户要求）
         await LeaveOvertimeOverlapGuard.EnsureNoOverlapAsync(
-            db, applicantUserId, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, ApprovalType.Leave);
+            db, applicantUserId, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, ApprovalType.Leave,
+            submittingLeaveType: dto.LeaveType);
         await EnsureLeaveHasWorkdayAsync(dto, applicantUserId);
     }
 
