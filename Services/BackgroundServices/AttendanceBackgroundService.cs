@@ -40,6 +40,7 @@ public class AttendanceBackgroundService(
     private DateTime _lastAuditDate             = DateTime.MinValue;
     private DateTime _lastAuditAttemptAt        = DateTime.MinValue;   // 核对失败后隔多久重试，免得持续出错时每分钟狂试
     private DateOnly? _lastAuditPurgeWeek;                              // 已清理过核对留档的周（周一那天），避免同一周重复清
+    private bool _startupBackfillDone;                                  // 启动时"没打下班卡按午间卡结算"的补算是否已跑过
 
     /// <summary>每晚自动核对最近多少天（含今天之前一天）。</summary>
     private const int NightlyAuditDays = 14;
@@ -54,6 +55,14 @@ public class AttendanceBackgroundService(
             {
                 var now = clock.LocalNow();
 
+                // 启动补算（每次启动一次）：把最近 14 天"没打下班卡、但打了午间卡"的记录按 2026-11-05 的口径
+                // 结算成上半段工时（把午间卡当天下班）。只补到昨天，今天的记录等人真的下班/23:55 标记后再结算。
+                if (!_startupBackfillDone)
+                {
+                    _startupBackfillDone = true;
+                    await BackfillMidCheckAsync(now.Date.AddDays(-14), now.Date.AddDays(-1));
+                }
+
                 // 到 23:55-23:59 且今天还没标记过 → 标记旷工。窗口从原来的 23:58-23:59（2 分钟）
                 // 放宽到 5 分钟，给一次任务内部瞬时失败（比如数据库短暂抖动）留出重试机会——
                 // 下面 _lastAbsentDate 的更新挪到执行成功之后，异常会被外层 catch 记录但不会
@@ -62,6 +71,9 @@ public class AttendanceBackgroundService(
                 {
                     await MarkAbsentAsync(DateOnly.FromDateTime(now.Date));
                     _lastAbsentDate = now;
+                    // 标记完"下班未打卡"之后，把今天这类记录按口径结算：没打下班卡但有午间卡的，
+                    // 把午间卡当天下班、只算上半段工时（2026-11-05 用户口径）
+                    await BackfillMidCheckAsync(now.Date, now.Date);
                 }
                 // 补跑：如果 23:55-23:59 这 5 分钟整窗口都没标记成功（数据库宕机超过 5 分钟、应用在
                 // 这段时间反复重启等），过了午夜 now.Hour == 23 就再也不成立，原来没有任何补跑路径，
@@ -230,6 +242,25 @@ public class AttendanceBackgroundService(
             logger.LogInformation("每周清理：删除了 {Count} 条考勤日早于 {From} 的核对留档（只留当前周）", n, keepFromWorkDate.ToString("yyyy-MM-dd"));
         }
         catch (Exception ex) { logger.LogError(ex, "清理核对留档失败"); }
+    }
+
+    /// <summary>
+    /// 补算"没打下班卡、但打了午间卡"的记录（2026-11-05 用户口径）：把午间卡当成当天下班，只算上半段工时。
+    /// 服务启动时补最近 14 天、每晚标记完旷工/未打卡后补当天。失败只记日志，不影响其它后台任务。
+    /// </summary>
+    private async Task BackfillMidCheckAsync(DateTime fromLocal, DateTime toLocal)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var attendance = scope.ServiceProvider.GetRequiredService<IAttendanceService>();
+            var n = await attendance.BackfillMidCheckAsClockOutAsync(
+                DateOnly.FromDateTime(fromLocal), DateOnly.FromDateTime(toLocal));
+            if (n > 0)
+                logger.LogInformation("补算「没打下班卡但有午间卡」{Count} 条：按午间卡当天下班、只算上半段工时（{From}~{To}）",
+                    n, fromLocal.ToString("MM-dd"), toLocal.ToString("MM-dd"));
+        }
+        catch (Exception ex) { logger.LogError(ex, "补算午间卡当天下班失败"); }
     }
 
     /// <summary>申请有效期 15 天，超时自动作废（只对 2026-10-23 起提交的申请生效）。失败只记日志，不影响后面的提醒。</summary>

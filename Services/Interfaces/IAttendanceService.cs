@@ -89,6 +89,13 @@ public interface IAttendanceService
     /// <summary>排班补上/改了之后调用：重算这些人这段日期（有上下班卡、已排班）的正班工时，返回被改的人天数。</summary>
     Task<int> RecalcHoursAfterScheduleAsync(IReadOnlyCollection<int> userIds, DateOnly from, DateOnly to, bool onlyUnfrozen = false);
 
+    /// <summary>没打下班卡、但打了午间卡的：把（最后一段命中的）午间卡当成当天下班，只算上半段工时（2026-11-05 口径）。
+    /// 只改工时/状态/备注，不伪造下班打卡时间。返回 true 表示这条已结算。</summary>
+    Task<bool> SettleHalfDayByMidCheckAsync(int userId, DateOnly workDate, CancellationToken ct = default);
+
+    /// <summary>批量补算上面这种情况并刷新受影响月份的汇总，返回结算条数（服务启动、每晚标记完之后调用）。</summary>
+    Task<int> BackfillMidCheckAsClockOutAsync(DateOnly from, DateOnly to, CancellationToken ct = default);
+
     /// <summary>数据核对：把一段日期里每条考勤记录按现行规则重新算一遍，和系统里存的工时、加班对比，返回所有疑点。只读，不改数据。</summary>
     Task<List<AuditIssue>> AuditAsync(DateOnly from, DateOnly to, CancellationToken ct = default);
 

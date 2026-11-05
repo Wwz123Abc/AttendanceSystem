@@ -473,4 +473,86 @@ public partial class AttendanceService
         var ratio = leaveHours / standardHours;
         return ratio >= 0.75m ? 1m : ratio >= 0.25m ? 0.5m : 0m;
     }
+
+    // ── 没打下班卡时把午间卡当天下班（2026-11-05 用户口径）────────────────────────────────
+
+    /// <summary>「没打下班卡时，把午间卡当成下班卡、只算上半段工时」从这一天起生效。
+    /// 之前的考勤日不套用，避免把 9/10 月已经发过薪的工时改掉。</summary>
+    public static readonly DateOnly MidCheckAsClockOutFrom = new(2026, 11, 1);
+
+    /// <summary>
+    /// 某一天"打了上班卡 + 午间卡、但没打下班卡"时按用户口径结算：把**最后一段命中的午间打卡**
+    /// 当成当天的下班时间，只算上半段工时；状态按 <see cref="CalcClockOutStatus"/> 判（一般是早退）。
+    /// 只改工时/状态/备注，**不伪造 ClockOutTime**（打卡时间仍然显示为空，备注里写明按哪张午间卡算的）。
+    /// 返回 true 表示这条已结算（false = 不适用：没上班卡/已有下班卡/没午间卡命中/休息日/请假出差等）。
+    /// </summary>
+    public async Task<bool> SettleHalfDayByMidCheckAsync(int userId, DateOnly workDate, CancellationToken ct = default)
+    {
+        if (workDate < MidCheckAsClockOutFrom) return false;
+
+        var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate, ct);
+        if (record is null || record.ClockOutTime is not null || record.ClockInTime is not { } clockIn) return false;
+        // 请假/休假/出差/旷工这几种状态是审批或旷工标记定的，不按打卡结算
+        if (record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.Holiday
+            or AttendanceStatus.BusinessTrip or AttendanceStatus.Absent) return false;
+
+        var shift = await db.ShiftAssignments
+            .Where(a => a.UserId == userId && a.WorkDate == workDate)
+            .Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
+        if (shift is null || IsNonCompRestDay(workDate, shift)) return false;   // 没排班/休息日：正班本来就是 0
+
+        var results = await LoadMidCheckResultsAsync(userId, workDate, shift);
+        if (results is not { Count: > 0 }) return false;
+        // 午间卡命中的钟点 → 当天的具体时刻（夜班的午间窗口在午夜之后，ResolveShiftTime 会顺延到次日）
+        var midHitTime = results.Where(r => r.HitTime.HasValue).Select(r => r.HitTime!.Value)
+            .DefaultIfEmpty().Max();
+        if (midHitTime == default) return false;   // 没打午间卡
+        var midHit = ResolveShiftTime(workDate, midHitTime, shift);
+        if (midHit <= clockIn) return false;       // 午间卡在上班卡之前：不适用
+
+        var groupId = await db.Users.Where(u => u.Id == userId).Select(u => u.AttendanceGroupId).FirstOrDefaultAsync(ct);
+        var hours = await ComputeDailyWorkHoursAsync(record, workDate, clockIn, midHit, shift, groupId);
+        record.ActualWorkHours = await CapWorkHoursForLeaveAsync(record, hours, shift, groupId);
+
+        var status = CalcClockOutStatus(workDate, midHit, shift, false, out var earlyMin);
+        record.EarlyLeaveMinutes = earlyMin;
+        if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.NotPunched or AttendanceStatus.EarlyLeave)
+            record.AttendanceStatus = status;   // 迟到的保持迟到（跟真打下班卡时的规则一致）
+        record.MidCheckResults = results.FormatMidCheckResults();
+        AppendApprovalNote(record, $"没打下班卡，按午间卡 {midHit:HH:mm} 当天下班，只算上半段工时（{record.ActualWorkHours:0.##} 小时）");
+        record.UpdatedAt = clock.LocalNow();
+        return true;
+    }
+
+    /// <summary>
+    /// 批量补算：把 [from, to] 里"有上班卡、没下班卡、但有午间打卡"的记录按上面那条口径结算，
+    /// 并刷新受影响月份的月度汇总。服务启动时、以及每晚标记完旷工/未打卡之后各调一次。
+    /// 返回结算条数。
+    /// </summary>
+    public async Task<int> BackfillMidCheckAsClockOutAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        var start = from < MidCheckAsClockOutFrom ? MidCheckAsClockOutFrom : from;
+        if (start > to) return 0;
+
+        var candidates = await db.AttendanceRecords
+            .Where(r => r.WorkDate >= start && r.WorkDate <= to
+                        && r.ClockInTime != null && r.ClockOutTime == null
+                        && (r.AttendanceStatus == AttendanceStatus.Normal
+                            || r.AttendanceStatus == AttendanceStatus.NotPunched
+                            || r.AttendanceStatus == AttendanceStatus.EarlyLeave
+                            || r.AttendanceStatus == AttendanceStatus.Late))
+            .Select(r => new { r.UserId, r.WorkDate })
+            .ToListAsync(ct);
+        if (candidates.Count == 0) return 0;
+
+        var settled = new List<(int UserId, DateOnly WorkDate)>();
+        foreach (var c in candidates)
+            if (await SettleHalfDayByMidCheckAsync(c.UserId, c.WorkDate, ct)) settled.Add((c.UserId, c.WorkDate));
+        if (settled.Count == 0) return 0;
+
+        await db.SaveChangesAsync(ct);
+        foreach (var grp in settled.GroupBy(x => (x.WorkDate.Year, x.WorkDate.Month)))
+            await GenerateMonthlySummaryAsync(grp.Key.Year, grp.Key.Month, grp.Select(x => x.UserId).Distinct().ToList());
+        return settled.Count;
+    }
 }

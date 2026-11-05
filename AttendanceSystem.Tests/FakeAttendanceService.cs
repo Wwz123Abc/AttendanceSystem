@@ -42,6 +42,8 @@ public class FakeAttendanceService : IAttendanceService
     public Task<List<AuditIssue>> AuditAsync(DateOnly from, DateOnly to, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<int> ReconcileOvertimeAfterScheduleAsync(IReadOnlyCollection<int> userIds, DateOnly from, DateOnly to) => Task.FromResult(0);
     public Task AdminReplenishPunchAsync(int userId, DateOnly workDate, PunchType type, DateTime punchAt, bool allowOverwrite, string? remark, string? operatorName) => throw new NotImplementedException();
+    public Task<bool> SettleHalfDayByMidCheckAsync(int userId, DateOnly workDate, CancellationToken ct = default) => Task.FromResult(false);
+    public Task<int> BackfillMidCheckAsClockOutAsync(DateOnly from, DateOnly to, CancellationToken ct = default) => Task.FromResult(0);
     public Task AdminAdjustPunchAsync(int userId, DateOnly workDate, DateTime? clockIn, DateTime? clockOut, string? remark, string? operatorName) => throw new NotImplementedException();
     public Task<List<MyScheduleDto>> GetMyScheduleAsync(int userId, DateOnly start, DateOnly end) => throw new NotImplementedException();
     public Task<TemplateReportRowDto?> GetMyPayrollRowAsync(int userId, DateOnly start, DateOnly end, CancellationToken ct = default) => throw new NotImplementedException();
