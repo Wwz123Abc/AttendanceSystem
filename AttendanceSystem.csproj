@@ -33,4 +33,12 @@
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>
 
+
+  <!-- tools/ 下是独立的一次性维护工具（自己的 csproj），不参与主 web 项目编译，
+       否则它们里的顶级语句会和 Program.cs 冲突（2026-11-05） -->
+  <ItemGroup>
+    <Compile Remove="tools\**" />
+    <Content Remove="tools\**" />
+    <None Remove="tools\**" />
+  </ItemGroup>
 </Project>
