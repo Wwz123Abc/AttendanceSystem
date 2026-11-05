@@ -239,6 +239,9 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 && a.ApprovalType == ApprovalType.Leave && activeStatuses.Contains(a.ApprovalStatus)
                 && a.LeaveStartTime < dto.LeaveEndTime && dto.LeaveStartTime < a.LeaveEndTime))
             throw new BusinessException("这段时间的请假申请已经提交过了，不能重复提交");
+        // 和已批准的加班时段重叠：同一段时间既批假又报加班会重复算钱（2026-11-05 用户要求）
+        await LeaveOvertimeOverlapGuard.EnsureNoOverlapAsync(
+            db, applicantUserId, dto.LeaveStartTime.Value, dto.LeaveEndTime.Value, ApprovalType.Leave);
         await EnsureLeaveHasWorkdayAsync(dto, applicantUserId);
     }
 
@@ -338,6 +341,9 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                 && a.ApprovalType == ApprovalType.Overtime && activeStatuses.Contains(a.ApprovalStatus)
                 && a.OvertimeStartTime < dto.OvertimeEndTime && dto.OvertimeStartTime < a.OvertimeEndTime))
             throw new BusinessException("这段时间的加班申请已经提交过了，不能重复提交");
+        // 和已批准的请假时段重叠：同一段时间既批假又报加班会重复算钱（2026-11-05 用户要求）
+        await LeaveOvertimeOverlapGuard.EnsureNoOverlapAsync(
+            db, applicantUserId, dto.OvertimeStartTime.Value, dto.OvertimeEndTime.Value, ApprovalType.Overtime);
     }
 
     /// <summary>出差申请的提交校验：必填字段、时间先后与范围、与已有有效申请的重复判断（从 <see cref="SubmitApprovalAsync"/> 原样搬出）。</summary>
