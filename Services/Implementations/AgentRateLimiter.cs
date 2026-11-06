@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using AttendanceSystem.Helpers;
 
 namespace AttendanceSystem.Services.Implementations;
 
@@ -20,12 +21,12 @@ public static class AgentRateLimiter
     /// 尝试放行一次请求。
     /// </summary>
     /// <returns>true=放行；false=被限流，reason 说明是分钟还是天上限。</returns>
-    public static bool TryConsume(int userId, int perMinute, int dailyLimit, out string reason)
+    public static bool TryConsume(int userId, int perMinute, int dailyLimit, out string reason, TimeProvider? clock = null)
     {
         reason = string.Empty;
         if (userId <= 0) return false;
 
-        var now   = DateTime.Now;
+        var now   = (clock ?? TimeProvider.System).LocalNow();
         var today = DateOnly.FromDateTime(now);
 
         // 天上限（先查再记，允许轻微超放）
@@ -59,9 +60,9 @@ public static class AgentRateLimiter
     }
 
     /// <summary>清理当天以前的天计数（防字典无限增长；可每天定时调一次，也可不管——量级很小）。</summary>
-    public static void CleanupExpired()
+    public static void CleanupExpired(TimeProvider? clock = null)
     {
-        var today = DateOnly.FromDateTime(DateTime.Now);
+        var today = DateOnly.FromDateTime((clock ?? TimeProvider.System).LocalNow());
         foreach (var key in DailyCounts.Keys)
             if (key.Day < today)
                 DailyCounts.TryRemove(key, out _);

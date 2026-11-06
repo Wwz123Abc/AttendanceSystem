@@ -1,6 +1,7 @@
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Helpers;
 using Microsoft.EntityFrameworkCore;
 
 namespace AttendanceSystem.Services.Implementations;
@@ -63,7 +64,7 @@ public static class ApproverResolver
     /// 并通知新的审批人。审批只认节点上写死的那个人，不改派的话这些单子谁也处理不了，申请人也撤不回
     /// （加班单还必须当天提交，卡住就永远批不下来）。返回改派的节点数；找不到可改派的人时保持原样并返回不含它的计数。
     /// </summary>
-    public static async Task<int> ReassignPendingStepsAsync(AttendanceDbContext db, IReadOnlyCollection<int> deactivatedUserIds)
+    public static async Task<int> ReassignPendingStepsAsync(AttendanceDbContext db, IReadOnlyCollection<int> deactivatedUserIds, TimeProvider? clock = null)
     {
         if (deactivatedUserIds.Count == 0) return 0;
         var steps = await db.ApprovalSteps
@@ -96,7 +97,7 @@ public static class ApproverResolver
                 Content          = $"{applicant.RealName} 的{step.ApprovalRequest.ApprovalType.ToDisplayName()}申请（{step.ApprovalRequest.RequestNo}）原审批人已离职/停用，已转交给您，请处理",
                 NotificationType = NotificationTypes.ApprovalPending,
                 RelatedId        = step.ApprovalRequestId,
-                CreatedAt        = DateTime.Now,
+                CreatedAt        = (clock ?? TimeProvider.System).LocalNow(),
             });
             moved++;
         }

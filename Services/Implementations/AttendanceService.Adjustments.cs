@@ -139,6 +139,12 @@ public partial class AttendanceService
         var problem = PunchReplenishmentRules.FindProblem(type, punchDate, punchDt, ctx);
         var record = await db.AttendanceRecords
             .FirstOrDefaultAsync(r => r.UserId == approval.ApplicantUserId && r.WorkDate == punchDate);
+        // 幂等保护（2026-11-06 审计 R3）：同一张补卡单只回写一次（备注里已有单号就跳过）
+        if (record?.ApprovalNote?.Contains(approval.RequestNo) == true)
+        {
+            logger.LogWarning("补卡单 {RequestNo} 之前已经回写过（记录备注已有该单号），本次跳过", approval.RequestNo);
+            return;
+        }
 
         if (type == PunchType.MidCheck)
         {
@@ -235,6 +241,13 @@ public partial class AttendanceService
             record = new AttendanceRecord { UserId = approval.ApplicantUserId, WorkDate = workDate };
             db.AttendanceRecords.Add(record);
         }
+        // 幂等保护（2026-11-06 审计 R3）：同一张加班单只回写一次——备注里已经记过这个单号就跳过，
+        // 防止将来出现重复调用（补跑工具/重试）把加班时长加两遍
+        else if (record.ApprovalNote?.Contains(approval.RequestNo) == true)
+        {
+            logger.LogWarning("加班单 {RequestNo} 之前已经回写过（记录备注已有该单号），本次跳过，避免加班时长重复累加", approval.RequestNo);
+            return;
+        }
 
         // 加班时长按"申请的起止时间"重新算一遍再记：超过 6 小时扣午休、超过 9 小时再扣晚餐（跟提交时同一个函数）。
         // 不直接用单子上存的时长，是因为改规则之前提交、还没批的老单子存的是不扣饭点的总长度；
@@ -282,6 +295,14 @@ public partial class AttendanceService
         var recordsInRange = await db.AttendanceRecords
             .Where(r => r.UserId == approval.ApplicantUserId && r.WorkDate >= sd && r.WorkDate <= ed)
             .ToDictionaryAsync(r => r.WorkDate);
+
+        // 幂等保护（2026-11-06 审计 R3）：这张请假单已经回写过（区间内任何一天的备注里已有该单号）就整单跳过，
+        // 避免 LeaveHours 被重复累加（现在只有一条调用路径，但补跑/重试一旦出现就会翻倍）
+        if (recordsInRange.Values.Any(r => r.ApprovalNote?.Contains(approval.RequestNo) == true))
+        {
+            logger.LogWarning("请假单 {RequestNo} 之前已经回写过（记录备注已有该单号），本次跳过，避免请假小时数重复累加", approval.RequestNo);
+            return;
+        }
 
         // 这天排的班次的标准工时（没排班就用公司默认标准工时）给 ComputeLeaveHoursForDay 封顶用，
         // 只查一次，下面循环里每天复用。
@@ -498,6 +519,12 @@ public partial class AttendanceService
         var recordsInRange = await db.AttendanceRecords
             .Where(r => r.UserId == approval.ApplicantUserId && r.WorkDate >= sd && r.WorkDate <= ed)
             .ToDictionaryAsync(r => r.WorkDate);
+        // 幂等保护（2026-11-06 审计 R3）：这张出差单已经回写过就整单跳过，避免重复置状态/重复给工时
+        if (recordsInRange.Values.Any(r => r.ApprovalNote?.Contains(approval.RequestNo) == true))
+        {
+            logger.LogWarning("出差单 {RequestNo} 之前已经回写过（记录备注已有该单号），本次跳过", approval.RequestNo);
+            return;
+        }
         var shiftsInRange = await db.ShiftAssignments
             .Include(a => a.ShiftSchedule)
             .Where(a => a.UserId == approval.ApplicantUserId && a.WorkDate >= sd && a.WorkDate <= ed)

@@ -368,7 +368,7 @@ public class UserService(
     {
         try
         {
-            var n = await ApproverResolver.ReassignPendingStepsAsync(db, deactivatedUserIds);
+            var n = await ApproverResolver.ReassignPendingStepsAsync(db, deactivatedUserIds, clock);
             if (n > 0) logger.LogInformation("账号停用后改派了 {Count} 个待处理审批节点（原审批人 Id：{Ids}）", n, string.Join(",", deactivatedUserIds));
         }
         catch (Exception ex)

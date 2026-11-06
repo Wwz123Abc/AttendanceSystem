@@ -280,6 +280,17 @@ builder.Services.AddRateLimiter(options =>
 // ── 以上是“注册阶段”，下面 Build 之后进入“运行阶段”────────────────────────────────
 var app = builder.Build();
 
+// 时区自检（2026-11-06 审计 R4）：业务日期、跨天归属、零点边界全部按"服务器本地时区"算
+// （TimeProvider.System.GetLocalNow()）。服务器时区如果不是 +08:00，所有考勤日会整体错位，
+// 而错位是静默的（数据看起来"正常"但都早/晚了几个小时）——所以启动时明确打一条错误日志。
+// 故意不抛异常让服务起不来：时区配错时继续跑只是数据错，直接不启动会让员工打不了卡。
+var sysTz = TimeZoneInfo.Local;
+if (sysTz.BaseUtcOffset == TimeSpan.FromHours(8))
+    app.Logger.LogInformation("时区自检通过：{TimeZone}", sysTz.Id);
+else
+    app.Logger.LogError("时区自检失败：服务器时区是 {TimeZone}（UTC{Offset}），不是 +08:00；考勤日期/跨天归属/零点边界都会整体错位，请把服务器时区改成 Asia/Shanghai",
+        sysTz.Id, sysTz.BaseUtcOffset);
+
 // 开发环境：启动时自动建表/更新表结构（迁移）；生产环境的建表走部署时手动执行的 migrate.sql
 if (app.Environment.IsDevelopment())
 {
