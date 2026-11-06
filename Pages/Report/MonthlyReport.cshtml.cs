@@ -266,7 +266,8 @@ public class MonthlyReportModel(IAttendanceService attendanceService, IDeptScope
         if (!await deptScopeService.CanAccessDeptAsync(HttpContext.GetRequiredUser(), targetDeptId))
             return NotFound();
 
-        await attendanceService.GenerateMonthlySummaryAsync(year, month, [userId]);
+        // healLegacyHours:false —— 这是 GET 导出请求，只按最新规则算出展示用的合计，不把补算结果写回考勤记录（2026-11-06 审计 R2：读请求不产生写副作用）
+        await attendanceService.GenerateMonthlySummaryAsync(year, month, [userId], healLegacyHours: false);
         // 只需要这一个人的汇总，直接按人查，不用把全公司当月的汇总都加载出来再从内存里挑一条
         var target = await attendanceService.GetMonthlySummaryAsync(userId, year, month);
         if (target is null) return NotFound();

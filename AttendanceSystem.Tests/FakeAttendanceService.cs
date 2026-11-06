@@ -30,7 +30,7 @@ public class FakeAttendanceService : IAttendanceService
     public Task<MonthlySummaryDto?> GetMonthlySummaryAsync(int userId, int year, int month) => throw new NotImplementedException();
     public Task<List<MyScheduleDto>> GetMyScheduleAsync(int userId, int year, int month) => throw new NotImplementedException();
     public Task<List<MonthlySummaryDto>> GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null) => throw new NotImplementedException();
+    public Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null, bool healLegacyHours = true) => throw new NotImplementedException();
     public Task EnsureMonthlySummaryFreshAsync(int userId, int year, int month) => throw new NotImplementedException();
     public Task<AttendanceStatsDto> GetTodayStatsAsync(int? groupId = null, HashSet<int>? deptIds = null, CancellationToken ct = default) => throw new NotImplementedException();
     public Task<List<DailyAttendanceTrendDto>> GetRecentTrendAsync(HashSet<int>? deptIds, int days = 7, CancellationToken ct = default) => throw new NotImplementedException();

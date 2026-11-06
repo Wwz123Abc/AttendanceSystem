@@ -22,11 +22,11 @@ public partial class AttendanceService
     /// 管理员手动补卡之后调用这个，避免月初已经生成过的汇总因为后补的记录而跟日明细对不上、
     /// 又得靠人工去点"重新生成"才能刷新）。
     /// </summary>
-    public async Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null)
+    public async Task GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null, bool healLegacyHours = true)
     {
         try
         {
-            await GenerateMonthlySummaryCoreAsync(year, month, onlyUserIds);
+            await GenerateMonthlySummaryCoreAsync(year, month, onlyUserIds, healLegacyHours);
         }
         catch (DbUpdateException)
         {
@@ -34,11 +34,11 @@ public partial class AttendanceService
             // 还没有汇总"而各插一条，后到的那次 SaveChanges 整批回滚、当月汇总静默缺失。清掉没存成功的改动重来
             // 一次——这时对方那条已经落库了，会走"已有汇总→更新"的分支（项目里其它有唯一索引的写入路径也是这么重试的）
             db.ChangeTracker.Clear();
-            await GenerateMonthlySummaryCoreAsync(year, month, onlyUserIds);
+            await GenerateMonthlySummaryCoreAsync(year, month, onlyUserIds, healLegacyHours);
         }
     }
 
-    private async Task GenerateMonthlySummaryCoreAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds)
+    private async Task GenerateMonthlySummaryCoreAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds, bool healLegacyHours)
     {
         var start = new DateOnly(year, month, 1);
         var end   = start.AddMonths(1).AddDays(-1);
@@ -113,6 +113,9 @@ public partial class AttendanceService
             decimal totalWork = 0, totalOt = 0;
             foreach (var r in records)
             {
+                // 只有"写路径"才把老数据补算的结果写回记录；报表页这类只读请求只用来算合计，不改库
+                // （2026-11-06 审计 R2：读请求产生的写副作用会让并发/审计都变复杂）
+                var effectiveHours = r.ActualWorkHours;
                 // 出差/节假日当天工时按审批口径本来就已经定好（标准工时/0），不能因为当天恰好也有
                 // 打卡时间就被这里的"老数据补算"顺手覆盖掉。请假不再排除在外：这里本来就是"老数据
                 // 按当前规则重新算一遍"的自愈机制，半天假当天如果有真实打卡，按标准工时封顶补算，
@@ -128,11 +131,11 @@ public partial class AttendanceService
                     // 休息日不计正班工时（有没有批准的加班都一样：有加班的话只算加班）——跟本地打卡同一套规则
                     if (IsHourlyOn(hourlyStarts, user.AttendanceGroupId, r.WorkDate))
                     {
-                        r.ActualWorkHours = ComputeHourlyWorkHours(r.WorkDate, ci, co, shift, shift is not null ? r.MidCheckResults.ParseMidCheckResults() : []);
+                        effectiveHours = ComputeHourlyWorkHours(r.WorkDate, ci, co, shift, shift is not null ? r.MidCheckResults.ParseMidCheckResults() : []);
                     }
                     else if (IsNonCompRestDay(r.WorkDate, shift))
                     {
-                        r.ActualWorkHours = 0;
+                        effectiveHours = 0;
                     }
                     else
                     {
@@ -144,14 +147,15 @@ public partial class AttendanceService
                         var effCi = ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds);
                         var effCo = ClampEffectiveClockOut(r.WorkDate, co, shift, ResolveSecondHalfAbsentBoundary(r.WorkDate, shift, midCheckResults));
                         var computedHours = ComputeRegularWorkHours(effCi, effCo);   // 考勤组自定义饭点只用于加班申请的时长核对；正班工时、请假时长一律按默认饭点算（2026-10-13 用户确认）
-                        r.ActualWorkHours = r.AttendanceStatus == AttendanceStatus.OnLeave
+                        effectiveHours = r.AttendanceStatus == AttendanceStatus.OnLeave
                             ? ApplyLeaveHoursCap(computedHours, r.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
                             : computedHours;
                     }
+                    if (healLegacyHours) r.ActualWorkHours = effectiveHours;
                 }
                 // 每天的工时/加班按"半小时"为最小单位取整后再累加（不足半小时舍去），
                 // 保证月度报表上的合计只会是整数或 x.5，不会出现 113.38 这种零碎小数
-                totalWork += FloorToHalf(r.ActualWorkHours);
+                totalWork += FloorToHalf(effectiveHours);
                 totalOt   += FloorToHalf(r.OvertimeHours);
             }
 

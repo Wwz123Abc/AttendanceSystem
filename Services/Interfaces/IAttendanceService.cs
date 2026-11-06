@@ -50,7 +50,7 @@ public interface IAttendanceService
     Task<List<MonthlySummaryDto>>  GetDeptMonthlySummariesAsync(int? deptId, int? groupId, int year, int month, HashSet<int>? scopeDeptIds = null, CancellationToken ct = default);
     /// <summary>生成/重算指定月份的考勤汇总；onlyUserIds 不为空时只重算这批人（审批回写/手动补卡/分公司管理员
     /// 批量重算范围内员工时用，一次调用批量处理，避免调用方自己逐人循环调用导致的重复查库）。</summary>
-    Task                           GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null);
+    Task                           GenerateMonthlySummaryAsync(int year, int month, IReadOnlyCollection<int>? onlyUserIds = null, bool healLegacyHours = true);
     /// <summary>"我的记录"/"我的日历"共用：确保这个人这个月的汇总是新鲜的——没有汇总行就生成一份；
     /// 已有的话，只有当这个月的考勤记录比汇总行更新（比如刚打了卡、审批刚回写）时才重算，避免
     /// 每次单纯打开页面查看、数据毫无变化时也无条件重算一遍、白白写一次库。</summary>
