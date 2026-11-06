@@ -116,6 +116,73 @@ public class MidCheckAsClockOutTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 重复补算不会重复追加备注()
+    {
+        var (uid, _) = Seed(Nov3);
+        using var db = CreateContext();
+        var svc = Svc(db);
+
+        Assert.True(await svc.SettleHalfDayByMidCheckAsync(uid, Nov3));
+        var first = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Nov3);
+        var noteAfterFirst  = first.ApprovalNote;
+        var hoursAfterFirst = first.ActualWorkHours;
+
+        // 第二次直接结算、以及再跑一遍补算，都不应该再动这条记录（否则每次重启都追加一条一样的备注）
+        Assert.False(await svc.SettleHalfDayByMidCheckAsync(uid, Nov3));
+        Assert.Equal(0, await svc.BackfillMidCheckAsClockOutAsync(new DateOnly(2026, 11, 1), Nov3));
+
+        db.ChangeTracker.Clear();
+        var after = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Nov3);
+        Assert.Equal(noteAfterFirst, after.ApprovalNote);
+        Assert.Equal(hoursAfterFirst, after.ActualWorkHours);
+    }
+
+    [Fact]
+    public async Task 夜班次日凌晨的午间卡_补算范围要带上前一天才能结算()
+    {
+        var night = new DateOnly(2026, 11, 5);   // 周四上晚班
+        using var db = CreateContext();
+        var group = new AttendanceGroup { GroupName = "晚班组" };
+        db.AttendanceGroups.Add(group);
+        db.SaveChanges();
+
+        var shift = NightShift();
+        shift.WorkStartTime   = new TimeOnly(20, 30);
+        shift.WorkEndTime     = new TimeOnly(5, 30);
+        shift.MidCheckWindows = "00:00-01:00";       // 次日凌晨的午间窗口
+        shift.AttendanceGroupId = group.Id;
+        db.ShiftSchedules.Add(shift);
+
+        var user = U("T3", "夜班员工");
+        user.AttendanceGroupId = group.Id;
+        db.Users.Add(user);
+        db.SaveChanges();
+
+        db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = night, ShiftScheduleId = shift.Id });
+        db.AttendanceRecords.Add(new AttendanceRecord
+        {
+            UserId = user.Id, WorkDate = night,
+            ClockInTime = night.ToDateTime(new TimeOnly(20, 22)),
+            AttendanceStatus = AttendanceStatus.NotPunched
+        });
+        db.AttendancePunches.AddRange(
+            new AttendancePunch { UserId = user.Id, PunchTime = night.ToDateTime(new TimeOnly(20, 22)), PunchType = PunchType.ClockIn, IsValid = true },
+            // 这张午间卡发生在第二天凌晨，考勤日仍归 11-05
+            new AttendancePunch { UserId = user.Id, PunchTime = night.AddDays(1).ToDateTime(new TimeOnly(0, 10)), PunchType = PunchType.MidCheck, IsValid = true });
+        db.SaveChanges();
+
+        var svc = Svc(db);
+        // 只补"当天"（11-06）结算不到这条 11-05 的记录 —— 这就是夜间任务必须把昨天一起补的原因
+        Assert.Equal(0, await svc.BackfillMidCheckAsClockOutAsync(new DateOnly(2026, 11, 6), new DateOnly(2026, 11, 6)));
+        // 带上昨天就能结算：20:30 → 次日 00:10
+        Assert.Equal(1, await svc.BackfillMidCheckAsClockOutAsync(night, new DateOnly(2026, 11, 6)));
+
+        db.ChangeTracker.Clear();
+        var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == user.Id && r.WorkDate == night);
+        Assert.Equal(3.5m, rec.ActualWorkHours);
+    }
+
+    [Fact]
     public async Task 夜班午夜00点整的午间卡不能当成没打()
     {
         var date = Nov3;   // 周二

@@ -30,6 +30,25 @@ public static class LeaveOvertimeOverlapGuard
         if (submittingType is not (ApprovalType.Overtime or ApprovalType.Leave)) return;
         var opposite = submittingType == ApprovalType.Overtime ? ApprovalType.Leave : ApprovalType.Overtime;
 
+        // 并发审批的竞态：两张冲突单分别在独立事务里审批时，双方可能都读到"对方还没批准"，然后各写各的考勤
+        // （2026-11-06 审查发现 P2）。这里先在申请人这一行上加事务行锁——审批回写本身就在同一个事务里
+        // （ApprovalService.HandleApprovalAsync），同一申请人的请假/加班会被串行处理，后一个一定能看到
+        // 前一个的结果；提交申请路径没有事务，这句锁会立刻释放，退化成普通查询，不影响功能。
+        // 只有 MySQL/MariaDB 支持 FOR UPDATE（单元测试用的 SQLite 没有这句，直接跳过）。
+        // 拿不到锁也不阻塞审批：后面的重叠检查照常执行（只是并发窗口仍然存在），不能因为加锁失败让审批报错。
+        if (db.Database.ProviderName?.Contains("MySql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            try
+            {
+                await db.Database.ExecuteSqlRawAsync("SELECT Id FROM `User` WHERE Id = {0} FOR UPDATE",
+                    new object[] { applicantUserId }, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // 记录不了日志（静态方法没有 logger），按"尽力加锁"处理；重叠检查在下面照常执行
+            }
+        }
+
         var others = await db.ApprovalRequests.AsNoTracking()
             .Where(a => a.ApplicantUserId == applicantUserId
                         && a.ApprovalType == opposite

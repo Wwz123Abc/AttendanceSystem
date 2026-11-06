@@ -481,6 +481,12 @@ public partial class AttendanceService
     public static readonly DateOnly MidCheckAsClockOutFrom = new(2026, 10, 24);
 
     /// <summary>
+    /// 按午间卡结算时写在备注里的固定开头。补算/重启后重新扫描时用它识别"这条已经结算过了"，
+    /// 避免每次都重复追加一条一样的备注（备注有 200 字上限，重复追加会把早期内容挤掉，2026-11-06 审查修复）。
+    /// </summary>
+    public const string MidCheckSettleNoteMarker = "没打下班卡，按午间卡";
+
+    /// <summary>
     /// 某一天"打了上班卡 + 午间卡、但没打下班卡"时按用户口径结算：把**最后一段命中的午间打卡**
     /// 当成当天的下班时间，只算上半段工时；状态按 <see cref="CalcClockOutStatus"/> 判（一般是早退）。
     /// 只改工时/状态/备注，**不伪造 ClockOutTime**（打卡时间仍然显示为空，备注里写明按哪张午间卡算的）。
@@ -493,6 +499,9 @@ public partial class AttendanceService
 
         var record = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate, ct);
         if (record is null || record.ClockOutTime is not null || record.ClockInTime is not { } clockIn) return false;
+        // 已经按这条口径结算过的就不再重复处理：不然后台补算每次启动/每晚都会再追加一条一模一样的备注，
+        // 备注 200 字上限还会把原来的内容挤掉（2026-11-06 审查修复）
+        if (record.ApprovalNote?.Contains(MidCheckSettleNoteMarker) == true) return false;
         // 请假/休假/出差/旷工这几种状态是审批或旷工标记定的，不按打卡结算
         if (record.AttendanceStatus is AttendanceStatus.OnLeave or AttendanceStatus.Holiday
             or AttendanceStatus.BusinessTrip or AttendanceStatus.Absent) return false;
@@ -523,7 +532,7 @@ public partial class AttendanceService
         if (record.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.NotPunched or AttendanceStatus.EarlyLeave)
             record.AttendanceStatus = status;   // 迟到的保持迟到（跟真打下班卡时的规则一致）
         record.MidCheckResults = results.FormatMidCheckResults();
-        AppendApprovalNote(record, $"没打下班卡，按午间卡 {midHit:HH:mm} 当天下班，只算上半段工时（{record.ActualWorkHours:0.##} 小时）");
+        AppendApprovalNote(record, $"{MidCheckSettleNoteMarker} {midHit:HH:mm} 当天下班，只算上半段工时（{record.ActualWorkHours:0.##} 小时）");
         record.UpdatedAt = clock.LocalNow();
         return true;
     }
@@ -541,6 +550,8 @@ public partial class AttendanceService
         var candidates = await db.AttendanceRecords
             .Where(r => r.WorkDate >= start && r.WorkDate <= to
                         && r.ClockInTime != null && r.ClockOutTime == null
+                        // 已经按这条口径结算过的跳过（备注里有固定标记），不重复补算、不重复追备注（2026-11-06 审查修复）
+                        && (r.ApprovalNote == null || !r.ApprovalNote.Contains(MidCheckSettleNoteMarker))
                         && (r.AttendanceStatus == AttendanceStatus.Normal
                             || r.AttendanceStatus == AttendanceStatus.NotPunched
                             || r.AttendanceStatus == AttendanceStatus.EarlyLeave
