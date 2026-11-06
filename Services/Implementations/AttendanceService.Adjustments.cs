@@ -220,9 +220,12 @@ public partial class AttendanceService
     {
         // 回写前再查一次"加班和已批准请假是否重叠"：提交时对方可能还没批，批准后才发现就会重复算钱
         // （2026-11-05 用户要求；抛出后整笔事务回滚，单子保持待审批，审批人能看到原因）
+        // requireApplicantLock：审批回写在事务里，必须先锁申请人这一行，拿不到锁就整单失败，不能放行
+        // （2026-11-06 用户要求）
         if (approval.OvertimeEndTime is { } otEndForOverlap)
             await LeaveOvertimeOverlapGuard.EnsureNoOverlapAsync(
-                db, approval.ApplicantUserId, otStart, otEndForOverlap, ApprovalType.Overtime, approval.Id);
+                db, approval.ApplicantUserId, otStart, otEndForOverlap, ApprovalType.Overtime, approval.Id,
+                requireApplicantLock: true, logger: logger);
 
         var workDate = await ResolveOvertimeWorkDateAsync(approval.ApplicantUserId, otStart);
         var record = await db.AttendanceRecords
@@ -267,9 +270,11 @@ public partial class AttendanceService
 
         // 回写前再查一次"请假和已批准加班是否重叠"：提交时对方可能还没批，批准后才发现就会重复算钱
         // （2026-11-05 用户要求；抛出后整笔事务回滚，单子保持待审批，审批人能看到原因）
+        // requireApplicantLock：审批回写在事务里，必须先锁申请人这一行，拿不到锁就整单失败，不能放行
+        // （2026-11-06 用户要求）
         await LeaveOvertimeOverlapGuard.EnsureNoOverlapAsync(
             db, approval.ApplicantUserId, leaveStart, leaveEnd, ApprovalType.Leave, approval.Id,
-            submittingLeaveType: approval.LeaveType);
+            submittingLeaveType: approval.LeaveType, requireApplicantLock: true, logger: logger);
 
         // 先把请假区间内已经存在的考勤记录一次性整批查出来，按"日期"放进一个字典。
         // 原来的写法是下面 for 循环里每天单独查一次数据库——请十天假就要查十次数据库，

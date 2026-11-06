@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using AttendanceSystem.Data;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
@@ -17,26 +18,34 @@ namespace AttendanceSystem.Helpers;
 ///   计入（事假/病假/年假/调休不占休息日；婚假/产假/丧假按自然日占用整天）。
 ///   所以这里逐天还原"那天实际计入的请假时段"，再和加班比，避免把长假期间的周末加班、晚上加班误拦。
 /// 出差不参与这条校验（出差期间确实可能有加班）。
+///
+/// ★ 并发保护（2026-11-06）：审批回写前必须拿到"申请人那一行"的数据库行锁；**拿不到锁就失败回滚**，
+///   绝不能在没加锁的情况下继续审批——那样两张冲突单仍可能同时通过、重复计薪。
+///   提交申请路径不锁（它没有开启事务，FOR UPDATE 会立即释放，锁了也没用），重叠检查仍然照做。
 /// </summary>
 public static class LeaveOvertimeOverlapGuard
 {
     /// <summary>有重叠就抛 <see cref="BusinessException"/>（消息给员工/审批人看）；没有重叠正常返回。</summary>
     /// <param name="submittingLeaveType">本次提交的是请假时，传上假别（决定按自然日还是按班次时段计请假）；提交加班时传 null。</param>
+    /// <param name="requireApplicantLock">是否必须拿到申请人行锁（只有"审批通过回写、处在事务里"的调用方传 true）。
+    /// 拿不到锁会记错误日志并抛业务异常，让外层事务整单回滚，单子保持待审批。</param>
+    /// <param name="logger">用来记录"拿不到锁"这类错误（提交路径可以不传）。</param>
     public static async Task EnsureNoOverlapAsync(
         AttendanceDbContext db, int applicantUserId, DateTime start, DateTime end,
         ApprovalType submittingType, int? excludeRequestId = null,
-        LeaveType? submittingLeaveType = null, CancellationToken ct = default)
+        LeaveType? submittingLeaveType = null, bool requireApplicantLock = false,
+        ILogger? logger = null, CancellationToken ct = default)
     {
         if (submittingType is not (ApprovalType.Overtime or ApprovalType.Leave)) return;
         var opposite = submittingType == ApprovalType.Overtime ? ApprovalType.Leave : ApprovalType.Overtime;
 
         // 并发审批的竞态：两张冲突单分别在独立事务里审批时，双方可能都读到"对方还没批准"，然后各写各的考勤
-        // （2026-11-06 审查发现 P2）。这里先在申请人这一行上加事务行锁——审批回写本身就在同一个事务里
-        // （ApprovalService.HandleApprovalAsync），同一申请人的请假/加班会被串行处理，后一个一定能看到
-        // 前一个的结果；提交申请路径没有事务，这句锁会立刻释放，退化成普通查询，不影响功能。
+        // （2026-11-06 审查发现 P2）。审批回写本身在 ApprovalService.HandleApprovalAsync 的事务里，
+        // 先锁住"申请人"这一行，同一个人的请假/加班就会串行处理，后一个一定能看到前一个已批准的结果。
+        // ★ 锁失败必须让本次审批失败：如果拿不到锁还继续，并发窗口就重新出现了（2026-11-06 用户要求）。
         // 只有 MySQL/MariaDB 支持 FOR UPDATE（单元测试用的 SQLite 没有这句，直接跳过）。
-        // 拿不到锁也不阻塞审批：后面的重叠检查照常执行（只是并发窗口仍然存在），不能因为加锁失败让审批报错。
-        if (db.Database.ProviderName?.Contains("MySql", StringComparison.OrdinalIgnoreCase) == true)
+        if (requireApplicantLock
+            && db.Database.ProviderName?.Contains("MySql", StringComparison.OrdinalIgnoreCase) == true)
         {
             try
             {
@@ -45,7 +54,10 @@ public static class LeaveOvertimeOverlapGuard
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // 记录不了日志（静态方法没有 logger），按"尽力加锁"处理；重叠检查在下面照常执行
+                logger?.LogError(ex,
+                    "审批回写前无法锁定申请人 {UserId} 的行（请假/加班重叠校验），本次审批已回滚", applicantUserId);
+                throw new BusinessException(
+                    "系统繁忙：无法锁定该员工的审批记录（可能有并发审批正在进行），本次审批未生效，请稍后重试", ex);
             }
         }
 
