@@ -25,12 +25,7 @@ using Microsoft.Extensions.Options;
 string? Arg(string name) => args.SkipWhile(a => a != name).Skip(1).FirstOrDefault();
 var appsettings = Arg("--appsettings") ?? "appsettings.json";
 var userNo      = Arg("--user-no") ?? throw new ArgumentException("缺少 --user-no");
-var leaveNo     = Arg("--leave-no") ?? throw new ArgumentException("缺少 --leave-no");
-var leaveEndArg = Arg("--leave-end") ?? throw new ArgumentException("缺少 --leave-end（例：2026-10-23T17:30:00）");
-var recordEndArg= Arg("--record-end") ?? throw new ArgumentException("缺少 --record-end（例：2026-11-22）");
 var dryRun      = args.Contains("--dry-run");
-var newLeaveEnd = DateTime.Parse(leaveEndArg);
-var recordEnd   = DateOnly.Parse(recordEndArg);
 
 var cfg = new ConfigurationBuilder()
     .SetBasePath(Path.GetDirectoryName(Path.GetFullPath(appsettings))!)
@@ -43,6 +38,30 @@ await using var db = new AttendanceDbContext(builder.Options);
 
 var appSettings = cfg.GetSection(AppSettingsOptions.SectionName).Get<AppSettingsOptions>() ?? new AppSettingsOptions();
 var attendance = new AttendanceService(db, Options.Create(appSettings), NullLogger<AttendanceService>.Instance);
+
+// ── 轻量动作：只重新生成某人某月的月度汇总（手工订正考勤记录之后用）────────────────
+if (args.Contains("--regen-summary"))
+{
+    var year  = int.Parse(Arg("--year")  ?? throw new ArgumentException("缺少 --year"));
+    var month = int.Parse(Arg("--month") ?? throw new ArgumentException("缺少 --month"));
+    var targetUser = await db.Users.FirstOrDefaultAsync(x => x.EmployeeNo == userNo)
+                     ?? throw new InvalidOperationException($"找不到工号 {userNo}");
+    await attendance.GenerateMonthlySummaryAsync(year, month, [targetUser.Id]);
+    var summary = await db.MonthlyAttendanceSummaries
+        .FirstOrDefaultAsync(x => x.UserId == targetUser.Id && x.Year == year && x.Month == month);
+    Console.WriteLine(summary is null
+        ? $"已重算 {year}-{month:00}，但没有生成汇总（该月可能没有需要考勤的记录）"
+        : $"已重算 {year}-{month:00} 月度汇总：应出勤={summary.ExpectedWorkdays} 实际出勤={summary.ActualWorkdays} "
+          + $"正班={summary.TotalWorkHours:0.##} 加班={summary.TotalOvertimeHours:0.##} 请假天={summary.LeaveDays} "
+          + $"迟到={summary.LateCount} 早退={summary.EarlyLeaveCount} 旷工={summary.AbsentDays} 缺卡={summary.NotPunchedCount}");
+    return;
+}
+
+var leaveNo     = Arg("--leave-no") ?? throw new ArgumentException("缺少 --leave-no");
+var leaveEndArg = Arg("--leave-end") ?? throw new ArgumentException("缺少 --leave-end（例：2026-10-23T17:30:00）");
+var recordEndArg= Arg("--record-end") ?? throw new ArgumentException("缺少 --record-end（例：2026-11-22）");
+var newLeaveEnd = DateTime.Parse(leaveEndArg);
+var recordEnd   = DateOnly.Parse(recordEndArg);
 
 Console.WriteLine($"{(dryRun ? "[预演] " : "")}员工工号：{userNo}，假单：{leaveNo}，新的假单截止：{newLeaveEnd:yyyy-MM-dd HH:mm}，记录处理到：{recordEnd:yyyy-MM-dd}");
 
