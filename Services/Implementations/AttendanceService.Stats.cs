@@ -244,8 +244,12 @@ public partial class AttendanceService
         if (isRestDay && r.AttendanceStatus != AttendanceStatus.OnLeave) return 0m;
         if (r.AttendanceStatus != AttendanceStatus.OnLeave)
         {
-            // 迟到满 4 小时按半天旷工：出勤只算半天（2026-11-09 用户确认；计时工不套这条）
-            if (!hourly && r.WorkDate >= HalfDayAbsentFrom && r.LateMinutes >= HalfDayAbsentLateMinutes) return 0.5m;
+            // 迟到满 4 小时按半天旷工：出勤只算半天（2026-11-09 用户确认；计时工不套这条）。
+            // ★ 必须走 EffectiveLateMinutes：LateMinutes 是打上班卡那一刻算的值，当天状态后来可能被改成
+            //   出差/请假/未打卡等（见上面 EffectiveLateMinutes 的说明），直接读原始分钟数会把
+            //   "曾经迟到 4 小时、后来状态改了"的记录也误算成半天出勤（2026-11-09 用户指出）。
+            if (!hourly && r.WorkDate >= HalfDayAbsentFrom
+                && EffectiveLateMinutes(r) >= HalfDayAbsentLateMinutes) return 0.5m;
             return 1m;
         }
         return Math.Max(0m, 1m - ResolveLeaveDaysFraction(r.LeaveHours, standardHours));

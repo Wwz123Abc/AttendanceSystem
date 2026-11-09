@@ -105,4 +105,44 @@ public class HalfDayAbsentTests : SqliteTestBase
         Assert.Equal(3m, AttendanceService.ApplyHalfDayAbsentCap(3m, DayShift(), 8m));    // 不到半天 → 原样
         Assert.Equal(5.5m, AttendanceService.ApplyHalfDayAbsentCap(11m, NightShift(), 8m)); // 夜班标准 11 → 5.5
     }
+    [Fact]
+    public void 迟到4小时后状态改出差_出勤算整天_不再按半天旷工()
+    {
+        // 场景：当天确实迟到 4.5 小时（LateMinutes=270 残留），但状态后来被出差审批改成「出差」。
+        // 出差按全勤算 1 天，不能被残留的迟到分钟数算成 0.5 天（2026-11-09 用户指出的统计错误）。
+        var record = new AttendanceRecord
+        {
+            WorkDate = RuleDate,
+            ClockInTime = RuleDate.ToDateTime(new TimeOnly(13, 0)),
+            AttendanceStatus = AttendanceStatus.BusinessTrip,
+            LateMinutes = 270
+        };
+        Assert.Equal(1m, AttendanceService.ResolveAttendanceDayCredit(record, 8m));
+        Assert.False(AttendanceService.IsHalfDayAbsentByLate(record, RuleDate, DayShift(), hourly: false));
+    }
+
+    [Fact]
+    public void 迟到4小时后状态改请假_按请假比例算_不按半天旷工()
+    {
+        // 全天请假（8 小时）当天出勤 = 0；半天假按 1−请假占比，与迟到分钟数无关。
+        var fullDay = new AttendanceRecord
+        {
+            WorkDate = RuleDate,
+            ClockInTime = RuleDate.ToDateTime(new TimeOnly(13, 0)),
+            AttendanceStatus = AttendanceStatus.OnLeave,
+            LeaveHours = 8m,
+            LateMinutes = 270
+        };
+        Assert.Equal(0m, AttendanceService.ResolveAttendanceDayCredit(fullDay, 8m));
+
+        var halfDay = new AttendanceRecord
+        {
+            WorkDate = RuleDate,
+            ClockInTime = RuleDate.ToDateTime(new TimeOnly(13, 0)),
+            AttendanceStatus = AttendanceStatus.OnLeave,
+            LeaveHours = 2m,      // 2/8 = 0.25 → 请假 0.5 天，出勤 0.5 天
+            LateMinutes = 270
+        };
+        Assert.Equal(0.5m, AttendanceService.ResolveAttendanceDayCredit(halfDay, 8m));
+    }
 }

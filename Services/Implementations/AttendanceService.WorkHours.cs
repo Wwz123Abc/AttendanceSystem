@@ -83,7 +83,7 @@ public partial class AttendanceService
         {
             hours = ApplyHalfDayAbsentCap(hours, shift, appOptions.Value.DefaultDailyWorkHours);
             if (record.ApprovalNote?.Contains(HalfDayAbsentNoteMarker) != true)
-                AppendApprovalNote(record, $"{HalfDayAbsentNoteMarker}（迟到 {record.LateMinutes} 分钟），工时按半天");
+                AppendApprovalNote(record, $"{HalfDayAbsentNoteMarker}（迟到 {EffectiveLateMinutes(record)} 分钟），工时按半天");
         }
         return hours;
     }
@@ -508,11 +508,14 @@ public partial class AttendanceService
     /// <summary>
     /// 这天是不是"迟到满 4 小时 → 按半天旷工"：只对普通员工（计时工没有旷工概念）、生效日之后、
     /// 有排班且不是休息日、当天迟到分钟数 ≥ 240 的记录生效。
+    /// ★ 迟到分钟数走 <see cref="EffectiveLateMinutes(AttendanceRecord)"/>：只有当前状态仍是"迟到"才算——
+    ///   LateMinutes 是打上班卡时算的，状态后来被改成出差/请假/未打卡等时分钟数可能残留，
+    ///   直接读原始值会把"曾迟到 4 小时、后来状态改了"的记录也按半天旷工封顶（2026-11-09 用户指出）。
     /// </summary>
     public static bool IsHalfDayAbsentByLate(AttendanceRecord record, DateOnly workDate, ShiftSchedule? shift, bool hourly)
         => !hourly && workDate >= HalfDayAbsentFrom && shift is not null
            && !IsNonCompRestDay(workDate, shift)
-           && record.LateMinutes >= HalfDayAbsentLateMinutes;
+           && EffectiveLateMinutes(record) >= HalfDayAbsentLateMinutes;
 
     /// <summary>半天旷工当天的工时上限：半个标准工时（8 小时班 → 4 小时）。</summary>
     public static decimal ApplyHalfDayAbsentCap(decimal hours, ShiftSchedule? shift, decimal defaultDailyHours)
