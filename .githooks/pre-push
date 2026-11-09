@@ -1,0 +1,14 @@
+#!/bin/sh
+# pre-push 钩子：推送前自动跑"编译 + 全量测试"，不通过就直接阻止推送。
+# 目的：CI 会因为同样的用例变红，别等推上去才从邮件里发现。
+# 紧急情况可临时跳过：git push --no-verify
+root=$(git rev-parse --show-toplevel)
+echo "pre-push: 本地自检开始（编译 + 全量单元测试，约 6 分钟）..."
+powershell -NoProfile -ExecutionPolicy Bypass -File "$root/tools/verify.ps1"
+status=$?
+if [ $status -ne 0 ]; then
+    echo "pre-push: 自检失败，已阻止本次推送（修好测试再推）" >&2
+    exit 1
+fi
+echo "pre-push: 自检通过"
+exit 0
