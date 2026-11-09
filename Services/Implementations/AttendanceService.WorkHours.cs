@@ -198,10 +198,18 @@ public partial class AttendanceService
     /// （比如 22:01、17:30），把它当上班卡会算出几百分钟的迟到——它明显是下班卡。只对非跨天班次判断
     /// （夜班的下班时间在第二天，晚上首次打卡本来就是上班）；没排班、休息日不判断。
     /// </summary>
+    /// <summary>
+    /// 这张卡是不是"已经过了这个考勤日班次的应下班时间"（用来判断它不可能是上班卡）。
+    /// ★ 跨天班次（夜班）的应下班在**次日**：比如 11-07 的晚班 20:30–05:30，应下班是 11-08 05:30，
+    ///   11-08 08:30 打的卡已经过了应下班，只能算 11-07 那张班的下班卡（2026-11-09 肖臻 11-07 的问题：
+    ///   漏打上班卡后，次日早上的下班卡被当成"很晚的上班卡"，导致整天缺下班卡、工时 0）。
+    /// </summary>
     public static bool IsFirstPunchAfterShiftEnd(DateOnly workDate, DateTime time, ShiftSchedule? shift, bool isRestDay)
     {
-        if (shift is null || isRestDay || shift.IsCrossDay) return false;
-        return time >= workDate.ToDateTime(shift.WorkEndTime);
+        if (shift is null || isRestDay) return false;
+        var scheduledEnd = workDate.ToDateTime(shift.WorkEndTime);
+        if (shift.IsCrossDay) scheduledEnd = scheduledEnd.AddDays(1);   // 跨天班次的应下班顺延到次日
+        return time >= scheduledEnd;
     }
 
     public static bool IsEligibleClockOutCandidate(DateTime time, DateOnly workDate, ShiftSchedule? shift)

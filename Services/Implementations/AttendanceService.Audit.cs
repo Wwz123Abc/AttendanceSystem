@@ -100,13 +100,44 @@ public partial class AttendanceService
             var hourly = IsHourlyOn(hourlyStarts, r.User.AttendanceGroupId, r.WorkDate);
             var punches = punchesByUser.GetValueOrDefault(r.UserId) ?? [];
             if (ExpectedWorkHoursForAudit(r, shift, hourly, punches, defaultDaily) is not { } expected) continue;
-            if (Math.Abs(expected - r.ActualWorkHours) < 0.01m) continue;
+
+            var hoursChanged = Math.Abs(expected - r.ActualWorkHours) >= 0.01m;
+            // 状态/迟到/早退分钟数是否也跟打卡对不上：只重判"由打卡决定"的状态，请假/出差/节假日不动。
+            // （2026-11-09 易涛 11-06：排班从白班改成晚班后工时已被订正，但"迟到 693 分钟"残留在记录上，
+            //   原来只比工时就发现不了，所以这里把状态/分钟数一并纳入检查。）
+            var canRejudgeStatus = r.AttendanceStatus is AttendanceStatus.Normal or AttendanceStatus.Late
+                or AttendanceStatus.EarlyLeave or AttendanceStatus.NotPunched or AttendanceStatus.Absent;
+            var isRest  = IsNonCompRestDay(r.WorkDate, shift);
+            var inStat  = AttendanceStatus.Normal;
+            var outStat = AttendanceStatus.Normal;
+            var lateMin = 0;
+            var earlyMin = 0;
+            if (canRejudgeStatus)
+            {
+                inStat  = CalcClockInStatus(r.WorkDate, r.ClockInTime!.Value, shift, isRest, out lateMin);
+                outStat = CalcClockOutStatus(r.WorkDate, r.ClockOutTime!.Value, shift, isRest, out earlyMin);
+            }
+            var newStatus = inStat == AttendanceStatus.Late ? AttendanceStatus.Late : outStat;   // 迟到优先
+            var statusChanged = canRejudgeStatus
+                && (r.AttendanceStatus != newStatus || r.LateMinutes != lateMin || r.EarlyLeaveMinutes != earlyMin);
+            if (!hoursChanged && !statusChanged) continue;
+
             result.Add(new HoursRecalcRow(r.UserId, r.User.EmployeeNo, r.User.RealName, r.WorkDate, shift.ShiftName, r.ActualWorkHours, expected));
             if (dryRun) continue;
-            AppendApprovalNote(r, $"补排班后工时已按班次重算：{r.ActualWorkHours:0.##}→{expected:0.##}");
-            r.ActualWorkHours = expected;
-            var windows = shift.ParseMidCheckWindows();
-            r.MidCheckResults = windows.Count > 0 ? ResolveMidCheckResults(r.WorkDate, shift, windows, punches).FormatMidCheckResults() : null;
+            if (hoursChanged)
+            {
+                AppendApprovalNote(r, $"补排班后工时已按班次重算：{r.ActualWorkHours:0.##}→{expected:0.##}");
+                r.ActualWorkHours = expected;
+                var windows = shift.ParseMidCheckWindows();
+                r.MidCheckResults = windows.Count > 0 ? ResolveMidCheckResults(r.WorkDate, shift, windows, punches).FormatMidCheckResults() : null;
+            }
+            if (statusChanged)
+            {
+                r.LateMinutes       = lateMin;
+                r.EarlyLeaveMinutes = earlyMin;
+                r.AttendanceStatus  = newStatus;
+                AppendApprovalNote(r, $"补排班后状态已按班次重判（迟到 {lateMin} 分钟、早退 {earlyMin} 分钟）");
+            }
             r.UpdatedAt = clock.LocalNow();
             touchedMonths.Add((r.UserId, r.WorkDate.Year, r.WorkDate.Month));
         }

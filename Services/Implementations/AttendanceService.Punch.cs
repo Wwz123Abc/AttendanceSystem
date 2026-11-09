@@ -102,9 +102,24 @@ public partial class AttendanceService
             ? (hourlyWorkDate, (AttendanceRecord?)null)   // 计时工：按上面算好的考勤日（夜班次日早上的卡归上班那天）
             : await ResolvePunchWorkDateAsync(userId, request.PunchType, today, now);
 
+        // ★ 权威类型纠正（2026-11-09 肖臻 11-07 的问题）：如果这次要记成"上班卡"，但打卡时间已经过了
+        //   这个考勤日班次的**应下班时间**，它就不可能是上班卡——人不可能在班次结束后才来上这个班。
+        //   典型场景：夜班漏打上班卡，次日早上补打下班卡（应下班 05:30，08:30 才打），原来会被"很晚的上班卡"
+        //   规则误记成上班卡，导致这条记录永远缺下班卡、工时 0。这里统一改成下班卡，缺的那张上班卡走补卡流程。
+        var punchType = request.PunchType;
+        if (!hourly && punchType == PunchType.ClockIn)
+        {
+            var corrShift = (await GetShiftAssignmentAsync(userId, workDate))?.ShiftSchedule;
+            var corrRest  = IsNonCompRestDay(workDate, corrShift);
+            var corrRec   = openYesterdayRecord ?? await db.AttendanceRecords
+                .FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
+            if (corrRec?.ClockInTime is null && IsFirstPunchAfterShiftEnd(workDate, punchTime, corrShift, corrRest))
+                punchType = PunchType.ClockOut;
+        }
+
         // 上班卡的合理性校验（夜班下班后重复刷、跨天班次打得太早）：远程打卡页面已经在调付费的人脸识别之前判过一次，
         // 这里是权威兜底，别的调用方也不会漏掉
-        if (!hourly && request.PunchType == PunchType.ClockIn && await GetClockInRejectionAsync(userId, now) is { } rejection)
+        if (!hourly && punchType == PunchType.ClockIn && await GetClockInRejectionAsync(userId, now) is { } rejection)
             return new PunchResponseDto { Success = false, Message = rejection };
 
         // 定位打卡校验：没分配考勤组、或考勤组没开定位打卡/没配打卡地点，都算不通过（见 ValidateLocationAsync 注释）。
@@ -132,14 +147,14 @@ public partial class AttendanceService
         // 同一分钟内点第二次很常见，这里先查一下是不是已经有了，有就不重复插入，避免撞唯一索引报错——
         // 不影响下面照常按这次的打卡时间刷新 ClockIn/ClockOutTime 和考勤状态。
         var alreadyPunchedThisMinute = await db.AttendancePunches.AnyAsync(p =>
-            p.UserId == userId && p.PunchType == request.PunchType && p.PunchTime == punchTime);
+            p.UserId == userId && p.PunchType == punchType && p.PunchTime == punchTime);
         if (!alreadyPunchedThisMinute)
         {
             db.AttendancePunches.Add(new AttendancePunch
             {
                 UserId     = userId,
                 PunchTime  = punchTime,
-                PunchType  = request.PunchType,
+                PunchType  = punchType,
                 Latitude   = request.Latitude,
                 Longitude  = request.Longitude,
                 Address    = request.Address,
@@ -169,11 +184,11 @@ public partial class AttendanceService
         AttendanceStatus status;
         int?   lateMinutes = null;
 
-        if (request.PunchType == PunchType.ClockIn)   // ── 上班卡 ──
+        if (punchType == PunchType.ClockIn)   // ── 上班卡 ──
         {
             (status, lateMinutes, message) = ApplyClockIn(record, workDate, punchTime, shift, isRestDay);
         }
-        else if (request.PunchType == PunchType.MidCheck && !hourly)   // ── 午间打卡 ──（计时工的午间卡也当"当天最晚一次打卡"更新下班时间，走下面的下班卡分支）
+        else if (punchType == PunchType.MidCheck && !hourly)   // ── 午间打卡 ──（计时工的午间卡也当"当天最晚一次打卡"更新下班时间，走下面的下班卡分支）
         {
             // 打卡流水已经在上面写好了；这里不改上下班时间/状态，工时结算在下班打卡时统一算（见 ResolveEffectiveClockInAsync）
             status  = record.AttendanceStatus;
@@ -189,12 +204,12 @@ public partial class AttendanceService
         {
             NormalizeHourlyRecord(record);
             status = record.AttendanceStatus;
-            if (request.PunchType == PunchType.MidCheck) message = "午间打卡成功";
+            if (punchType == PunchType.MidCheck) message = "午间打卡成功";
         }
 
         // 午间必打卡的命中情况要在打完这张卡就写回记录：以前只有打下班卡算工时时才顺带写（ResolveEffectiveClockInAsync），
         // 所以员工中午打完卡，"我的记录"里"午间打卡"一栏一直是 --，要等到下班打了卡才出现。下班卡那条路径自己会重算，这里不用管
-        if (request.PunchType != PunchType.ClockOut
+        if (punchType != PunchType.ClockOut
             && await LoadMidCheckResultsAsync(userId, workDate, shift) is { } midResults)
             record.MidCheckResults = midResults.FormatMidCheckResults();
 
