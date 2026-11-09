@@ -29,6 +29,9 @@
     <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+    <!-- ImageSharp 3.1.12 有已知漏洞（NU1903/NU1902）。2026-11-09 用户决定“维持现状”：
+         4.x 修复版需要商业授权；缓解措施 = 人脸照片上传入口限制文件类型/大小/尺寸（见 FaceEnroll 页面），
+         只用于本地裁剪后调用阿里云人脸接口，不对外提供图片处理服务。如公司购买授权，再升级 4.x。 -->
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>
