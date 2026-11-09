@@ -42,6 +42,15 @@ public partial class AttendanceService
         var approval = await db.ApprovalRequests.FindAsync(approvalRequestId);
         if (approval is null || approval.ApprovalStatus != ApprovalStatus.Approved) return;
 
+        // 幂等：这张单已经回写过考勤就不再回写（2026-11-09 用户指出：备注里的单号会被 200 字上限截掉，
+        // 靠备注判断不可靠，改用这张单上的独立时间戳字段）。
+        if (approval.WritebackAppliedAt is not null)
+        {
+            logger.LogWarning("审批单 {RequestNo} 之前已经回写过考勤（{AppliedAt:yyyy-MM-dd HH:mm}），本次跳过，避免重复累计",
+                approval.RequestNo, approval.WritebackAppliedAt);
+            return;
+        }
+
         // 记下这次改动实际动到了哪些"年-月"，回写完之后要把这些月份的月度汇总同步刷新一下
         // （不然月初已经生成过的汇总，不会因为后补的记录自动更新，得靠人工点"重新生成"才会准）。
         var touchedMonths = new HashSet<(int Year, int Month)>();
@@ -67,6 +76,10 @@ public partial class AttendanceService
                  && approval.ShiftChangeEndDate is { } scEnd && approval.ShiftChangeTargetShiftId is { } scShiftId)
             scChanged = await ApplyApprovedShiftChangeAsync(approval, scStart, scEnd, scShiftId, touchedMonths);
 
+        await db.SaveChangesAsync();
+
+        // 标记"这张单已经回写过考勤"（幂等保护）：跟回写放在同一笔事务里，后面步骤失败会连它一起回滚
+        approval.WritebackAppliedAt = clock.LocalNow();
         await db.SaveChangesAsync();
 
         // 转班之后：这几天已经有的打卡、加班单要按新班次重新算（跟排班页保存排班后做的是同一件事）

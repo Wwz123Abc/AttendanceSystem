@@ -77,7 +77,15 @@ public partial class AttendanceService
         if (IsNonCompRestDay(workDate, shift))
             return 0;
         var effectiveClockOut = ClampEffectiveClockOut(workDate, clockOut, shift, secondHalfBoundary);
-        return CalcWorkHours(effectiveClockIn, effectiveClockOut, groupId);
+        var hours = CalcWorkHours(effectiveClockIn, effectiveClockOut, groupId);
+        // 迟到满 4 小时按半天旷工：当天工时最多算半个标准工时（2026-11-09 用户确认，从 11-09 起生效）
+        if (IsHalfDayAbsentByLate(record, workDate, shift, hourly: false))
+        {
+            hours = ApplyHalfDayAbsentCap(hours, shift, appOptions.Value.DefaultDailyWorkHours);
+            if (record.ApprovalNote?.Contains(HalfDayAbsentNoteMarker) != true)
+                AppendApprovalNote(record, $"{HalfDayAbsentNoteMarker}（迟到 {record.LateMinutes} 分钟），工时按半天");
+        }
+        return hours;
     }
 
     /// <summary>
@@ -485,6 +493,30 @@ public partial class AttendanceService
     /// 避免每次都重复追加一条一样的备注（备注有 200 字上限，重复追加会把早期内容挤掉，2026-11-06 审查修复）。
     /// </summary>
     public const string MidCheckSettleNoteMarker = "没打下班卡，按午间卡";
+
+    // ── 迟到满 4 小时按半天旷工（2026-11-09 用户确认）──────────────────────────────
+
+    /// <summary>迟到满多少分钟按半天旷工算：4 小时。</summary>
+    public const int HalfDayAbsentLateMinutes = 240;
+
+    /// <summary>这条规则从这一天起生效：更早的历史记录不回头改（避免动已经发过薪的月份）。</summary>
+    public static readonly DateOnly HalfDayAbsentFrom = new(2026, 11, 9);
+
+    /// <summary>半天旷工写在备注里的固定标记（用于避免重复追加同一句）。</summary>
+    public const string HalfDayAbsentNoteMarker = "按半天旷工计";
+
+    /// <summary>
+    /// 这天是不是"迟到满 4 小时 → 按半天旷工"：只对普通员工（计时工没有旷工概念）、生效日之后、
+    /// 有排班且不是休息日、当天迟到分钟数 ≥ 240 的记录生效。
+    /// </summary>
+    public static bool IsHalfDayAbsentByLate(AttendanceRecord record, DateOnly workDate, ShiftSchedule? shift, bool hourly)
+        => !hourly && workDate >= HalfDayAbsentFrom && shift is not null
+           && !IsNonCompRestDay(workDate, shift)
+           && record.LateMinutes >= HalfDayAbsentLateMinutes;
+
+    /// <summary>半天旷工当天的工时上限：半个标准工时（8 小时班 → 4 小时）。</summary>
+    public static decimal ApplyHalfDayAbsentCap(decimal hours, ShiftSchedule? shift, decimal defaultDailyHours)
+        => Math.Min(hours, Math.Max(0m, ResolveDailyStandardHours(shift, defaultDailyHours) / 2));
 
     /// <summary>
     /// 某一天"打了上班卡 + 午间卡、但没打下班卡"时按用户口径结算：把**最后一段命中的午间打卡**

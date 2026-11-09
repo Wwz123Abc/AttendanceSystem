@@ -236,13 +236,18 @@ public partial class AttendanceService
     /// 不能各写一份——之前就是因为两处各算各的，同一个人同一个月两份报表的出勤天数对不上
     /// （发现于 2026-09-18 数据核查）。
     /// </summary>
-    public static decimal ResolveAttendanceDayCredit(AttendanceRecord r, decimal standardHours, bool isRestDay = false)
+    public static decimal ResolveAttendanceDayCredit(AttendanceRecord r, decimal standardHours, bool isRestDay = false, bool hourly = false)
     {
         if (!IsPresent(r)) return 0m;
         // 休息日/节假日来打卡：不算"出勤天数"（这天没有应出勤，正班工时也是 0；批了加班的，加班时长单独在加班里体现）。
         // 不然出勤天数会超过应出勤天数，按出勤天数发的全勤奖/补贴会多发（2026-09-28 你定的口径）。请假当天不受影响
         if (isRestDay && r.AttendanceStatus != AttendanceStatus.OnLeave) return 0m;
-        if (r.AttendanceStatus != AttendanceStatus.OnLeave) return 1m;
+        if (r.AttendanceStatus != AttendanceStatus.OnLeave)
+        {
+            // 迟到满 4 小时按半天旷工：出勤只算半天（2026-11-09 用户确认；计时工不套这条）
+            if (!hourly && r.WorkDate >= HalfDayAbsentFrom && r.LateMinutes >= HalfDayAbsentLateMinutes) return 0.5m;
+            return 1m;
+        }
         return Math.Max(0m, 1m - ResolveLeaveDaysFraction(r.LeaveHours, standardHours));
     }
 

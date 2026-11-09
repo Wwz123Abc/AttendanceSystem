@@ -63,6 +63,13 @@ public class ApprovalRequest
     public DateTime SubmittedAt { get; set; } = DateTime.Now;  // 提交时间
     public DateTime UpdatedAt   { get; set; } = DateTime.Now;  // 最后更新时间
 
+    /// <summary>
+    /// 审批通过后"回写考勤"的完成时间（一次性幂等标记）：非空表示这张单已经回写过，重试/补跑时直接跳过。
+    /// ★ 不能靠考勤记录备注里的单号判断——备注有 200 字上限会被截断，单号可能被截掉，检查就失效了
+    /// （2026-11-09 审查发现，改成独立字段）。
+    /// </summary>
+    public DateTime? WritebackAppliedAt { get; set; }
+
     // ── 导航属性 ──────────────────────────────────────────────────────────
     [ForeignKey("ApplicantUserId")]
     public User Applicant { get; set; } = null!;                     // 申请人

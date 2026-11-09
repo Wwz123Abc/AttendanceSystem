@@ -179,7 +179,7 @@ public partial class AttendanceService
                     // 两种都要正确记到"出勤"和"请假"里，不能像以前那样只用 ActualWorkHours>0 判断出勤、
                     // 完全没有"请假天数"这个概念，导致这份发工资用的报表和月度汇总页对不上
                     // （发现于 2026-09-18 数据核查）。
-                    actualDays += ResolveAttendanceDayCredit(rec, dailyStdHours, isShiftRest);
+                    actualDays += ResolveAttendanceDayCredit(rec, dailyStdHours, isShiftRest, hourly: hourlyDay);
                     if (rec.AttendanceStatus == AttendanceStatus.OnLeave)
                         leaveDays += ResolveLeaveDaysFraction(rec.LeaveHours, dailyStdHours);
                     if (rec.AttendanceStatus == AttendanceStatus.BusinessTrip) businessTripHours += FloorToHalf(rec.ActualWorkHours);

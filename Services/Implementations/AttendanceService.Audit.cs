@@ -44,6 +44,9 @@ public partial class AttendanceService
         var missedEnds = ResolveMissedNonLastWindowEnds(r.WorkDate, shift, effective);
         var boundary = ResolveSecondHalfAbsentBoundary(r.WorkDate, shift, effective);
         var hours = ComputeRegularWorkHours(ClampEffectiveClockIn(r.WorkDate, ci, shift, missedEnds), ClampEffectiveClockOut(r.WorkDate, co, shift, boundary));
+        // 迟到满 4 小时按半天旷工：核对口径也要跟着封顶，否则夜间核对会认为"工时记少了"反复自动订正
+        if (IsHalfDayAbsentByLate(r, r.WorkDate, shift, hourly: false))
+            hours = ApplyHalfDayAbsentCap(hours, shift, defaultDailyHours);
         return r.AttendanceStatus == AttendanceStatus.OnLeave
             ? ApplyLeaveHoursCap(hours, r.LeaveHours, ResolveDailyStandardHours(shift, defaultDailyHours))
             : hours;

@@ -151,6 +151,9 @@ public partial class AttendanceService
                             ? ApplyLeaveHoursCap(computedHours, r.LeaveHours, ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
                             : computedHours;
                     }
+                    // 迟到满 4 小时按半天旷工：老数据补算也要封顶（2026-11-09 用户确认）
+                    if (IsHalfDayAbsentByLate(r, r.WorkDate, shift, hourly: false))
+                        effectiveHours = ApplyHalfDayAbsentCap(effectiveHours, shift, appOptions.Value.DefaultDailyWorkHours);
                     if (healLegacyHours) r.ActualWorkHours = effectiveHours;
                 }
                 // 每天的工时/加班按"半小时"为最小单位取整后再累加（不足半小时舍去），
@@ -169,7 +172,8 @@ public partial class AttendanceService
             summary.ActualWorkdays = records.Sum(r =>
                 ResolveAttendanceDayCredit(r, ResolveDailyStandardHours(shiftByDate.GetValueOrDefault(r.WorkDate), defaultDailyHours),
                     !IsHourlyOn(hourlyStarts, user.AttendanceGroupId, r.WorkDate)
-                        && IsShiftWeeklyRestDay(r.WorkDate, shiftByDate.GetValueOrDefault(r.WorkDate))));
+                        && IsShiftWeeklyRestDay(r.WorkDate, shiftByDate.GetValueOrDefault(r.WorkDate)),
+                    hourly: IsHourlyOn(hourlyStarts, user.AttendanceGroupId, r.WorkDate)));
             // 迟到/早退按「状态」统计（钉钉同步只写状态、不写分钟数，按分钟数会漏算）
             summary.LateCount         = records.Count(r => r.AttendanceStatus == AttendanceStatus.Late);
             summary.EarlyLeaveCount   = records.Count(r => r.AttendanceStatus == AttendanceStatus.EarlyLeave);

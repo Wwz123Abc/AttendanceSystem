@@ -75,6 +75,9 @@ public class ApprovalWritebackIdempotencyTests : SqliteTestBase
         var first = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Today);
         var afterFirst = first.OvertimeHours;
         Assert.Equal(2m, afterFirst);
+        // 幂等标记：回写完成后单子上会记下回写时间（备注被截断也不影响判断）
+        var approvalAfterFirst = await db.ApprovalRequests.SingleAsync(a => a.Id == id);
+        Assert.NotNull(approvalAfterFirst.WritebackAppliedAt);
 
         await svc.UpdateAttendanceAfterApprovalAsync(id);   // 第二次：必须跳过
         db.ChangeTracker.Clear();

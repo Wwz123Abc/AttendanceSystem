@@ -483,6 +483,10 @@ namespace AttendanceSystem.Migrations
                         .HasColumnType("datetime(6)")
                         .HasColumnName("UpdatedAt");
 
+                    b.Property<DateTime?>("WritebackAppliedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("WritebackAppliedAt");
+
                     b.HasKey("Id")
                         .HasName("PK_ApprovalRequest");
 
