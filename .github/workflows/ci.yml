@@ -2,11 +2,18 @@ name: CI
 
 # 每次推送到 main、或有人提 PR 时：还原依赖 → 编译 → 跑全部测试 → 检查有漏洞的依赖包。
 # 用 windows-latest：开发和生产的路径、编码习惯和 Windows 更接近，测试里有按文件路径读取的用例。
+#
+# ⚠ 2026-11-09 起默认「不再自动跑」：之前每次推送都跑，测试一红就发一封失败邮件，很吵。
+#   质量把关已经挪到本地：推送前 tools/verify.ps1 + .githooks/pre-push 会自动跑同一套测试，
+#   不通过直接拦下推送（见仓库根目录 README/更新日志）。需要时可以在
+#   GitHub → Actions → CI → Run workflow 手动跑一次。
+#   想恢复"每次推送自动跑"：把下面 push/pull_request 两段取消注释即可。
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
+  # push:
+  #   branches: [ main ]
+  # pull_request:
+  #   branches: [ main ]
 
 permissions:
   contents: read
