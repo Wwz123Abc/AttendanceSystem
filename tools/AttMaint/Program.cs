@@ -39,6 +39,35 @@ await using var db = new AttendanceDbContext(builder.Options);
 var appSettings = cfg.GetSection(AppSettingsOptions.SectionName).Get<AppSettingsOptions>() ?? new AppSettingsOptions();
 var attendance = new AttendanceService(db, Options.Create(appSettings), NullLogger<AttendanceService>.Instance);
 
+// ── 轻量动作：管理员手动调整某人某天的上下班卡（等价于"补卡/手动调整打卡"页面，会重算工时/状态）──
+if (args.Contains("--adjust-punch"))
+{
+    var date     = DateOnly.Parse(Arg("--date") ?? throw new ArgumentException("缺少 --date（例：2026-11-07）"));
+    var clockIn  = Arg("--in")  is { } inArg  ? DateTime.Parse(inArg)  : (DateTime?)null;
+    var clockOut = Arg("--out") is { } outArg ? DateTime.Parse(outArg) : (DateTime?)null;
+    var remark   = Arg("--remark");
+    var targetUser = await db.Users.FirstOrDefaultAsync(x => x.EmployeeNo == userNo)
+                     ?? throw new InvalidOperationException($"找不到工号 {userNo}");
+
+    if (dryRun)
+    {
+        Console.WriteLine($"[预演] 将把 {targetUser.RealName}（{userNo}）{date:yyyy-MM-dd} 的上下班卡调整为："
+                          + $"上班={(clockIn?.ToString("MM-dd HH:mm") ?? "空")}、下班={(clockOut?.ToString("MM-dd HH:mm") ?? "空")}");
+        return;
+    }
+
+    await attendance.AdminAdjustPunchAsync(targetUser.Id, date, clockIn, clockOut,
+        remark ?? "维护工具手动调整打卡", "维护工具");
+    var rec = await db.AttendanceRecords.AsNoTracking()
+        .FirstOrDefaultAsync(x => x.UserId == targetUser.Id && x.WorkDate == date);
+    Console.WriteLine(rec is null
+        ? $"已调整 {userNo} {date:yyyy-MM-dd}，但没有生成考勤记录"
+        : $"已调整 {userNo} {date:yyyy-MM-dd}：状态={(int)rec.AttendanceStatus} "
+          + $"上班={rec.ClockInTime:MM-dd HH:mm} 下班={rec.ClockOutTime:MM-dd HH:mm} "
+          + $"正班={rec.ActualWorkHours:0.##}h 加班={rec.OvertimeHours:0.##}h 迟到={rec.LateMinutes}分 早退={rec.EarlyLeaveMinutes}分");
+    return;
+}
+
 // ── 轻量动作：只重新生成某人某月的月度汇总（手工订正考勤记录之后用）────────────────
 if (args.Contains("--regen-summary"))
 {
