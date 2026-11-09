@@ -123,6 +123,7 @@ public class MidCheckAsClockOutTests : SqliteTestBase
         var svc = Svc(db);
 
         Assert.True(await svc.SettleHalfDayByMidCheckAsync(uid, Nov3));
+        await db.SaveChangesAsync();   // 结算方法只改实体不落库（正常由补算流程统一保存），测试里要自己存
         var first = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Nov3);
         var noteAfterFirst  = first.ApprovalNote;
         var hoursAfterFirst = first.ActualWorkHours;

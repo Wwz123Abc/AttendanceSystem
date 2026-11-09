@@ -409,11 +409,11 @@ public class HourlyWorkModeTests : SqliteTestBase
             var row = rows.Single(r => r.WorkDate == Tue);
             Assert.Equal(At(19, 30), row.NewIn);
             Assert.Equal(Tue.AddDays(1).ToDateTime(new TimeOnly(8, 4)), row.NewOut);
-            Assert.Equal(10.5m, row.NewHours);   // 20:00–次日 08:04 扣 1.5 小时；以前按日历日分组、次日卡还被 07:00 规则过滤 → 算成 0
+            Assert.Equal(11m, row.NewHours);   // 19:30–次日 08:04（该日期还是老口径：19:30 早到计入）= 754 分钟 − 夜班饭点 90 分钟 → 11.07 → 向下取整 11；以前按日历日分组、次日卡还被 07:00 规则过滤 → 算成 0
         }
 
         using (var db = CreateContext())
             await Svc(db).RebuildHourlyRecordsAsync([gid], Tue, Tue, dryRun: false);
-        Assert.Equal(10.5m, (await TueRecordAsync(uid)).ActualWorkHours);
+        Assert.Equal(11m, (await TueRecordAsync(uid)).ActualWorkHours);
     }
 }

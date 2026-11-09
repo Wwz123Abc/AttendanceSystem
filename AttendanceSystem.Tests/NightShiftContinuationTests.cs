@@ -259,7 +259,7 @@ public class NightShiftContinuationTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 晚班一次卡都没打_拖到下班时间后几小时才打第一次卡_仍记到昨天那班_不再被误判成打得太早()
+    public async Task 晚班漏打上班卡_拖到下班时间后才打第一次卡_记成昨天那班的下班卡()
     {
         var today     = DateOnly.FromDateTime(DateTime.Today);
         var yesterday = today.AddDays(-1);
@@ -297,7 +297,10 @@ public class NightShiftContinuationTests : SqliteTestBase
         using var check = CreateContext();
         Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == today));   // 不会凭空多出"今天"的记录
         var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
-        Assert.NotNull(rec.ClockInTime);
+        // 打卡时间已经过了应下班时间：这张只能是昨晚那班的下班卡，不能记成"很晚的上班卡"
+        // （缺的上班卡走补卡流程；2026-11-09 肖臻 11-07 的问题就是这么来的）
+        Assert.Null(rec.ClockInTime);
+        Assert.NotNull(rec.ClockOutTime);
     }
 
     [Fact]
@@ -343,7 +346,7 @@ public class NightShiftContinuationTests : SqliteTestBase
         using (var db = CreateContext())
             Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == yesterday));   // 驳回没有留下任何考勤记录
 
-        // 现场补打：先是"很晚的上班卡"（追认昨晚），紧接着真正的下班卡——两次都是独立的请求/DbContext
+        // 现场补打：过了应下班时间再打，记成昨晚那班的下班卡（缺上班卡）；两次都是独立的请求/DbContext
         using (var db = CreateContext())
         {
             var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance);
@@ -361,11 +364,9 @@ public class NightShiftContinuationTests : SqliteTestBase
         {
             Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == today));   // 不会凭空多出"今天"的记录
             var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == yesterday);
-            Assert.NotNull(rec.ClockInTime);
+            // 过了应下班时间：两次都只能落成"下班卡"，记录里缺上班卡（补卡被驳回了，本来就该缺）
+            Assert.Null(rec.ClockInTime);
             Assert.NotNull(rec.ClockOutTime);
-            // 用 >= 而不是 >：两次打卡在测试里几乎同时发生，可能落在同一分钟（打卡时间精确到分钟），
-            // 这里只验证没有再出现"下班时间倒挂在上班时间之前"那种原始 bug，不要求严格晚于
-            Assert.True(rec.ClockOutTime >= rec.ClockInTime);   // 昨晚这班完整收尾（上下班卡都有，且顺序没有倒挂）
         }
     }
 

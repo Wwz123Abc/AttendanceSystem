@@ -266,11 +266,17 @@ public partial class AttendanceService
             records.TryGetValue((u.Id, d), out var rec);
             candsByUserDay.TryGetValue((u.Id, d), out var dayPunches);
             var punches = dayPunches ?? [];
-            // 候选时刻：这天的打卡（已按归属日分好）+ 记录上已有的上下班时间（补卡审批只改记录、不一定有打卡流水；
-            // 夜班的下班时间本来就在次日，这里不再按"同一天"过滤）
+            // 候选时刻：优先用这天的原始打卡（已按归属日分好）。
+            // 记录上已有的上下班时间只在"这天完全没有打卡流水"时兜底——补卡审批只改记录、不一定有打卡流水；
+            // 有打卡流水时以打卡为准，否则旧逻辑写错的上下班时间（比如凌晨 00:30）重建时会被又当真一遍
+            // （2026-11-09：历史重建测试"凌晨 00:30 那个无效，改成真实最晚打卡"一直没跑通，CI 因此长期红）。
+            // 夜班的下班时间本来就在次日，这里不再按"同一天"过滤。
             var cands = new List<DateTime>(punches);
-            if (rec?.ClockInTime is { } rci0) cands.Add(rci0);
-            if (rec?.ClockOutTime is { } rco0) cands.Add(rco0);
+            if (punches.Count == 0)
+            {
+                if (rec?.ClockInTime is { } rci0) cands.Add(rci0);
+                if (rec?.ClockOutTime is { } rco0) cands.Add(rco0);
+            }
             cands = cands.Distinct().OrderBy(x => x).ToList();
             if (rec is null && cands.Count == 0) continue;
 

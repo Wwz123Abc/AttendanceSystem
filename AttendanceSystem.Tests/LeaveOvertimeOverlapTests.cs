@@ -105,6 +105,15 @@ public class LeaveOvertimeOverlapTests : SqliteTestBase
             new DateOnly(2026, 10, 20).ToDateTime(new TimeOnly(8, 30)),
             new DateOnly(2026, 11, 20).ToDateTime(new TimeOnly(17, 30)));
 
+        // 重叠校验按"那天排的班次"判断是不是休息日，所以周六也要有一条排班记录（同班次，配置里周六日休息）；
+        // 没排班的那天按自然日算（跟 ComputeLeaveHoursForDay 的口径一致），那种情况本来就算请假
+        using (var seed = CreateContext())
+        {
+            var shiftId = seed.ShiftAssignments.Where(a => a.UserId == uid).Select(a => a.ShiftScheduleId).First();
+            seed.ShiftAssignments.Add(new ShiftAssignment { UserId = uid, WorkDate = saturday, ShiftScheduleId = shiftId });
+            await seed.SaveChangesAsync();
+        }
+
         using var db = CreateContext();
         await LeaveOvertimeOverlapGuard.EnsureNoOverlapAsync(
             db, uid, saturday.ToDateTime(new TimeOnly(8, 30)), saturday.ToDateTime(new TimeOnly(21, 0)), ApprovalType.Overtime);
