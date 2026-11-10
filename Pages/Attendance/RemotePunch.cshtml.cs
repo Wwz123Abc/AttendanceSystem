@@ -151,7 +151,10 @@ public class RemotePunchModel(
             // 上班卡的合理性校验放在所有（付费的）人脸识别之前：夜班刚打完下班卡又点了一次、跨天班次打得离上班时间太早，
             // 直接提示原因，不生成错的上班卡，也不花识别费用（2026-09-28 线上 13 条夜班记录被这样弄乱）
             if (type == PunchType.ClockIn && await attendanceService.GetClockInRejectionAsync(CurrentUserId, DateTime.Now) is { } clockInRejection)
+            {
+                logger.LogWarning("远程打卡预检被拒绝：UserId={UserId} 原因={Reason}", CurrentUserId, clockInRejection);
                 throw new BusinessException(clockInRejection);
+            }
 
             await EnforceVerifyIntervalAsync(type, todayBeforePunch);
 

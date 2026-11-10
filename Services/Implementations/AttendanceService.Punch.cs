@@ -26,7 +26,17 @@ public partial class AttendanceService
         {
             try
             {
-                return await PunchCoreAsync(userId, request, skipLocationCheck);
+                var response = await PunchCoreAsync(userId, request, skipLocationCheck);
+                // 打卡被拒以前只有员工页面上能看到原因，后台没有任何记录——员工说"打不了卡"时
+                // 运维查不到是谁、什么时候、想打什么卡、因为什么被拒（2026-11-10 吕政隆打不了下班卡才发现）。
+                // 这里统一记一条：成功记 Information，被拒记 Warning。
+                if (response.Success)
+                    logger.LogInformation("打卡成功：用户 {UserId} 类型 {PunchType} 时间 {PunchTime:yyyy-MM-dd HH:mm} 状态 {Status}",
+                        userId, request.PunchType, response.PunchTime, response.Status);
+                else
+                    logger.LogWarning("打卡被拒绝：用户 {UserId} 类型 {PunchType} 原因 {Reason}",
+                        userId, request.PunchType, response.Message);
+                return response;
             }
             catch (DbUpdateException ex) when (attempt < MaxPunchAttempts)
             {
