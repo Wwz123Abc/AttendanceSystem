@@ -95,4 +95,58 @@ public class NightShiftMissingClockInTests : SqliteTestBase
         Assert.Equal(expected, AttendanceService.IsFirstPunchAfterShiftEnd(
             NightDate, new DateTime(year, month, day, hour, minute, 0), shift, isRestDay: false));
     }
+    // ── 2026-11-10 线上事故回归：白班员工前一天没打卡（旷工/休息），今天早上的卡不能被判成下班卡 ──
+
+    private int SeedDayEmployeeAbsentYesterday()
+    {
+        using var db = CreateContext();
+        var group = new AttendanceGroup { GroupName = "白班误判回归组" };
+        db.AttendanceGroups.Add(group);
+        db.SaveChanges();
+        var shift = DayShift();                       // 08:30–17:30，非跨天
+        shift.AttendanceGroupId = group.Id;
+        db.ShiftSchedules.Add(shift);
+        db.SaveChanges();
+        var user = U("DS1", "白班误判回归");
+        user.AttendanceGroupId = group.Id;
+        user.HireDate = new DateOnly(2026, 1, 1);
+        db.Users.Add(user);
+        db.SaveChanges();
+        foreach (var d in new[] { new DateOnly(2026, 11, 9), new DateOnly(2026, 11, 10) })
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = d, ShiftScheduleId = shift.Id });
+        db.AttendanceRecords.Add(new AttendanceRecord { UserId = user.Id, WorkDate = new DateOnly(2026, 11, 9), AttendanceStatus = AttendanceStatus.Absent });
+        db.SaveChanges();
+        return user.Id;
+    }
+
+    [Fact]
+    public async Task 白班员工前一天没打卡_今天早上的卡仍记成上班卡()
+    {
+        var uid = SeedDayEmployeeAbsentYesterday();
+        using var db = CreateContext();
+        var resp = await SvcAt(db, new DateTime(2026, 11, 10, 8, 20, 0))
+            .PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockIn }, skipLocationCheck: true);
+        Assert.True(resp.Success, resp.Message);
+
+        db.ChangeTracker.Clear();
+        var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == new DateOnly(2026, 11, 10));
+        Assert.Equal(new DateTime(2026, 11, 10, 8, 20, 0), rec.ClockInTime);   // 记成上班卡
+        Assert.Null(rec.ClockOutTime);                                        // 不能被记成"只打下班卡"
+    }
+
+    [Fact]
+    public void 夜班续接窗口判定_白班不适用_夜班只认应下班后6小时内()
+    {
+        var day = DayShift();
+        Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(
+            new DateOnly(2026, 11, 9), new DateTime(2026, 11, 10, 8, 20, 0), day));
+
+        var night = NightShift();
+        night.WorkStartTime = new TimeOnly(20, 30);
+        night.WorkEndTime   = new TimeOnly(5, 30);
+        var yesterday = new DateOnly(2026, 11, 9);
+        Assert.True (AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 8, 20, 0), night));  // 05:30~11:30 内
+        Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 12, 0, 0), night));  // 超过 11:30
+        Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 4, 0, 0), night));   // 还没到应下班
+    }
 }

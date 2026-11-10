@@ -297,8 +297,8 @@ public class RemotePunchModel(
                 .Where(r => r.UserId == CurrentUserId && r.WorkDate == yesterday)
                 .Select(r => r.ClockInTime)
                 .FirstOrDefaultAsync();
-            if (yesterdayShift is not null && yesterdayClockIn is null
-                && AttendanceService.IsFirstPunchAfterShiftEnd(yesterday, DateTime.Now, yesterdayShift, isRestDay: false))
+            if (yesterdayClockIn is null
+                && AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, DateTime.Now, yesterdayShift))
                 return (PunchType.ClockOut, todayBeforePunch);
         }
         var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;

@@ -110,10 +110,12 @@ public partial class AttendanceService
         if (!hourly && punchType == PunchType.ClockIn)
         {
             var corrShift = (await GetShiftAssignmentAsync(userId, workDate))?.ShiftSchedule;
-            var corrRest  = IsNonCompRestDay(workDate, corrShift);
             var corrRec   = openYesterdayRecord ?? await db.AttendanceRecords
                 .FirstOrDefaultAsync(r => r.UserId == userId && r.WorkDate == workDate);
-            if (corrRec?.ClockInTime is null && IsFirstPunchAfterShiftEnd(workDate, punchTime, corrShift, corrRest))
+            // 只对"跨天夜班漏打上班卡、在续接窗口内补打"这一种情况强制下班卡；
+            // 不能只看"过了应下班时间"——白班(非跨天)今天早上 08:30 打卡也"过了昨天应下班时间"，
+            // 会被误判成下班卡（2026-11-10 线上 15 人受影响）
+            if (corrRec?.ClockInTime is null && IsNightShiftClockOutAfterEnd(workDate, punchTime, corrShift))
                 punchType = PunchType.ClockOut;
         }
 

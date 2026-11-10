@@ -199,6 +199,20 @@ public partial class AttendanceService
     /// （夜班的下班时间在第二天，晚上首次打卡本来就是上班）；没排班、休息日不判断。
     /// </summary>
     /// <summary>
+    /// 夜班漏打上班卡、次日早上补打的下班卡判定（手机打卡页和打卡入口共用）：
+    /// 昨天排的是**跨天夜班**、昨天一次卡都没打、今天这张卡落在"昨天班次应下班时间 ~ +续接窗口（6 小时）"内
+    /// → 这张只能是昨晚那班的下班卡，不是今天的上班卡。
+    /// ★ 必须要求跨天夜班：白班的应下班时间在昨天下午，今天任何打卡都晚于它——不加这条限制，
+    ///   就会把今天早上的上班卡误判成"昨天的下班卡"（2026-11-10 线上 15 人受影响，全是前一天没打卡的人）。
+    /// </summary>
+    public static bool IsNightShiftClockOutAfterEnd(DateOnly yesterday, DateTime punchTime, ShiftSchedule? yesterdayShift)
+    {
+        if (yesterdayShift is not { IsCrossDay: true }) return false;
+        var scheduledEnd = yesterday.ToDateTime(yesterdayShift.WorkEndTime).AddDays(1);
+        return punchTime >= scheduledEnd && punchTime <= scheduledEnd.AddHours(NightShiftCarryOverHours);
+    }
+
+    /// <summary>
     /// 这张卡是不是"已经过了这个考勤日班次的应下班时间"（用来判断它不可能是上班卡）。
     /// ★ 跨天班次（夜班）的应下班在**次日**：比如 11-07 的晚班 20:30–05:30，应下班是 11-08 05:30，
     ///   11-08 08:30 打的卡已经过了应下班，只能算 11-07 那张班的下班卡（2026-11-09 肖臻 11-07 的问题：
