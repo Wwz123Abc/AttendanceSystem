@@ -39,6 +39,27 @@ await using var db = new AttendanceDbContext(builder.Options);
 var appSettings = cfg.GetSection(AppSettingsOptions.SectionName).Get<AppSettingsOptions>() ?? new AppSettingsOptions();
 var attendance = new AttendanceService(db, Options.Create(appSettings), NullLogger<AttendanceService>.Instance);
 
+// ── 轻量动作：按现有上下班卡重算某人某天的工时/状态/迟到早退（打卡类型被误判后订正记录用）──
+if (args.Contains("--recalc-hours"))
+{
+    var date = DateOnly.Parse(Arg("--date") ?? throw new ArgumentException("缺少 --date（例：2026-11-09）"));
+    var targetUser = await db.Users.FirstOrDefaultAsync(x => x.EmployeeNo == userNo)
+                     ?? throw new InvalidOperationException($"找不到工号 {userNo}");
+    if (dryRun)
+    {
+        Console.WriteLine($"[预演] 将按现有上下班卡重算 {targetUser.RealName}（{userNo}）{date:yyyy-MM-dd} 的工时/状态");
+        return;
+    }
+    var changed = await attendance.RecalcHoursAfterScheduleAsync([targetUser.Id], date, date);
+    var rec = await db.AttendanceRecords.AsNoTracking()
+        .FirstOrDefaultAsync(x => x.UserId == targetUser.Id && x.WorkDate == date);
+    Console.WriteLine(rec is null
+        ? $"已重算 {userNo} {date:yyyy-MM-dd}：没有考勤记录"
+        : $"已重算 {userNo} {date:yyyy-MM-dd}（改动 {changed} 条）：状态={(int)rec.AttendanceStatus} "
+          + $"上班={rec.ClockInTime:MM-dd HH:mm} 下班={rec.ClockOutTime:MM-dd HH:mm} "
+          + $"正班={rec.ActualWorkHours:0.##}h 迟到={rec.LateMinutes}分 早退={rec.EarlyLeaveMinutes}分");
+    return;
+}
 // ── 轻量动作：管理员手动调整某人某天的上下班卡（等价于"补卡/手动调整打卡"页面，会重算工时/状态）──
 if (args.Contains("--adjust-punch"))
 {
