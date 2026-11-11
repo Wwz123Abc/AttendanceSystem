@@ -295,13 +295,19 @@ public class RemotePunchModel(
         // 里还有同一道权威兜底，这里提前判是为了页面预览和实际操作保持一致）
         if (todayBeforePunch?.ClockInTime is null)
         {
+            // 跟服务层 ResolvePunchWorkDateAsync 同一个守卫：今天自己的班次已经到了"可以开始打上班卡"的时刻
+            // （应上班前 CrossDayClockInEarlyHours 小时内），这次的卡就算今天的、不再追认成昨天的。
+            // 不加这条的话，夜班漏打上班卡 + 今天排白班的人，早上来上班会被页面判成"昨天的下班卡"。
+            var todayShiftAvailable = todayShift is not null
+                && DateTime.Now >= today.ToDateTime(todayShift.WorkStartTime).AddHours(-AttendanceService.CrossDayClockInEarlyHours);
+
             var yesterday = today.AddDays(-1);
             var yesterdayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, yesterday))?.ShiftSchedule;
             var yesterdayClockIn = await db.AttendanceRecords
                 .Where(r => r.UserId == CurrentUserId && r.WorkDate == yesterday)
                 .Select(r => r.ClockInTime)
                 .FirstOrDefaultAsync();
-            if (yesterdayClockIn is null
+            if (!todayShiftAvailable && yesterdayClockIn is null
                 && AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, DateTime.Now, yesterdayShift))
                 return (PunchType.ClockOut, todayBeforePunch);
             // 白班/当天班次已经过了应下班、还没打过上班卡：第一次打卡只能是下班卡（漏打上班卡）。
