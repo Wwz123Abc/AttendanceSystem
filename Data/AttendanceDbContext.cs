@@ -44,6 +44,7 @@ public class AttendanceDbContext : DbContext
     public DbSet<AgentPendingAction>        AgentPendingActions        => Set<AgentPendingAction>();
     public DbSet<AgentActionLog>            AgentActionLogs            => Set<AgentActionLog>();
     public DbSet<PunchAdjustLog>            PunchAdjustLogs            => Set<PunchAdjustLog>();
+    public DbSet<ShiftAssignmentLog>        ShiftAssignmentLogs        => Set<ShiftAssignmentLog>();   // 排班修改留痕（2026-11-11）
     public DbSet<SystemSetting>             SystemSettings             => Set<SystemSetting>();
     public DbSet<AuditIssueLog>             AuditIssueLogs             => Set<AuditIssueLog>();
     public DbSet<AttendanceDispute>         AttendanceDisputes         => Set<AttendanceDispute>();

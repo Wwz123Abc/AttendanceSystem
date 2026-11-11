@@ -564,6 +564,11 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                 .Where(a => userIds.Contains(a.UserId) && a.WorkDate >= start && a.WorkDate <= end)
                 .ToDictionaryAsync(a => (a.UserId, a.WorkDate));
 
+            // 排班修改留痕（2026-11-11 用户要求）：把班次名称一次读出来，循环里直接记"旧班次→新班次、谁改的"
+            var shiftNameById = await db.ShiftSchedules.Select(s => new { s.Id, s.ShiftName })
+                .ToDictionaryAsync(x => x.Id, x => x.ShiftName);
+            var shiftLog = new ShiftAssignmentLogService(db);
+
             int count = 0, skipped = 0, skippedPast = 0;
             var todayForAssign = DateOnly.FromDateTime(DateTime.Today);
             for (var d = start; d <= end; d = d.AddDays(1))
@@ -582,6 +587,9 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                             skippedPast++;
                             continue;
                         }
+                        if (existing.ShiftScheduleId != AssignShiftId)
+                            shiftLog.Add(uid, d, existing.ShiftScheduleId, shiftNameById.GetValueOrDefault(existing.ShiftScheduleId),
+                                AssignShiftId, shift.ShiftName, "修改", "排班管理", cu.UserId, cu.RealName);
                         existing.ShiftScheduleId = AssignShiftId;
                     }
                     else
@@ -595,6 +603,7 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
                             CreatedAt       = DateTime.Now
                         };
                         db.ShiftAssignments.Add(newAssignment);
+                        shiftLog.Add(uid, d, null, null, AssignShiftId, shift.ShiftName, "新增", "排班管理", cu.UserId, cu.RealName);
                         existingAssignments[(uid, d)] = newAssignment;   // 存进字典，避免万一循环重复处理同一天同一人时又新建一条
                     }
                     count++;

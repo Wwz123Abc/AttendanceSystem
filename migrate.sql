@@ -3552,5 +3552,78 @@ DELIMITER ;
 CALL MigrationsScript();
 DROP PROCEDURE MigrationsScript;
 
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261111061704_AddShiftAssignmentLog') THEN
+
+    CREATE TABLE `ShiftAssignmentLog` (
+        `Id` int NOT NULL AUTO_INCREMENT,
+        `UserId` int NOT NULL,
+        `WorkDate` date NOT NULL,
+        `OldShiftScheduleId` int NULL,
+        `OldShiftName` varchar(50) CHARACTER SET utf8mb4 NULL,
+        `NewShiftScheduleId` int NULL,
+        `NewShiftName` varchar(50) CHARACTER SET utf8mb4 NULL,
+        `Action` varchar(10) CHARACTER SET utf8mb4 NOT NULL,
+        `Source` varchar(20) CHARACTER SET utf8mb4 NOT NULL,
+        `OperatorUserId` int NULL,
+        `OperatorName` varchar(50) CHARACTER SET utf8mb4 NULL,
+        `Remark` varchar(200) CHARACTER SET utf8mb4 NULL,
+        `CreatedAt` datetime(6) NOT NULL,
+        CONSTRAINT `PK_ShiftAssignmentLog` PRIMARY KEY (`Id`),
+        CONSTRAINT `FK_ShiftAssignmentLog_User_UserId` FOREIGN KEY (`UserId`) REFERENCES `User` (`Id`) ON DELETE CASCADE
+    ) CHARACTER SET=utf8mb4;
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261111061704_AddShiftAssignmentLog') THEN
+
+    CREATE INDEX `IX_ShiftAssignmentLog_CreatedAt` ON `ShiftAssignmentLog` (`CreatedAt`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261111061704_AddShiftAssignmentLog') THEN
+
+    CREATE INDEX `IX_ShiftAssignmentLog_UserId_WorkDate` ON `ShiftAssignmentLog` (`UserId`, `WorkDate`);
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
+DROP PROCEDURE IF EXISTS MigrationsScript;
+DELIMITER //
+CREATE PROCEDURE MigrationsScript()
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM `__EFMigrationsHistory` WHERE `MigrationId` = '20261111061704_AddShiftAssignmentLog') THEN
+
+    INSERT INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
+    VALUES ('20261111061704_AddShiftAssignmentLog', '9.0.20');
+
+    END IF;
+END //
+DELIMITER ;
+CALL MigrationsScript();
+DROP PROCEDURE MigrationsScript;
+
 COMMIT;
 

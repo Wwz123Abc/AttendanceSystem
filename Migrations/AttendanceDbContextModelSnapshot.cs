@@ -1550,6 +1550,81 @@ namespace AttendanceSystem.Migrations
                     b.ToTable("ShiftAssignment");
                 });
 
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftAssignmentLog", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)")
+                        .HasColumnName("Action");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("CreatedAt");
+
+                    b.Property<string>("NewShiftName")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("NewShiftName");
+
+                    b.Property<int?>("NewShiftScheduleId")
+                        .HasColumnType("int")
+                        .HasColumnName("NewShiftScheduleId");
+
+                    b.Property<string>("OldShiftName")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("OldShiftName");
+
+                    b.Property<int?>("OldShiftScheduleId")
+                        .HasColumnType("int")
+                        .HasColumnName("OldShiftScheduleId");
+
+                    b.Property<string>("OperatorName")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)")
+                        .HasColumnName("OperatorName");
+
+                    b.Property<int?>("OperatorUserId")
+                        .HasColumnType("int")
+                        .HasColumnName("OperatorUserId");
+
+                    b.Property<string>("Remark")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)")
+                        .HasColumnName("Remark");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("Source");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int")
+                        .HasColumnName("UserId");
+
+                    b.Property<DateOnly>("WorkDate")
+                        .HasColumnType("date")
+                        .HasColumnName("WorkDate");
+
+                    b.HasKey("Id")
+                        .HasName("PK_ShiftAssignmentLog");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.HasIndex("UserId", "WorkDate");
+
+                    b.ToTable("ShiftAssignmentLog");
+                });
+
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftSchedule", b =>
                 {
                     b.Property<int>("Id")
@@ -2293,6 +2368,15 @@ namespace AttendanceSystem.Migrations
                     b.Navigation("ShiftSchedule");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftAssignmentLog", b =>
+                {
+                    b.HasOne("AttendanceSystem.Models.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("AttendanceSystem.Models.Entities.ShiftSchedule", b =>

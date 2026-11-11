@@ -440,6 +440,7 @@ public partial class AttendanceService
         var skipped = new List<DateOnly>();
         var targetShiftForGuard = await db.ShiftSchedules.FirstOrDefaultAsync(s => s.Id == shiftId);   // 夜班次日白班校验用
         var hourlyStartsForGuard = await LoadHourlyGroupStartsAsync();
+        var shiftLog = new ShiftAssignmentLogService(db);   // 转班回写也留痕（2026-11-11）
 
         // "这一天转班后最终会生效的班次"：区间内、且没被请假/出差/入职前跳过的日子 → 目标班次；
         // 被跳过的那天保持原班次（它压根不会改）；区间外就看库里现有排班。
@@ -469,10 +470,20 @@ public partial class AttendanceService
 
             if (existing.TryGetValue(d, out var a))
             {
-                if (a.ShiftScheduleId != shiftId) changed[d] = (a.ShiftSchedule.ShiftName, a.ShiftSchedule.IsCrossDay);
+                if (a.ShiftScheduleId != shiftId)
+                {
+                    changed[d] = (a.ShiftSchedule.ShiftName, a.ShiftSchedule.IsCrossDay);
+                    shiftLog.Add(approval.ApplicantUserId, d, a.ShiftScheduleId, a.ShiftSchedule.ShiftName,
+                        shiftId, targetShiftForGuard?.ShiftName, "修改", "转班审批", null, "转班审批", approval.RequestNo);
+                }
                 a.ShiftScheduleId = shiftId;
             }
-            else db.ShiftAssignments.Add(new ShiftAssignment { UserId = approval.ApplicantUserId, ShiftScheduleId = shiftId, WorkDate = d, IsAutoAssigned = false, CreatedAt = clock.LocalNow() });
+            else
+            {
+                db.ShiftAssignments.Add(new ShiftAssignment { UserId = approval.ApplicantUserId, ShiftScheduleId = shiftId, WorkDate = d, IsAutoAssigned = false, CreatedAt = clock.LocalNow() });
+                shiftLog.Add(approval.ApplicantUserId, d, null, null, shiftId, targetShiftForGuard?.ShiftName,
+                    "新增", "转班审批", null, "转班审批", approval.RequestNo);
+            }
             if (!existing.ContainsKey(d)) changed[d] = ("没排班", false);
             touchedMonths.Add((d.Year, d.Month));
         }

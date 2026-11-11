@@ -8,6 +8,7 @@ using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
+using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
 using AttendanceSystem.Models.Options;
 using Microsoft.EntityFrameworkCore;
@@ -938,12 +939,20 @@ public class UserManageModel(
 
             var today = DateOnly.FromDateTime(DateTime.Now);
             var start = hire > today ? hire : today;   // 入职日已经过去的，只排从今天起的班
+            var op = HttpContext.GetRequiredUser();
+            var shiftLog = new ShiftAssignmentLogService(db);
             for (var i = 0; i < ShiftDays; i++)
+            {
+                var workDate = start.AddDays(i);
                 db.ShiftAssignments.Add(new ShiftAssignment
                 {
-                    UserId = user.Id, ShiftScheduleId = shift.Id, WorkDate = start.AddDays(i),
+                    UserId = user.Id, ShiftScheduleId = shift.Id, WorkDate = workDate,
                     IsAutoAssigned = false, CreatedAt = DateTime.Now
                 });
+                // 排班修改留痕（2026-11-11）
+                shiftLog.Add(user.Id, workDate, null, null, shift.Id, shift.ShiftName,
+                    "新增", "新建员工", op.UserId, op.RealName);
+            }
             await db.SaveChangesAsync();
             return $"；已排班「{shift.ShiftName}」{start:MM/dd} 起共 {ShiftDays} 天";
         }
