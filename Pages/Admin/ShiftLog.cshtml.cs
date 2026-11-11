@@ -36,11 +36,16 @@ public class ShiftLogModel(AttendanceDbContext db, IDeptScopeService deptScopeSe
         if (EffectiveTo < EffectiveFrom) (EffectiveFrom, EffectiveTo) = (EffectiveTo, EffectiveFrom);
         var kw = string.IsNullOrWhiteSpace(Keyword) ? null : Keyword.Trim();
 
+        // 按"操作时间"筛，不是按考勤日：批量排班常常一次改到未来的日期（比如今天排 12 月），
+        // 按考勤日筛的话默认"最近 7 天"根本看不到这些刚做的修改（2026-11-11 自查发现）。
+        var fromDt = EffectiveFrom.ToDateTime(TimeOnly.MinValue);
+        var toDtExclusive = EffectiveTo.AddDays(1).ToDateTime(TimeOnly.MinValue);
+
         var visible = await deptScopeService.GetVisibleDeptIdsAsync(HttpContext.GetRequiredUser());
         Rows = await (
             from l in db.ShiftAssignmentLogs.AsNoTracking()
             join u in db.Users on l.UserId equals u.Id
-            where l.WorkDate >= EffectiveFrom && l.WorkDate <= EffectiveTo
+            where l.CreatedAt >= fromDt && l.CreatedAt < toDtExclusive
                   && (visible == null || (u.DepartmentId != null && visible.Contains(u.DepartmentId.Value)))
                   && (kw == null || u.RealName.Contains(kw) || u.EmployeeNo.Contains(kw))
             orderby l.Id descending

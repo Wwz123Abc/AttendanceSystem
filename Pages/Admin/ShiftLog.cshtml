@@ -7,16 +7,16 @@
 </div>
 <div class="text-muted small mb-3">
     每次排班被新增 / 修改（包括"排班管理"的批量排班、新建员工时的排班、转班审批回写）都会在这里留一条记录：
-    谁、什么时候、把谁的哪一天、从什么班次改成了什么班次。最多显示最近 1000 条。
+    谁、什么时候、把谁的哪一天、从什么班次改成了什么班次。上面按"操作时间"筛（不是考勤日——批量排班经常改到未来日期），最多显示 1000 条。
 </div>
 
 <form method="get" class="row g-2 align-items-end mb-3">
     <div class="col-auto">
-        <label class="form-label small mb-1">开始日期</label>
+        <label class="form-label small mb-1">操作时间 起</label>
         <input type="date" name="from" value="@Model.EffectiveFrom.ToString("yyyy-MM-dd")" class="form-control form-control-sm" />
     </div>
     <div class="col-auto">
-        <label class="form-label small mb-1">结束日期</label>
+        <label class="form-label small mb-1">操作时间 止</label>
         <input type="date" name="to" value="@Model.EffectiveTo.ToString("yyyy-MM-dd")" class="form-control form-control-sm" />
     </div>
     <div class="col-auto">
