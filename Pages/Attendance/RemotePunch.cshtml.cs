@@ -289,6 +289,7 @@ public class RemotePunchModel(
             return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, hourlyWorkDate.Value, hourlyShift, hourlyRec?.ClockInTime is not null), todayBeforePunch);
         }
         var workDate = todayBeforePunch?.WorkDate ?? today;
+        var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;
         // 夜班漏打上班卡、次日早上补打下班卡：如果现在已经过了"昨天那个跨天班次"的应下班时间，
         // 这张只能是昨天的下班卡，不能当今天的上班卡（2026-11-09 肖臻 11-07 的问题；服务层 PunchCoreAsync
         // 里还有同一道权威兜底，这里提前判是为了页面预览和实际操作保持一致）
@@ -303,8 +304,12 @@ public class RemotePunchModel(
             if (yesterdayClockIn is null
                 && AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, DateTime.Now, yesterdayShift))
                 return (PunchType.ClockOut, todayBeforePunch);
+            // 白班/当天班次已经过了应下班、还没打过上班卡：第一次打卡只能是下班卡（漏打上班卡）。
+            // 休息日不套这条（休息日来上班第一次打卡就是上班卡）。
+            if (AttendanceService.IsFirstPunchAfterShiftEnd(workDate, DateTime.Now, todayShift,
+                    AttendanceService.IsNonCompRestDay(workDate, todayShift)))
+                return (PunchType.ClockOut, todayBeforePunch);
         }
-        var todayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, workDate))?.ShiftSchedule;
         var type = todayBeforePunch?.ClockInTime is null ? PunchType.ClockIn
             : AttendanceService.IsEligibleClockOutCandidate(DateTime.Now, workDate, todayShift) ? PunchType.ClockOut
             : PunchType.MidCheck;

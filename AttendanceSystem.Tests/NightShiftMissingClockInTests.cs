@@ -150,4 +150,45 @@ public class NightShiftMissingClockInTests : SqliteTestBase
         Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 13, 1, 0), night));   // 超过 13:00
         Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 4, 0, 0), night));   // 还没到应下班
     }
+    /// <summary>
+    /// 2026-11-11 回归：白班员工漏打上班卡、晚上（过了应下班）第一次打卡，应记成下班卡；
+    /// 之前只对跨天夜班生效，白班会被记成"上班卡"（跟考勤机路径不一致）。
+    /// </summary>
+    [Fact]
+    public async Task 白班漏打上班卡_晚上第一次打卡_记成下班卡()
+    {
+        var day = new DateOnly(2026, 11, 10);
+        int uid;
+        using (var db = CreateContext())
+        {
+            var group = new AttendanceGroup { GroupName = "白班漏卡组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            var shift = DayShift();                       // 08:30–17:30，非跨天
+            shift.AttendanceGroupId = group.Id;
+            db.ShiftSchedules.Add(shift);
+            db.SaveChanges();
+            var user = U("DS2", "白班漏卡");
+            user.AttendanceGroupId = group.Id;
+            db.Users.Add(user);
+            db.SaveChanges();
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = day, ShiftScheduleId = shift.Id });
+            db.SaveChanges();
+            uid = user.Id;
+        }
+
+        using (var db = CreateContext())
+        {
+            var svc = SvcAt(db, new DateTime(2026, 11, 10, 18, 0, 0));   // 已过应下班 17:30
+            var resp = await svc.PunchAsync(uid, new PunchRequestDto { PunchType = PunchType.ClockIn }, skipLocationCheck: true);
+            Assert.True(resp.Success, resp.Message);
+        }
+
+        using (var db = CreateContext())
+        {
+            var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == day);
+            Assert.Null(rec.ClockInTime);                                  // 上班卡仍然缺（走补卡）
+            Assert.Equal(new DateTime(2026, 11, 10, 18, 0, 0), rec.ClockOutTime);
+        }
+    }
 }
