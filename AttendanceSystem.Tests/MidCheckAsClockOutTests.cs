@@ -268,7 +268,7 @@ public class MidCheckAsClockOutTests : SqliteTestBase
         using (var db = CreateContext())
         {
             var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance,
-                new FixedClock(new DateTime(2026, 11, 11, 11, 45, 0)));  // 过了续接窗口才允许结算
+                new FixedClock(new DateTime(2026, 11, 11, 13, 15, 0)));  // 过了续接窗口（05:30 + 7.5h = 13:00）才允许结算
             Assert.True(await svc.SettleHalfDayByMidCheckAsync(uid, night));
         }
     }

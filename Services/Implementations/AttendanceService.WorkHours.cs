@@ -573,7 +573,10 @@ public partial class AttendanceService
         //   提前结算成"中午就走了"，葛庆腾/雷得莹 11-10 就是这样被误结算的。白班同理要等应下班 + 6 小时
         //   （每晚 23:55 那次补算正好满足）。
         var scheduledEnd = ResolveShiftTime(workDate, shift.WorkEndTime, shift);
-        if (clock.LocalNow() <= scheduledEnd.AddHours(NightShiftCarryOverHours)) return false;
+        // 夜班用续接窗口（2026-11-11 起 7.5 小时 → 次日 13:00）；白班保持 6 小时，
+        // 这样每晚 23:55 的补算仍然能结算当天忘了打下班卡的白班记录
+        var settleGraceHours = shift.IsCrossDay ? NightShiftCarryOverHours : 6d;
+        if (clock.LocalNow() <= scheduledEnd.AddHours(settleGraceHours)) return false;
         // 休息日正班本来就是 0；但计时工没有休息日概念（跟发薪表同一口径），休息日来上班照常按实际在岗算
         if (!await IsHourlyOnAsync(groupId, workDate) && IsNonCompRestDay(workDate, shift)) return false;
 

@@ -64,15 +64,15 @@ public class NightShiftContinuationTests : SqliteTestBase
     }
 
     [Fact]
-    public void 夜班续接时间窗_下班时间后6小时内算昨天_之后不算()
+    public void 夜班续接时间窗_下班时间后7点半内算昨天_之后不算()
     {
         var shift = NightShift();   // 周一夜班，周二 08:00 下班
-        Assert.True(AttendanceService.IsWithinNightCarryOver(Mon, shift, Tue.ToDateTime(new TimeOnly(14, 0))));
-        Assert.False(AttendanceService.IsWithinNightCarryOver(Mon, shift, Tue.ToDateTime(new TimeOnly(14, 1))));
+        Assert.True(AttendanceService.IsWithinNightCarryOver(Mon, shift, Tue.ToDateTime(new TimeOnly(15, 30))));
+        Assert.False(AttendanceService.IsWithinNightCarryOver(Mon, shift, Tue.ToDateTime(new TimeOnly(15, 31))));
     }
 
     [Fact]
-    public void 一次卡都没打的很晚上班卡_宽限期要跟续接窗口一致_下班时间后6小时内仍算昨天()
+    public void 一次卡都没打的很晚上班卡_宽限期要跟续接窗口一致_下班时间后7点半内仍算昨天()
     {
         // 2026-09-30 反馈：晚班员工缺了上班卡，后面的午间打卡和下班打卡都打不了。根因是这条判断以前卡在
         // "昨晚班次应下班时间"那一刻就截止，比"已经打了上班卡、只是没打下班卡"能续接的时间窗（下班时间后
@@ -80,8 +80,8 @@ public class NightShiftContinuationTests : SqliteTestBase
         // 打第一次卡的人，会掉进这段空档，被拿"今晚"的班次误判成"打得太早"。
         var shift = NightShift();   // 周一夜班，周二 08:00 下班
         Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(8, 0)), null));    // 正好下班时间：以前、现在都算
-        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(14, 0)), null));   // 下班后6小时内：以前不算，现在算
-        Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(14, 1)), null));  // 超过6小时宽限：仍然不算
+        Assert.True(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(15, 30)), null));   // 下班后7.5小时内：算（2026-11-11 延长到 13:00 同口径）
+        Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, null, Tue.ToDateTime(new TimeOnly(15, 31)), null));  // 超过7.5小时宽限：仍然不算
         Assert.False(AttendanceService.IsVeryLateClockInForYesterdayShift(Mon, shift, Mon.ToDateTime(new TimeOnly(20, 0)), Tue.ToDateTime(new TimeOnly(9, 0)), null));   // 已经打过上班卡的不归这条管
     }
 
@@ -463,8 +463,8 @@ public class NightShiftContinuationTests : SqliteTestBase
     [InlineData(0, 29, false)]     // 昨晚 20:00 上班，现在凌晨 00:29：还在昨晚班次结束（08:00）之前，应该放行
     [InlineData(7, 59, false)]     // 还差 1 分钟到昨晚班次的下班时间：仍放行
     [InlineData(8, 1, false)]      // 刚过昨晚班次下班时间：仍在 6 小时宽限期内，仍然放行（2026-09-30 修复前这里会被拒绝）
-    [InlineData(14, 0, false)]     // 下班时间后整 6 小时：宽限期最后一刻，仍放行
-    public async Task 夜班一次卡都没打_凌晨才打卡_只要没超过昨晚班次下班时间加6小时宽限就不算太早(int h, int m, bool stillRejected)
+    [InlineData(14, 0, false)]     // 今天班次已到可打卡时刻：仍放行（夜班宽限 2026-11-11 起改为 7.5 小时）
+    public async Task 夜班一次卡都没打_凌晨才打卡_只要没超过昨晚班次下班时间加续接宽限就不算太早(int h, int m, bool stillRejected)
     {
         var (uid, _) = SeedNightWorld();
         using (var db = CreateContext())

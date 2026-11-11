@@ -135,7 +135,7 @@ public class NightShiftMissingClockInTests : SqliteTestBase
     }
 
     [Fact]
-    public void 夜班续接窗口判定_白班不适用_夜班只认应下班后6小时内()
+    public void 夜班续接窗口判定_白班不适用_夜班只认应下班后7点半内()
     {
         var day = DayShift();
         Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(
@@ -145,8 +145,9 @@ public class NightShiftMissingClockInTests : SqliteTestBase
         night.WorkStartTime = new TimeOnly(20, 30);
         night.WorkEndTime   = new TimeOnly(5, 30);
         var yesterday = new DateOnly(2026, 11, 9);
-        Assert.True (AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 8, 20, 0), night));  // 05:30~11:30 内
-        Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 12, 0, 0), night));  // 超过 11:30
+        Assert.True (AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 8, 20, 0), night));  // 05:30~13:00 内
+        Assert.True (AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 12, 30, 0), night));  // 12:30 仍在窗口内（2026-11-11 延长到 13:00）
+        Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 13, 1, 0), night));   // 超过 13:00
         Assert.False(AttendanceService.IsNightShiftClockOutAfterEnd(yesterday, new DateTime(2026, 11, 10, 4, 0, 0), night));   // 还没到应下班
     }
 }
