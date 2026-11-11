@@ -447,6 +447,12 @@ public class ZKDeviceSyncService(
                 ? AttendanceService.ApplyLeaveHoursCap(computedHours, record.LeaveHours,
                     AttendanceService.ResolveDailyStandardHours(shift, appOptions.Value.DefaultDailyWorkHours))
                 : computedHours;
+            // 迟到满 4 小时按半天旷工：考勤机同步路径也要套，否则同一张卡走设备同步和走手机打卡
+            // 算出来的工时不一样（2026-11-10：刘金城 11-09 迟到 259 分钟，设备打卡算出 4.5h，
+            // 按口径应为半天 4h；核对里报"工时与打卡不符"才发现设备路径漏了）
+            if (AttendanceService.IsHalfDayAbsentByLate(record, workDate, shift, hourly: false))
+                record.ActualWorkHours = AttendanceService.ApplyHalfDayAbsentCap(
+                    record.ActualWorkHours, shift, appOptions.Value.DefaultDailyWorkHours);
         }
     }
     }

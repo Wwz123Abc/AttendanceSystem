@@ -568,6 +568,12 @@ public partial class AttendanceService
             .Where(a => a.UserId == userId && a.WorkDate == workDate)
             .Select(a => a.ShiftSchedule).FirstOrDefaultAsync(ct);
         if (shift is null) return false;   // 没排班：没有班次可对照
+        // ★ 还没到"应下班时间 + 续接窗口"之前不能结算（2026-11-11 修复）：夜班应下班在次日 05:30，
+        //   员工在 11:30 前还可以补打下班卡；以前应用一重启（比如上午 10:35 部署）就按午间卡把 11-10 的夜班
+        //   提前结算成"中午就走了"，葛庆腾/雷得莹 11-10 就是这样被误结算的。白班同理要等应下班 + 6 小时
+        //   （每晚 23:55 那次补算正好满足）。
+        var scheduledEnd = ResolveShiftTime(workDate, shift.WorkEndTime, shift);
+        if (clock.LocalNow() <= scheduledEnd.AddHours(NightShiftCarryOverHours)) return false;
         // 休息日正班本来就是 0；但计时工没有休息日概念（跟发薪表同一口径），休息日来上班照常按实际在岗算
         if (!await IsHourlyOnAsync(groupId, workDate) && IsNonCompRestDay(workDate, shift)) return false;
 

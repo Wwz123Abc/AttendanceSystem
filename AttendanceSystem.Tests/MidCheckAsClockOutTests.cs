@@ -223,4 +223,53 @@ public class MidCheckAsClockOutTests : SqliteTestBase
         Assert.Equal(3.5m, rec.ActualWorkHours);     // 20:30 → 次日 00:00
         Assert.Equal(AttendanceStatus.EarlyLeave, rec.AttendanceStatus);
     }
+    [Fact]
+    public async Task 夜班还没到次日续接窗口结束前_不能提前按午间卡结算()
+    {
+        // 2026-11-11 修复：上午应用重启时，补算曾把 11-10 还在上夜班的人提前按午间卡结算
+        //（应下班 05:30，员工 11:30 前还能补打下班卡）。现在必须过了"应下班 + 6 小时"才能结算。
+        var night = new DateOnly(2026, 11, 10);
+        int uid;
+        using (var db = CreateContext())
+        {
+            var group = new AttendanceGroup { GroupName = "晚班提前结算组" };
+            db.AttendanceGroups.Add(group);
+            db.SaveChanges();
+            var shift = NightShift();
+            shift.WorkStartTime   = new TimeOnly(20, 30);
+            shift.WorkEndTime     = new TimeOnly(5, 30);
+            shift.MidCheckWindows = "00:00-01:00";
+            shift.AttendanceGroupId = group.Id;
+            db.ShiftSchedules.Add(shift);
+            var user = U("T9", "晚班提前结算");
+            user.AttendanceGroupId = group.Id;
+            db.Users.Add(user);
+            db.SaveChanges();
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = user.Id, WorkDate = night, ShiftScheduleId = shift.Id });
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = user.Id, WorkDate = night,
+                ClockInTime = night.ToDateTime(new TimeOnly(20, 10)),
+                AttendanceStatus = AttendanceStatus.Normal
+            });
+            db.AttendancePunches.AddRange(
+                new AttendancePunch { UserId = user.Id, PunchTime = night.ToDateTime(new TimeOnly(20, 10)), PunchType = PunchType.ClockIn, IsValid = true },
+                new AttendancePunch { UserId = user.Id, PunchTime = night.AddDays(1).ToDateTime(new TimeOnly(0, 10)), PunchType = PunchType.MidCheck, IsValid = true });
+            db.SaveChanges();
+            uid = user.Id;
+        }
+
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance,
+                new FixedClock(new DateTime(2026, 11, 11, 10, 0, 0)));   // 应下班 05:30 + 6h = 11:30 之前
+            Assert.False(await svc.SettleHalfDayByMidCheckAsync(uid, night));
+        }
+        using (var db = CreateContext())
+        {
+            var svc = new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance,
+                new FixedClock(new DateTime(2026, 11, 11, 11, 45, 0)));  // 过了续接窗口才允许结算
+            Assert.True(await svc.SettleHalfDayByMidCheckAsync(uid, night));
+        }
+    }
 }
