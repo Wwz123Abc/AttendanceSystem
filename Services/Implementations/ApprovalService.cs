@@ -493,6 +493,32 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
             s.ApprovalStatus    == ApprovalStatus.Pending);
         if (earlierPending) return false;   // 前一级还没审，当前这级不能先审
 
+        // 补卡每月次数上限：提交时已经查过一次，但排队期间同一个人别的补卡单可能先通过了、把名额用掉。
+        // 到最后一级通过之前再查一次，超限就直接驳回整单并通知申请人——
+        // 不能让它走到"整单已通过、回写考勤时才抛异常"，留下“显示已通过但考勤没改”的半成品状态
+        // （2026-11-16 用户要求：党佳豪 11-06、付争志 11-01 两张单就是这样卡住的）。
+        if (dto.IsApproved
+            && step.ApprovalRequest.ApprovalType == ApprovalType.PunchReplenishment
+            && step.ApprovalRequest.PunchDate is { } quotaDate)
+        {
+            var hasLaterStep = await db.ApprovalSteps.AnyAsync(s =>
+                s.ApprovalRequestId == dto.ApprovalRequestId &&
+                s.StepOrder > step.StepOrder &&
+                s.ApprovalStatus == ApprovalStatus.Pending);
+            if (!hasLaterStep
+                && await PunchReplenishmentRules.FindQuotaProblemAsync(
+                        db, step.ApprovalRequest.ApplicantUserId, quotaDate, step.ApprovalRequest.Id) is { } quotaProblem)
+            {
+                if (await RejectAutomaticallyAsync(step, quotaProblem))
+                {
+                    var rejectedRequest = await db.ApprovalRequests.Include(a => a.Applicant)
+                        .FirstAsync(a => a.Id == dto.ApprovalRequestId);
+                    await NotifyApplicantAsync(rejectedRequest);
+                    return true;
+                }
+            }
+        }
+
         // 从抢占节点、判断整单状态到回写考勤，整个过程放进一个事务：万一半路失败，或者跟申请人
         // 几乎同一时刻点的"撤销"（CancelApprovalAsync）撞车，要么全部生效、要么全部回滚，
         // 不会出现节点状态、整单状态、考勤数据三者中只改了一部分的半成品结果。
@@ -502,8 +528,11 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // （单个和批量）点下去都会 500/400 失败，整个审批流程实际上完全用不了
         // （发现于 2026-09-18 发工资前的数据核查，通过生产日志里连续多条同样的异常确认）。
         var strategy = db.Database.CreateExecutionStrategy();
-        var (committed, request, nextStep) = await strategy.ExecuteAsync(async () =>
+        (bool Committed, ApprovalRequest? Request, ApprovalStep? NextStep) outcome;
+        try
         {
+            outcome = await strategy.ExecuteAsync(async () =>
+            {
             await using var transaction = await db.Database.BeginTransactionAsync();
 
             // 原子"认领"这个节点：条件里带 ApprovalStatus == Pending，只有还是待审批状态才能抢到。
@@ -566,14 +595,69 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
 
             await transaction.CommitAsync();
             return (true, req, next);
-        });
+            });
+        }
+        catch (BusinessException ex) when (ex.Message.Contains("补卡已经通过"))
+        {
+            // 竞态兜底：审批前查配额时还没满，真到回写考勤时名额已被别人占满 —— 同样整单驳回，
+            // 不再把异常抛给审批人、也不留下“已通过但没生效”的半成品
+            if (!await RejectAutomaticallyAsync(step, ex.Message)) throw;
+            var rejectedRequest = await db.ApprovalRequests.Include(a => a.Applicant)
+                .FirstAsync(a => a.Id == dto.ApprovalRequestId);
+            await NotifyApplicantAsync(rejectedRequest);
+            return true;
+        }
 
-        if (!committed) return false;
+        if (!outcome.Committed) return false;
+        var (committed, request, nextStep) = outcome;
 
         if (dto.IsApproved && nextStep is not null)
             await NotifyNextApproverAsync(request!, nextStep);   // 还有下一级，通知下一个审批人
         await NotifyApplicantAsync(request!);   // 通知申请人结果
         return true;
+    }
+
+    /// <summary>
+    /// 按业务规则自动驳回一张申请（不经过正常审批动作的回写）。
+    /// 目前用于"补卡超过每月次数上限"：这种单子再重试也不可能通过，直接驳回比留下
+    /// "显示已通过、考勤没改"的半成品更好（2026-11-16 用户要求）。
+    /// </summary>
+    private async Task<bool> RejectAutomaticallyAsync(ApprovalStep step, string reason)
+    {
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            var now = clock.LocalNow();
+
+            var stepClaimed = await db.ApprovalSteps
+                .Where(s => s.Id == step.Id && s.ApprovalStatus == ApprovalStatus.Pending)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.ApprovalStatus, ApprovalStatus.Rejected)
+                    .SetProperty(x => x.Comment, "系统自动驳回：" + reason)
+                    .SetProperty(x => x.HandledAt, now));
+            if (stepClaimed == 0) { await transaction.RollbackAsync(); return false; }
+
+            var requestClaimed = await db.ApprovalRequests
+                .Where(a => a.Id == step.ApprovalRequestId
+                            && (a.ApprovalStatus == ApprovalStatus.Pending || a.ApprovalStatus == ApprovalStatus.InProgress))
+                .ExecuteUpdateAsync(a => a
+                    .SetProperty(x => x.ApprovalStatus, ApprovalStatus.Rejected)
+                    .SetProperty(x => x.UpdatedAt, now));
+            if (requestClaimed == 0) { await transaction.RollbackAsync(); return false; }
+
+            // 后面还没轮到的环节直接作废，避免它们一直挂在别人的“待我审批”里
+            var laterSteps = await db.ApprovalSteps
+                .Where(s => s.ApprovalRequestId == step.ApprovalRequestId
+                            && s.StepOrder > step.StepOrder
+                            && s.ApprovalStatus == ApprovalStatus.Pending)
+                .ToListAsync();
+            foreach (var later in laterSteps) later.ApprovalStatus = ApprovalStatus.Cancelled;
+
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return true;
+        });
     }
 
     /// <summary>申请人撤销自己的申请（“待审批”和“审批中”都能撤；二级审批过了第一级变成“审批中”后，第二级审批人离职/卡住时，申请人也要能撤回重提）。</summary>

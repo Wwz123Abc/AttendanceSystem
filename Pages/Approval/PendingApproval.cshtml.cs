@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
 using AttendanceSystem.Models.DTOs;
+using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Interfaces;
 using AttendanceSystem.Helpers;
 
@@ -57,7 +58,16 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
                 IsApproved        = true,
                 Comment           = Comment
             });
-            Message   = ok ? "已通过该申请" : "操作失败，请重试";
+            // 补卡超过每月次数上限这类"再试也不可能通过"的单子，审批服务会直接把整单驳回（不是操作失败）。
+            // 这里按最终状态给出准确提示，避免显示"已通过"、实际是"已驳回"（2026-11-16 用户要求）。
+            if (ok)
+            {
+                var finalStatus = (await db.ApprovalRequests.FindAsync(RequestId))?.ApprovalStatus;
+                Message = finalStatus == ApprovalStatus.Rejected
+                    ? "该申请已按规则自动驳回（例如补卡超过每月次数上限），已通知申请人"
+                    : "已通过该申请";
+            }
+            else Message = "操作失败，请重试";
             IsSuccess = ok;
         }
         catch (InvalidOperationException ex)
