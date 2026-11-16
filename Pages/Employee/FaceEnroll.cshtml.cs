@@ -134,6 +134,16 @@ public class FaceEnrollModel(
         if (!ImageValidationHelper.IsValidImageHeader(ext, header))
             throw new BusinessException("照片文件内容与格式不符，请重新拍摄或选择 jpg / png / webp 图片");
 
+        // ★ 先只读文件头拿分辨率，再决定要不要真的解码（2026-11-16 复审 P2）：
+        //   IdentifyAsync 只解析图片头、不解码像素；10MB 的 JPEG 完全可能是上亿像素的“解压炸弹”，
+        //   直接 Image.LoadAsync 会一次性申请几百 MB 内存，把服务进程拖垮（上传大小上限挡不住这种）。
+        ImageInfo imageInfo;
+        await using (var identifyStream = FacePhoto.OpenReadStream())
+            imageInfo = await Image.IdentifyAsync(identifyStream);
+        if (!ImageValidationHelper.IsWithinDecodePixelBudget(imageInfo.Width, imageInfo.Height))
+            throw new BusinessException(
+                $"照片分辨率过高（{imageInfo.Width}×{imageInfo.Height}），请换一张照片，或先压缩到 5000 万像素以内再上传");
+
         // 先在内存里把两个尺寸都生成出来，做完人脸质量检测确认合格了，再落盘——
         // 检测不通过时不能已经写了一半文件，导致明明拒绝了却留下垃圾文件/误改了参考照片。
         byte[] mainBytes, verifyBytes;

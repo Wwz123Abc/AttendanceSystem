@@ -58,9 +58,19 @@ public class RemotePunchModel(
     /// 的内存缓冲区）之前挡掉恶意构造的超大字符串，避免有人直接绕过前端拿超大 payload 打这个接口刷内存。</summary>
     private const int MaxCapturedPhotoDataLength = 5 * 1024 * 1024;
 
-    /// <summary>是不是一张像样的 JPEG：至少 1KB（480 宽的真实人脸照片远大于此），且以 JPEG 文件头 FF D8 开头。</summary>
+    /// <summary>是不是一张像样的 JPEG：至少 1KB（480 宽的真实人脸照片远大于此）、以 JPEG 文件头 FF D8 开头、
+    /// 且以 EOI 结束标记 FF D9 结尾。最后这条不能省：不完整/被截断的图片以前也能进识别接口，
+    /// 白花一次付费调用，还可能被当成"服务异常"而绕过失败限流（2026-11-16 复审 P2）。</summary>
     public static bool IsUsableJpeg(byte[] bytes) =>
-        bytes.Length >= 1024 && bytes[0] == 0xFF && bytes[1] == 0xD8;
+        bytes.Length >= 1024
+        && bytes[0] == 0xFF && bytes[1] == 0xD8
+        && bytes[^2] == 0xFF && bytes[^1] == 0xD9;
+
+    /// <summary>远程打卡页每个账号的请求频率上限：单实例部署下用进程内限流即可。
+    /// 失败限流只统计"识别失败"，被参数校验/成本闸门/服务异常挡下的请求不产生失败记录，
+    /// 光靠它挡不住脚本高频刷接口；这里再加一道纯请求频率限制（2026-11-16 复审 P2）。</summary>
+    private const int RemotePunchMaxRequestsPerWindow = 30;
+    private static readonly TimeSpan RemotePunchRateWindow = TimeSpan.FromMinutes(10);
 
     public async Task OnGetAsync() => await LoadStateAsync();
 
@@ -136,6 +146,16 @@ public class RemotePunchModel(
     {
         try
         {
+            // 请求频率限制（2026-11-16 复审 P2）：在查库、调（付费的）人脸识别之前先挡高频请求。
+            // 失败限流统计的是"识别失败"，被参数校验/成本闸门/服务异常挡下的请求不会留下失败记录，
+            // 所以另外加这一道纯请求频率限制；窗口内超限直接拒绝，既不查库也不调阿里云。
+            if (!RequestRateLimiter.TryAcquire($"RemotePunch:{CurrentUserId}", RemotePunchMaxRequestsPerWindow, RemotePunchRateWindow, DateTime.Now, out var retryAfter))
+            {
+                var waitSeconds = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
+                logger.LogWarning("远程打卡请求过于频繁，UserId={UserId}，需等待 {Seconds} 秒", CurrentUserId, waitSeconds);
+                throw new BusinessException($"操作过于频繁，请 {waitSeconds} 秒后再试");
+            }
+
             // 权限和人脸信息都要重新从数据库查一遍，不能信页面上带回来的状态
             var user = await db.Users.FindAsync(CurrentUserId)
                 ?? throw new BusinessException("账号不存在");

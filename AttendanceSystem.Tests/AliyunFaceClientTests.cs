@@ -76,8 +76,12 @@ public class AliyunFaceClientTests : SqliteTestBase
         Assert.False(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(Convert.FromBase64String("")));
         Assert.False(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(new byte[] { 0xFF, 0xD8, 0xFF }));   // 太小
         Assert.False(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(new byte[4096]));                    // 全 0，不是 JPEG
-        var ok = new byte[4096]; ok[0] = 0xFF; ok[1] = 0xD8;
+        // 正常抓拍：要有 SOI 也有 EOI（2026-11-16 复审后加强为"必须是完整 JPEG"，
+        // 缺 EOI 的截断图不再放行，避免白花付费调用/绕过失败限流，见 ReviewHardeningTests）
+        var ok = new byte[4096]; ok[0] = 0xFF; ok[1] = 0xD8; ok[^2] = 0xFF; ok[^1] = 0xD9;
         Assert.True(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(ok));
+        var truncated = new byte[4096]; truncated[0] = 0xFF; truncated[1] = 0xD8;
+        Assert.False(AttendanceSystem.Pages.Attendance.RemotePunchModel.IsUsableJpeg(truncated));
     }
 
     [Fact]

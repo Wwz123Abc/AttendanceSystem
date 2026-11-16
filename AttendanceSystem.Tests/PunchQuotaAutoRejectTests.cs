@@ -121,4 +121,70 @@ public class PunchQuotaAutoRejectTests : SqliteTestBase
         Assert.Single(fake.UpdatedApprovalRequestIds);      // 正常回写一次
         Assert.Equal(requestId, fake.UpdatedApprovalRequestIds[0]);
     }
+
+    /// <summary>
+    /// 复审 P1 回归：两级审批的最后一节点触发自动驳回时，通知不能还按"已通过一级审批，待下一级审批"发。
+    /// 原因是状态是 ExecuteUpdateAsync 直接改库的，内存里跟踪的申请单还是旧状态（InProgress），
+    /// 不清跟踪器的话重新查出来仍是旧对象、通知就会写错。
+    /// </summary>
+    [Fact]
+    public async Task 两级审批最后节点被自动驳回_通知内容是驳回而不是待下一级()
+    {
+        var (applicantId, approverId) = SeedApplicantAndApprover();
+        await SeedApprovedQuotaAsync(applicantId);
+
+        int requestId;
+        using (var db = CreateContext())
+        {
+            var request = new ApprovalRequest
+            {
+                RequestNo = "BK-QUOTA-2STEP-" + Guid.NewGuid().ToString("N")[..8], ApplicantUserId = applicantId,
+                ApprovalType = ApprovalType.PunchReplenishment, ApprovalStatus = ApprovalStatus.InProgress,
+                PunchDate = Month.AddDays(8), PunchType = PunchType.ClockIn, PunchTime = new TimeOnly(8, 30), Reason = "超限补卡"
+            };
+            db.ApprovalRequests.Add(request);
+            await db.SaveChangesAsync();
+            db.ApprovalSteps.AddRange(
+                new ApprovalStep
+                {
+                    ApprovalRequestId = request.Id, ApproverUserId = approverId, StepOrder = 1,
+                    ApprovalStatus = ApprovalStatus.Approved, HandledAt = DateTime.Now.AddHours(-1)
+                },
+                new ApprovalStep
+                {
+                    ApprovalRequestId = request.Id, ApproverUserId = approverId, StepOrder = 2,
+                    ApprovalStatus = ApprovalStatus.Pending
+                });
+            await db.SaveChangesAsync();
+            requestId = request.Id;
+        }
+
+        using var db2 = CreateContext();
+        var fake = new FakeAttendanceService();
+        var svc = new ApprovalService(db2, fake, AppOptions);
+
+        var ok = await svc.HandleApprovalAsync(approverId,
+            new HandleApprovalDto { ApprovalRequestId = requestId, IsApproved = true });
+
+        Assert.True(ok);
+        Assert.Empty(fake.UpdatedApprovalRequestIds);
+
+        // 同一个 DbContext 里再查（审批页就是这么查的）：必须是新的"已驳回"，不能还是内存里的旧对象
+        var sameContext = await db2.ApprovalRequests.FindAsync(requestId);
+        Assert.Equal(ApprovalStatus.Rejected, sameContext!.ApprovalStatus);
+
+        using var verify = CreateContext();
+        var request2 = await verify.ApprovalRequests.FindAsync(requestId);
+        Assert.Equal(ApprovalStatus.Rejected, request2!.ApprovalStatus);
+
+        var step2 = await verify.ApprovalSteps.SingleAsync(s => s.ApprovalRequestId == requestId && s.StepOrder == 2);
+        Assert.Equal(ApprovalStatus.Rejected, step2.ApprovalStatus);
+
+        var notify = await verify.Notifications
+            .Where(n => n.UserId == applicantId)
+            .OrderByDescending(n => n.Id)
+            .FirstAsync();
+        Assert.Contains("已驳回", notify.Content);
+        Assert.DoesNotContain("待下一级审批", notify.Content);
+    }
 }

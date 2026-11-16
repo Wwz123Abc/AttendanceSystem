@@ -19,4 +19,13 @@ public static class ImageValidationHelper
                                         && header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P',
         _ => false
     };
+
+    /// <summary>解码前的像素预算上限（约 5000 万像素）。10MB 的 JPEG 也可能是上亿像素的"解压炸弹"：
+    /// 文件本身很小、但 Image.LoadAsync 会按宽高一次性申请几百 MB 内存，把服务进程拖垮。
+    /// 上传入口应该在真正解码前先用 <see cref="IsWithinDecodePixelBudget"/> 卡一下（2026-11-16 复审 P2）。</summary>
+    public const long MaxDecodePixels = 50_000_000;
+
+    /// <summary>宽×高是否在解码内存预算内：宽高非法或总像素超过 <see cref="MaxDecodePixels"/> 都返回 false。</summary>
+    public static bool IsWithinDecodePixelBudget(int width, int height) =>
+        width > 0 && height > 0 && (long)width * height <= MaxDecodePixels;
 }

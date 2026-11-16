@@ -656,6 +656,12 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
 
             await db.SaveChangesAsync();
             await transaction.CommitAsync();
+
+            // ★ 这里必须清掉跟踪器（2026-11-16 复审 P1）：上面两条状态更新走的是 ExecuteUpdateAsync，
+            //   直接改数据库、不经过变更跟踪器，内存里 HandleApprovalAsync 开头查出来的申请单/审批节点
+            //   还是旧状态。不清掉的话，下面重新查申请单做通知、以及页面随后查状态，EF 会把内存里这份
+            //   旧实体返回回去——通知就可能写成"已通过一级审批，待下一级审批"、页面也会显示"已通过"。
+            db.ChangeTracker.Clear();
             return true;
         });
     }
