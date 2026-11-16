@@ -204,4 +204,42 @@ public class AuditFlowTests : SqliteTestBase
         using var db = CreateContext();
         Assert.Equal(0, await Svc(db).RecalcHoursAfterScheduleAsync([uid], Tue, Tue));
     }
+
+    /// <summary>
+    /// 2026-11-16 用户要求：精机加部-保洁部门整体不纳入数据核对（有打卡没排班也不提示异常）。
+    /// 部门按"员工所属部门"判断，换部门后自动恢复纳入/排除。
+    /// </summary>
+    [Fact]
+    public async Task 精机加部保洁部门_不纳入数据核对()
+    {
+        using (var db = CreateContext())
+        {
+            var ignoredDept = new Department { DeptName = "精机加部-保洁", IsActive = true };
+            var normalDept  = new Department { DeptName = "普通部门", IsActive = true };
+            db.Departments.AddRange(ignoredDept, normalDept);
+            await db.SaveChangesAsync();
+
+            var ignoredUser = U("CLEAN1", "保洁员工");
+            ignoredUser.DepartmentId = ignoredDept.Id;
+            var normalUser = U("OTHER1", "普通员工");
+            normalUser.DepartmentId = normalDept.Id;
+            db.Users.AddRange(ignoredUser, normalUser);
+            await db.SaveChangesAsync();
+
+            // 两人都"有打卡但没排班"：正常部门要报，精机加部-保洁不报
+            foreach (var uid in new[] { ignoredUser.Id, normalUser.Id })
+            {
+                db.AttendanceRecords.Add(new AttendanceRecord
+                {
+                    UserId = uid, WorkDate = Tue,
+                    ClockInTime = At(8, 25), AttendanceStatus = AttendanceStatus.Normal
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+
+        var issues = await AuditTueAsync();
+        Assert.DoesNotContain(issues, i => i.UserId == 0 || i.RealName == "保洁员工");
+        Assert.Contains(issues, i => i.RealName == "普通员工" && i.Type == AttendanceService.AuditNoShift);
+    }
 }

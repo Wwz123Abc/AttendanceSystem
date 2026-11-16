@@ -22,6 +22,10 @@ public partial class AttendanceService
 
     /// <summary>这些考勤组的"有打卡但没排班"不算疑点（2026-10-26 用户确认：深圳GA考勤组长期不排班，数据核对页、每晚核对通知都忽略）。</summary>
     public static readonly string[] NoShiftIgnoredGroups = ["深圳GA考勤组"];
+
+    /// <summary>这些部门整体不纳入数据核对（2026-11-16 用户要求：精机加部-保洁 不需要在数据核对中提示异常）。
+    /// 按部门名称配置，以后要增减部门、或者部门改名了改这里即可。</summary>
+    public static readonly string[] AuditIgnoredDepartmentNames = ["精机加部-保洁"];
     public const string AuditShiftMismatch = "排班类型与打卡时间对不上";
     public const string AuditAbsentWithPunch = "有打卡却记旷工";
     public const string AuditInverted = "上下班时间倒挂";
@@ -172,6 +176,18 @@ public partial class AttendanceService
                         && r.User.Role == UserRole.Employee && !r.User.IsAttendanceExempt
                         && r.AttendanceStatus != AttendanceStatus.BusinessTrip && r.AttendanceStatus != AttendanceStatus.Holiday)
             .ToListAsync(ct);
+
+        // 指定部门整体不纳入核对（2026-11-16 用户要求：精机加部-保洁 不需要提示异常）。
+        // 注意这里按"员工所属部门"过滤，部门下的人换了部门就自动恢复纳入/排除，不用维护人员名单。
+        var ignoredDeptIds = await db.Departments
+            .Where(d => AuditIgnoredDepartmentNames.Contains(d.DeptName))
+            .Select(d => d.Id)
+            .ToListAsync(ct);
+        if (ignoredDeptIds.Count > 0)
+            records = records
+                .Where(r => r.User.DepartmentId is not { } deptId || !ignoredDeptIds.Contains(deptId))
+                .ToList();
+
         if (records.Count == 0) return issues;
 
         var userIds = records.Select(r => r.UserId).Distinct().ToList();
