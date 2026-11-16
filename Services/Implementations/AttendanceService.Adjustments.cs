@@ -847,20 +847,15 @@ public partial class AttendanceService
         var blocksStatusOverwrite = record.AttendanceStatus is
             AttendanceStatus.OnLeave or AttendanceStatus.Holiday or AttendanceStatus.BusinessTrip;
 
-        // 工时口径和本地打卡一致：早到晚走都不多算钱，班次配了午间必打卡窗口、当天又没有打卡落在窗口内，只算下午；
-        // 休息日没有批准的加班申请也不算工时（跟本地打卡同一套规则，见 ComputeDailyWorkHoursAsync）
-        if (!blocksWorkHours)
-        {
-            var computedHours = await ComputeDailyWorkHoursAsync(record, record.WorkDate, ci, co, shift, applicant?.AttendanceGroupId);
-            record.ActualWorkHours = await CapWorkHoursForLeaveAsync(record, computedHours, shift, applicant?.AttendanceGroupId);
-        }
-
-        // 迟到/早退分钟数和状态都要按补卡后的新时间重新算一遍，不能沿用改之前的旧值——
-        // 不然管理员把一条迟到记录的上班时间改准点了，LateMinutes 还留着旧的迟到分钟数、
-        // 状态也可能继续显示"迟到"。出差/节假日这两个审批流程/定时任务设置的状态不受影响。
+        // ★ 顺序很重要（2026-11-16 修正）：先按补卡后的新时间重算迟到/早退和状态，再算工时。
+        //   因为算工时时"迟到满 4 小时按半天旷工封顶"读的是记录上的状态/迟到分钟——
+        //   若先算工时、后更新迟到分钟，补卡把上班时间改早、迟到改小之后，仍会沿用补卡前的旧迟到分钟
+        //   继续封顶成半天（4 小时），"按半天旷工计"的备注也清不掉。
+        //   实际案例：雷得莹/葛庆腾 11-09、张浩琳/于卓民 11-11（补卡通过后工时仍停在 4 小时）。
         var isRestDay      = IsNonCompRestDay(record.WorkDate, shift);
         var clockInStatus  = CalcClockInStatus(record.WorkDate, ci, shift, isRestDay, out var lateMin);
         var clockOutStatus = CalcClockOutStatus(record.WorkDate, co, shift, isRestDay, out var earlyMin);
+        var isHourly       = IsHourlyOn(await LoadHourlyGroupStartsAsync(), applicant?.AttendanceGroupId, record.WorkDate);
         if (!blocksWorkHours)
         {
             record.LateMinutes       = lateMin;
@@ -872,8 +867,29 @@ public partial class AttendanceService
                                       : clockOutStatus == AttendanceStatus.EarlyLeave ? AttendanceStatus.EarlyLeave
                                       : AttendanceStatus.Normal;
             // 计时工没有早退（迟到照常判）：跟远程打卡、考勤机同步一样归一化，不然补卡/请假/转班重算后会被判成早退
-            if (IsHourlyOn(await LoadHourlyGroupStartsAsync(), applicant?.AttendanceGroupId, record.WorkDate))
+            if (isHourly)
                 NormalizeHourlyRecord(record);
         }
+
+        // 工时口径和本地打卡一致：早到晚走都不多算钱，班次配了午间必打卡窗口、当天又没有打卡落在窗口内，只算下午；
+        // 休息日没有批准的加班申请也不算工时（跟本地打卡同一套规则，见 ComputeDailyWorkHoursAsync）
+        if (!blocksWorkHours)
+        {
+            var computedHours = await ComputeDailyWorkHoursAsync(record, record.WorkDate, ci, co, shift, applicant?.AttendanceGroupId);
+            record.ActualWorkHours = await CapWorkHoursForLeaveAsync(record, computedHours, shift, applicant?.AttendanceGroupId);
+            // 新的迟到分钟已经够不上"半天旷工"时，把以前留下的半天备注清掉，避免备注与实际工时对不上
+            if (!IsHalfDayAbsentByLate(record, record.WorkDate, shift, hourly: isHourly))
+                RemoveHalfDayAbsentNote(record);
+        }
+    }
+
+    /// <summary>清掉记录里"按半天旷工计……"这条旧备注（补卡把迟到改小、不再按半天旷工算时用）。</summary>
+    private static void RemoveHalfDayAbsentNote(AttendanceRecord record)
+    {
+        if (record.ApprovalNote?.Contains(AttendanceService.HalfDayAbsentNoteMarker) != true) return;
+        var kept = record.ApprovalNote
+            .Split('；', StringSplitOptions.RemoveEmptyEntries)
+            .Where(part => !part.Contains(AttendanceService.HalfDayAbsentNoteMarker));
+        record.ApprovalNote = string.Join("；", kept);
     }
 }
