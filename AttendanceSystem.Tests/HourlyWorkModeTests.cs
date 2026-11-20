@@ -14,7 +14,7 @@ namespace AttendanceSystem.Tests;
 /// <summary>
 /// 计时工模式（考勤组 HourlyWorkStartDate，2026-10-20 起用于成都鹰诺深圳分公司临时工）：
 /// 工时 = 最后一次下班卡 − 第一次上班卡，扣午饭晚饭，不封顶；没有加班/旷工/迟到早退；午间漏打只算窗口开始之前；
-/// 00:00–07:00 的打卡无效；只对开启了的考勤组生效，别的组完全不变。
+/// 00:00–07:00 的打卡无效（白班干到次日 02:00 前下班的除外，见 2026-11-20 的规则）；只对开启了的考勤组生效，别的组完全不变。
 /// </summary>
 public class HourlyWorkModeTests : SqliteTestBase
 {
@@ -65,15 +65,19 @@ public class HourlyWorkModeTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 凌晨0点到7点的打卡无效_不会变成第二天的上班卡()
+    public async Task 白班干到次日凌晨0点30_下班卡归前一天_6点59仍无效()
     {
         var (uid, _) = SeedHourly();
         var wed = Tue.AddDays(1);
-        await SyncAsync(At(8, 25), At(12, 20), At(17, 40), wed.ToDateTime(new TimeOnly(0, 30)), wed.ToDateTime(new TimeOnly(6, 59)));
+        var wed0030 = wed.ToDateTime(new TimeOnly(0, 30));
+        await SyncAsync(At(8, 25), At(12, 20), At(17, 40), wed0030, wed.ToDateTime(new TimeOnly(6, 59)));
         using var db = CreateContext();
-        Assert.False(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime >= wed.ToDateTime(TimeOnly.MinValue) && p.PunchTime < wed.ToDateTime(new TimeOnly(7, 0))));
+        var rec = await TueRecordAsync(uid);
+        Assert.Equal(wed0030, rec.ClockOutTime);                           // 次日 0:30 算前一天的下班卡
+        Assert.InRange(rec.ActualWorkHours, 14m, 14.1m);                    // 08:25–次日00:30 扣 2 小时饭点 = 14.08 → 14.0
         Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == wed));
-        Assert.Equal(At(17, 40), (await TueRecordAsync(uid)).ClockOutTime);   // 凌晨那两次没有被当成下班卡
+        Assert.True(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == wed0030 && p.PunchType == PunchType.ClockOut));
+        Assert.False(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == wed.ToDateTime(new TimeOnly(6, 59))));
     }
 
     [Fact]
@@ -272,14 +276,15 @@ public class HourlyWorkModeTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 计时工补卡不能补到第二天凌晨()
+    public async Task 计时工补卡可以补次日0点30的下班卡()
     {
         var (uid, _) = SeedHourly();
         await SyncAsync(At(8, 25), At(12, 20));
         using var db = CreateContext();
-        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
-            Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.ClockOut, Tue.AddDays(1).ToDateTime(new TimeOnly(0, 30)), false, null, "管理员"));
-        Assert.Contains("23:59", ex.Message);
+        await Svc(db).AdminReplenishPunchAsync(uid, Tue, PunchType.ClockOut, Tue.AddDays(1).ToDateTime(new TimeOnly(0, 30)), false, null, "管理员");
+        var rec = await TueRecordAsync(uid);
+        Assert.Equal(Tue.AddDays(1).ToDateTime(new TimeOnly(0, 30)), rec.ClockOutTime);
+        Assert.InRange(rec.ActualWorkHours, 14m, 14.1m);
     }
 
     [Fact]

@@ -14,7 +14,15 @@ public partial class AttendanceService
     /// <summary>计时工每天最早有效打卡时刻（含）：00:00–07:00 之间的打卡无效，防止刷到凌晨。</summary>
     public const int HourlyEarliestPunchHour = 7;
 
-    public const string HourlyInvalidTimeMessage = "计时工 00:00 到 07:00 之间的打卡无效，请 07:00 以后再打卡";
+    /// <summary>
+    /// 计时工白班加班到次日凌晨：这个钟点（不含）之前的下班卡仍算前一个考勤日。
+    /// 2026-11-20 用户反馈：售后考勤组白班的临时工干到次日 0 点以后，按原规则（00:00–07:00 一律无效）
+    /// 打不上卡、工时也拿不到，所以按普通白班「过零点下班」的口径放开到次日 02:00 前。
+    /// </summary>
+    public const int HourlyDayShiftPostMidnightUntilHour = 2;
+
+    public const string HourlyInvalidTimeMessage =
+        "计时工 00:00 到 07:00 之间的打卡无效；白班加班到次日 02:00 前下班的，前一天已打上班卡时可以打下班卡；其他情况请 07:00 以后再打卡";
 
     /// <summary>
     /// 计时工里算不算"夜班"：跨天班次，并且是晚上开始（17:00 之后）的。只看 <see cref="ShiftSchedule.IsCrossDay"/> 不够：
@@ -49,9 +57,10 @@ public partial class AttendanceService
     /// <summary>
     /// 计时工的一次打卡归属哪个考勤日；返回 null 表示这次打卡无效（2026-10-21 起支持夜班）。
     /// 昨天排的是跨天班次（夜班）→ 次日上限之前的打卡算昨天的延续（2026-11-03 起上限 18:00，之前 10:00）；
+    /// 昨天排的是普通白班、昨天确实有上班卡、这次是次日 02:00 前的下班卡 → 也算昨天的（2026-11-20 新增）；
     /// 今天排的是跨天班次 → 19:00 起才有效；其余（白班/没排班）按原规则：当天 07:00 起有效，00:00–07:00 无效。
     /// </summary>
-    public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift)
+    public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift, DateTime? prevDayClockIn = null)
     {
         var d = DateOnly.FromDateTime(punchTime);
         // 夜班次日上限按"这次打卡将要归到的考勤日"选：2026-11-03 及以后的考勤日 18:00，之前仍是 10:00。
@@ -60,6 +69,24 @@ public partial class AttendanceService
         var prevWorkDate = d.AddDays(-1);
         var latestHour = IsNewHourlyRule(prevWorkDate) ? HourlyNightLatestHour : OldHourlyNightLatestHour;
         if (IsHourlyNightShift(prevShift) && punchTime.Hour < latestHour) return prevWorkDate;
+
+        // ★ 2026-11-20 新增：白班临时工干到次日凌晨（00:00–01:59）才下班。
+        // 原规则把 00:00–07:00 一律判无效，这部分工时永远拿不到；现在只要同时满足：
+        //   ① 前一天排的是非夜班（白班/中班/08:30–次日00:00 这种非夜班跨天班）；
+        //   ② 前一天确实打过上班卡（人真的上了这一班，不是排了班没来）；
+        //   ③ 这张卡在上班卡之后、且间隔不超过 20 小时（跟普通白班过零点下班同一个上限）；
+        //   ④ 在次日 02:00 之前；
+        //   ⑤ 今天不是夜班（避免把今晚夜班前很早就来刷的卡吞到前一天）；
+        // 就归到前一天，作为"很晚的下班卡"。次日 07:00 之后的正常上班卡不受影响。
+        if (prevDayClockIn is { } prevClockIn
+            && prevShift is not null
+            && !IsHourlyNightShift(prevShift)
+            && !IsHourlyNightShift(todayShift)
+            && punchTime.Hour < HourlyDayShiftPostMidnightUntilHour
+            && punchTime > prevClockIn
+            && punchTime - prevClockIn <= TimeSpan.FromHours(PostMidnightClockOutMaxHours))
+            return prevWorkDate;
+
         if (IsHourlyNightShift(todayShift)) return punchTime.Hour >= HourlyNightEarliestHour ? d : null;
         return IsHourlyPunchTimeValid(punchTime) ? d : null;
     }
@@ -178,7 +205,9 @@ public partial class AttendanceService
             }
             return FloorToHalf(Math.Max(0m, ((decimal)(effOut - effIn).TotalMinutes - mealMinutes) / 60m));
         }
-        var dayEnd = workDate.ToDateTime(new TimeOnly(23, 59, 59));
+        // 白班计时工干到次日凌晨（02:00 前下班）：不能像以前那样把有效下班截到 23:59:59，
+        // 否则 0 点以后那段的工时会被悄悄吞掉（2026-11-20 支持临时工凌晨下班时一并修正）。
+        var dayEnd = workDate.AddDays(1).ToDateTime(new TimeOnly(HourlyDayShiftPostMidnightUntilHour, 0));
         if (effOut > dayEnd) effOut = dayEnd;
         if (effOut <= effIn) return 0;
         return newRule ? ComputeRegularWorkHours(effIn, effOut) : ComputeWorkHours(effIn, effOut);
@@ -245,15 +274,24 @@ public partial class AttendanceService
             .Where(p => p.PunchTime.Hour >= HourlyNightEarliestHour)
             .Select(p => (p.UserId, Day: DateOnly.FromDateTime(p.PunchTime)))
             .ToHashSet();
+        // 白班加班到次日凌晨：判断"前一天到底上没上班"时，优先看前一天记录里的上班卡；
+        // 记录还没重建出来时（例如整段从零重算），退回到前一天 07:00 之后的第一条原始打卡。
+        var dayFirstClockIn = rawPunches
+            .Where(p => p.PunchTime.Hour >= HourlyEarliestPunchHour)
+            .GroupBy(p => (p.UserId, Day: DateOnly.FromDateTime(p.PunchTime)))
+            .ToDictionary(g => g.Key, g => g.Min(x => x.PunchTime));
         var candsByUserDay = new Dictionary<(int UserId, DateOnly Day), List<DateTime>>();
         foreach (var p in rawPunches.OrderBy(x => x.PunchTime))
         {
             var punchDay  = DateOnly.FromDateTime(p.PunchTime);
             var todayShift = shifts.GetValueOrDefault((p.UserId, punchDay));
             var prevShift  = shifts.GetValueOrDefault((p.UserId, punchDay.AddDays(-1)));
-            if (prevShift is not null && !nightWorkedOn.Contains((p.UserId, punchDay.AddDays(-1))))
-                prevShift = null;   // 前一天排了夜班但没上：按今天的规则判断，不续接
-            if (ResolveHourlyWorkDate(p.PunchTime, todayShift, prevShift) is not { } wd || wd < from || wd > to) continue;
+            if (prevShift is not null && IsHourlyNightShift(prevShift) && !nightWorkedOn.Contains((p.UserId, punchDay.AddDays(-1))))
+                prevShift = null;   // 前一天排了夜班但没上：按今天的规则判断，不续接（白班不受影响）
+            var prevDay = punchDay.AddDays(-1);
+            DateTime? prevDayClockIn = records.TryGetValue((p.UserId, prevDay), out var prevDayRec) ? prevDayRec.ClockInTime : null;
+            if (prevDayClockIn is null) prevDayClockIn = dayFirstClockIn.GetValueOrDefault((p.UserId, prevDay));
+            if (ResolveHourlyWorkDate(p.PunchTime, todayShift, prevShift, prevDayClockIn) is not { } wd || wd < from || wd > to) continue;
             var key = (p.UserId, wd);
             if (!candsByUserDay.TryGetValue(key, out var list)) candsByUserDay[key] = list = [];
             if (!list.Contains(p.PunchTime)) list.Add(p.PunchTime);

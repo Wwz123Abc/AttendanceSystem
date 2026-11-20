@@ -142,7 +142,7 @@ public partial class AttendanceService
         if (await PunchReplenishmentRules.FindQuotaProblemAsync(db, approval.ApplicantUserId, punchDate, approval.Id) is { } quotaProblem)
             throw new BusinessException("不能通过：" + quotaProblem);
         var ctx = await PunchReplenishmentRules.LoadAsync(db, approval.ApplicantUserId, punchDate);
-        var punchDt = PunchReplenishmentRules.ResolveTime(type, punchDate, punchTime, ctx.ClockIn, ctx.Shift);
+        var punchDt = PunchReplenishmentRules.ResolveTime(type, punchDate, punchTime, ctx.ClockIn, ctx.Shift, ctx.Hourly);
         // 提交时已经按同一套规则查过一次，这里是审批时的兜底：提交之后、审批之前现状可能变了（员工又补上了上班卡、
         // 顺延结果从"过去"变成"未来"……）。直接抛异常，让外层事务整单回滚，不会出现"改了一半"的记录。
         if (punchDt > clock.LocalNow())

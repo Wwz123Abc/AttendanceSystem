@@ -63,13 +63,29 @@ public static class PunchReplenishmentRules
         _                  => "上班",
     };
 
-    /// <summary>把申请里的"日期 + 钟点"换算成真正的打卡时刻（夜班跨过午夜会落到第二天）。</summary>
-    public static DateTime ResolveTime(PunchType type, DateOnly date, TimeOnly time, DateTime? existingClockIn, ShiftSchedule? shift) => type switch
+    /// <summary>把申请里的"日期 + 钟点"换算成真正的打卡时刻（夜班跨过午夜会落到第二天；计时工白班干到次日凌晨也会落到第二天）。</summary>
+    public static DateTime ResolveTime(PunchType type, DateOnly date, TimeOnly time, DateTime? existingClockIn, ShiftSchedule? shift, bool hourly = false) => type switch
     {
-        PunchType.ClockOut => AttendanceService.ResolvePunchReplenishmentClockOut(date, time, existingClockIn, shift),
+        PunchType.ClockOut => ResolveClockOutTime(date, time, existingClockIn, shift, hourly),
         PunchType.MidCheck => shift is null ? date.ToDateTime(time) : AttendanceService.ResolveShiftTime(date, time, shift),
         _                  => date.ToDateTime(time),
     };
+
+    /// <summary>
+    /// 补下班卡最终落在哪一天：默认沿用原有规则；计时工白班（非夜班）填 00:00–01:59 的，
+    /// 只要前一天有上班卡，就落到第二天（2026-11-20 支持临时工干到次日凌晨下班）。
+    /// </summary>
+    private static DateTime ResolveClockOutTime(DateOnly date, TimeOnly time, DateTime? clockIn, ShiftSchedule? shift, bool hourly)
+    {
+        var dt = AttendanceService.ResolvePunchReplenishmentClockOut(date, time, clockIn, shift);
+        if (hourly
+            && !AttendanceService.IsHourlyNightShift(shift)
+            && clockIn is { } ci
+            && time < new TimeOnly(AttendanceService.HourlyDayShiftPostMidnightUntilHour, 0)
+            && date.ToDateTime(time) <= ci)
+            return date.ToDateTime(time).AddDays(1);
+        return dt;
+    }
 
     /// <summary>读出补卡校验要用的当天现状（直接查库，不依赖考勤服务，测试里用假考勤服务时也能跑）。</summary>
     public static async Task<ReplenishmentContext> LoadAsync(AttendanceDbContext db, int userId, DateOnly date, CancellationToken ct = default)
@@ -136,8 +152,21 @@ public static class PunchReplenishmentRules
             if (punchAt < nightFrom || punchAt >= nightTo)
                 return $"夜班计时工补卡的时间必须在上班日 {AttendanceService.HourlyNightEarliestHour:00}:00 到次日 {latestHour:00}:00 之间，请重新选择时间";
         }
-        else if (ctx.Hourly && (DateOnly.FromDateTime(punchAt) != date || !AttendanceService.IsHourlyPunchTimeValid(punchAt)))
-            return $"计时工补卡的时间必须在当天 {AttendanceService.HourlyEarliestPunchHour:00}:00 到 23:59 之间，请重新选择时间（不能选第二天）";
+        // 计时工：白班一般是当天的卡；但白班干到次日凌晨（02:00 前）下班的，允许补成前一天的下班卡
+        // （2026-11-20 用户反馈：售后组白班临时工经常干到 0 点以后，原规则一律拒绝，工时拿不到）。
+        else if (ctx.Hourly)
+        {
+            var nextDayEarlyClockOut = type == PunchType.ClockOut
+                && DateOnly.FromDateTime(punchAt) == date.AddDays(1)
+                && punchAt.TimeOfDay < TimeSpan.FromHours(AttendanceService.HourlyDayShiftPostMidnightUntilHour)
+                && !AttendanceService.IsHourlyNightShift(ctx.Shift)
+                && ctx.ClockIn is not null;
+            var sameDayValid = DateOnly.FromDateTime(punchAt) == date && AttendanceService.IsHourlyPunchTimeValid(punchAt);
+            if (!nextDayEarlyClockOut && !sameDayValid)
+                return $"计时工补卡的时间必须在当天 {AttendanceService.HourlyEarliestPunchHour:00}:00 到 23:59 之间；"
+                     + $"白班干到次日 {AttendanceService.HourlyDayShiftPostMidnightUntilHour:00}:00 前下班的，请选“下班”、"
+                     + "日期选上班那天、时间填 00:xx（前一天必须已有上班卡）";
+        }
         switch (type)
         {
             case PunchType.ClockIn:

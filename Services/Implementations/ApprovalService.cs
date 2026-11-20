@@ -208,7 +208,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
         // 补卡是补一次已经真实发生过的打卡，不能补"还没到"的时间点（2026-09-29 审查发现 M5：员工早上就能提交
         // "今天 17:30 下班卡"，批得快就能中午提前走人按 17:30 结算工时）
         var ctx = await PunchReplenishmentRules.LoadAsync(db, applicantUserId, date);
-        var punchAt = PunchReplenishmentRules.ResolveTime(type, date, dto.PunchTime.Value, ctx.ClockIn, ctx.Shift);
+        var punchAt = PunchReplenishmentRules.ResolveTime(type, date, dto.PunchTime.Value, ctx.ClockIn, ctx.Shift, ctx.Hourly);
         if (punchAt > clock.LocalNow())
             throw new BusinessException($"补卡时间 {punchAt:MM-dd HH:mm} 还没到，请填写真实已经发生的打卡时间（夜班下班卡会算到第二天）");
         // 补上班卡要比现有的更早、补下班卡要比现有的更晚、午间卡要落在没命中的窗口里……（见规则类），不然补了也不会生效，直接拒绝提交

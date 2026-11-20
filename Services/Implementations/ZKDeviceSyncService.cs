@@ -135,9 +135,9 @@ public class ZKDeviceSyncService(
                 shiftByUserDate.TryGetValue((uid, rowDay), out var hTodayShift);
                 shiftByUserDate.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevShiftRaw);
                 // 前一天排了夜班但没打过上班卡（比如夜班周换白班周）：不算续接，早上的卡按今天的规则判断
-                var hPrevShift = AttendanceService.EffectivePrevNightShift(hPrevShiftRaw,
-                    recordMap.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevRec) ? hPrevRec.ClockInTime : null);
-                if (AttendanceService.ResolveHourlyWorkDate(r.Time, hTodayShift, hPrevShift) is not { } hourlyDate)
+                DateTime? hPrevClockIn = recordMap.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevRec) ? hPrevRec.ClockInTime : null;
+                var hPrevShift = AttendanceService.EffectivePrevNightShift(hPrevShiftRaw, hPrevClockIn);
+                if (AttendanceService.ResolveHourlyWorkDate(r.Time, hTodayShift, hPrevShift, hPrevClockIn) is not { } hourlyDate)
                 {
                     // Warning：这类打卡是被丢掉的——常见原因是排班类型和实际上班时间对不上（白班的人被排成夜班），
                     // 要让管理员能在日志里看到，不能只记 Information
