@@ -89,8 +89,8 @@ public class ApplySubmitModel(
         // 脱敏诊断（2026-11-20）：只记录"有没有值"，不记录具体内容/原因，方便下次 5 分钟内判断
         // 是页面没提交上来（空）还是提交了但规则拒绝，不用再靠猜。
         logger.LogInformation(
-            "申请提交字段检查：类型={Type}，审批人={HasApprover}，补卡日期={HasPunchDate}，补卡类型={HasPunchType}，打卡时间={HasPunchTime}，请假起={HasLeaveStart}，加班起={HasOvertimeStart}，出差起={HasTripStart}，转班起={HasShiftStart}",
-            ApprovalType, ApproverUserId is not null, !string.IsNullOrWhiteSpace(PunchDate), !string.IsNullOrWhiteSpace(PunchTypeVal), !string.IsNullOrWhiteSpace(PunchTime),
+            "申请提交字段检查：UserId={UserId}，类型={Type}，审批人={HasApprover}，补卡日期={HasPunchDate}，补卡类型={HasPunchType}，打卡时间={HasPunchTime}，请假起={HasLeaveStart}，加班起={HasOvertimeStart}，出差起={HasTripStart}，转班起={HasShiftStart}",
+            CurrentUserId, ApprovalType, ApproverUserId is not null, !string.IsNullOrWhiteSpace(PunchDate), !string.IsNullOrWhiteSpace(PunchTypeVal), !string.IsNullOrWhiteSpace(PunchTime),
             !string.IsNullOrWhiteSpace(LeaveStart), !string.IsNullOrWhiteSpace(OvertimeStart), !string.IsNullOrWhiteSpace(BusinessTripStart), !string.IsNullOrWhiteSpace(ShiftChangeStart));
         // 审批人名单要先查出来：一是校验员工选的人在不在名单里，二是提交失败时页面要重新显示这份名单
         ApproverOptions = await approvalService.GetAvailableApproversAsync(CurrentUserId);
@@ -101,6 +101,7 @@ public class ApplySubmitModel(
             var dateError = await ValidateDatesAsync();
             if (dateError != null)
             {
+                logger.LogInformation("申请提交被拒：UserId={UserId}，类型={Type}，原因={Reason}", CurrentUserId, ApprovalType, dateError);
                 ErrorMessage = dateError;
                 MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);
                 return Page();
@@ -109,6 +110,7 @@ public class ApplySubmitModel(
             // 配了审批人名单的话，必须从名单里选一个，不能不选
             if (ApproverOptions.Count > 0 && (ApproverUserId is null || !ApproverOptions.Any(a => a.UserId == ApproverUserId)))
             {
+                logger.LogInformation("申请提交被拒：UserId={UserId}，类型={Type}，原因=未选择有效审批人", CurrentUserId, ApprovalType);
                 ErrorMessage = "请选择审批人";
                 MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);
                 return Page();
@@ -206,6 +208,12 @@ public class ApplySubmitModel(
         }
         // 只把自己抛出来的中文校验提示给员工看；其余（数据库/格式解析等）记日志 + 通用文案，
         // 不把 EF/MySQL 的原始报错文本展示出来（2026-09-24 审查修复）
+        catch (BusinessException ex)
+        {
+            // 业务规则拒绝（补卡次数、时间不合理、重复提交等）：记一条 WRN 方便定位，不再当成系统异常
+            logger.LogWarning("申请提交被拒：UserId={UserId}，类型={Type}，原因={Reason}", CurrentUserId, ApprovalType, ex.Message);
+            ErrorMessage = $"提交失败：{ex.Message}";
+        }
         catch (InvalidOperationException ex)
         {
             ErrorMessage = $"提交失败：{ex.Message}";
