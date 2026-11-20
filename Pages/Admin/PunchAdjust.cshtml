@@ -56,7 +56,7 @@
                     <div class="mb-3">
                         <label class="form-label">补的打卡时间 <span class="text-danger">*</span></label>
                         <div class="d-flex align-items-center gap-3">
-                            <input asp-for="PunchTimeText" type="time" class="form-control" id="fPunchTime" style="max-width:160px" required />
+                            <input asp-for="PunchTimeText" type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 20:05（直接输 2005 也可以）" autocomplete="off" class="form-control" id="fPunchTime" style="max-width:160px" required />
                             <div class="form-check mb-0">
                                 <input asp-for="NextDay" type="checkbox" class="form-check-input" id="fNextDay" />
                                 <label class="form-check-label" for="fNextDay">第二天</label>

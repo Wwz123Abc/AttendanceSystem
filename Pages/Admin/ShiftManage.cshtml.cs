@@ -379,8 +379,8 @@ public class ShiftManageModel(AttendanceDbContext db, IDeptScopeService deptScop
         if (string.IsNullOrWhiteSpace(ShiftName)) throw new Exception("请填写班次名称");
         var name = ShiftName.Trim();
         if (name.Length > 50) throw new Exception("班次名称不能超过 50 个字");
-        if (!TimeOnly.TryParse(WorkStart, out var ws)) throw new Exception("上班时间格式不正确");
-        if (!TimeOnly.TryParse(WorkEnd, out var we)) throw new Exception("下班时间格式不正确");
+        if (!DateTimeTextParser.TryParseTime(WorkStart, out var ws)) throw new Exception("上班时间格式不正确");
+        if (!DateTimeTextParser.TryParseTime(WorkEnd, out var we)) throw new Exception("下班时间格式不正确");
         // 不是跨天班次时，下班时间必须晚于上班时间——原来只挡了"完全相同"这一种情况，
         // 没挡"下班时间比上班时间还早却没勾跨天"（比如手滑填了 09:00~08:00），这种配置会让
         // ComputeWorkHours 算出的在岗分钟数是负的，被 rawMinutes<=0 的保护直接归零，

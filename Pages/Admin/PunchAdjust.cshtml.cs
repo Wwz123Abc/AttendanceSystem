@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using AttendanceSystem.Data;
 using AttendanceSystem.Middlewares;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Enums;
 using AttendanceSystem.Services.Implementations;
 using AttendanceSystem.Services.Interfaces;
@@ -67,7 +68,7 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
 
             if (!Enum.IsDefined(typeof(PunchType), PunchTypeValue)) throw new BusinessException("请选择补卡类型");
             var type = (PunchType)PunchTypeValue;
-            if (string.IsNullOrWhiteSpace(PunchTimeText) || !TimeOnly.TryParse(PunchTimeText, out var punchClock))
+            if (string.IsNullOrWhiteSpace(PunchTimeText) || !DateTimeTextParser.TryParseTime(PunchTimeText, out var punchClock))
                 throw new BusinessException("请填写补卡的打卡时间");
             var punchAt = WorkDate.ToDateTime(punchClock).AddDays(NextDay ? 1 : 0);   // 日期取上面选的考勤日期，不用再选一遍
 

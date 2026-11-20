@@ -56,11 +56,11 @@
                         </div>
                         <div class="mb-3">
                             <label class="form-label">开始时间</label>
-                            <input asp-for="LeaveStart" type="datetime-local" class="form-control" id="fLeaveStart" required />
+                            <input asp-for="LeaveStart" type="text" data-dt="datetime" inputmode="numeric" maxlength="16" placeholder="2026-11-16 20:30" autocomplete="off" class="form-control" id="fLeaveStart" required />
                         </div>
                         <div class="mb-3">
                             <label class="form-label">结束时间</label>
-                            <input asp-for="LeaveEnd" type="datetime-local" class="form-control" id="fLeaveEnd" required />
+                            <input asp-for="LeaveEnd" type="text" data-dt="datetime" inputmode="numeric" maxlength="16" placeholder="2026-11-16 20:30" autocomplete="off" class="form-control" id="fLeaveEnd" required />
                         </div>
                         <div class="form-text mb-3">开始时间最早只能选到现在往前推24小时以内，最多能提前3个月申请。</div>
                     </div>
@@ -69,7 +69,7 @@
                     <div id="punchFields" class="d-none">
                         <div class="mb-3">
                             <label class="form-label">补卡日期</label>
-                            <input asp-for="PunchDate" type="date" class="form-control" id="fPunchDate" required />
+                            <input asp-for="PunchDate" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-16" autocomplete="off" class="form-control" id="fPunchDate" required />
                         </div>
                         <div class="mb-3">
                             <label class="form-label">打卡类型</label>
@@ -82,7 +82,7 @@
                         </div>
                         <div class="mb-3">
                             <label class="form-label">打卡时间</label>
-                            <input asp-for="PunchTime" type="text" inputmode="numeric" maxlength="5" autocomplete="off"
+                            <input asp-for="PunchTime" type="text" data-dt="time" inputmode="numeric" maxlength="5" autocomplete="off"
                                    class="form-control" id="fPunchTime" placeholder="如 20:30（直接输 2030 也可以）" required />
                             <div class="form-text">直接输入时间即可：输 <b>2030</b> 会自动变成 <b>20:30</b>（也支持 930 → 09:30）。<br />计时工白班如果干到次日 0 点以后才下班：请选“下班打卡”，<b>日期选上班那天</b>、时间填 <b>00:xx</b>（次日 02:00 前，前一天必须已打过上班卡）。</div>
                         </div>
@@ -92,11 +92,11 @@
                     <div id="overtimeFields" class="d-none">
                         <div class="mb-3">
                             <label class="form-label">加班开始</label>
-                            <input asp-for="OvertimeStart" type="datetime-local" class="form-control" id="fOvertimeStart" required />
+                            <input asp-for="OvertimeStart" type="text" data-dt="datetime" inputmode="numeric" maxlength="16" placeholder="2026-11-16 20:30" autocomplete="off" class="form-control" id="fOvertimeStart" required />
                         </div>
                         <div class="mb-3">
                             <label class="form-label">加班结束</label>
-                            <input asp-for="OvertimeEnd" type="datetime-local" class="form-control" id="fOvertimeEnd" required />
+                            <input asp-for="OvertimeEnd" type="text" data-dt="datetime" inputmode="numeric" maxlength="16" placeholder="2026-11-16 20:30" autocomplete="off" class="form-control" id="fOvertimeEnd" required />
                         </div>
                         <div class="form-text mb-3"><strong>加班当天24点前必须提交，不能事后补报；夜班员工（加班那天排的是跨天班次）可以提前一天提交</strong>，比如周五上夜班时就能把"周六20:00～周日08:00"的加班先交了，白班只能当天提交。<strong>一次申请只对应一天的加班，结束时间最晚只能选到开始日期的第二天24点前</strong>（允许跨半夜，但不能一次选出好几天）。<strong>工作日的加班时间不能和当天班次的上下班时间重叠，请只填下班后（或上班前）的加班时段</strong>（休息日、节假日不受此限制）。加班时长按申请的起止时间计算：压到公司统一的饭点时段（@Model.MealBreakText）就扣掉重叠的那部分，按半小时向下取整；不足 0.5 小时不能提交。</div>
                     </div>
@@ -109,11 +109,11 @@
                         </div>
                         <div class="mb-3">
                             <label class="form-label">出差开始</label>
-                            <input asp-for="BusinessTripStart" type="datetime-local" class="form-control" id="fTripStart" required />
+                            <input asp-for="BusinessTripStart" type="text" data-dt="datetime" inputmode="numeric" maxlength="16" placeholder="2026-11-16 20:30" autocomplete="off" class="form-control" id="fTripStart" required />
                         </div>
                         <div class="mb-3">
                             <label class="form-label">出差结束</label>
-                            <input asp-for="BusinessTripEnd" type="datetime-local" class="form-control" id="fTripEnd" required />
+                            <input asp-for="BusinessTripEnd" type="text" data-dt="datetime" inputmode="numeric" maxlength="16" placeholder="2026-11-16 20:30" autocomplete="off" class="form-control" id="fTripEnd" required />
                         </div>
                         <div class="form-text mb-3">审批通过后，出差期间自动记为全勤，无需打卡。开始时间最早只能选到今天0点，最多能提前3个月申请。</div>
                     </div>
@@ -122,11 +122,11 @@
                     <div id="shiftChangeFields" class="d-none">
                         <div class="mb-3">
                             <label class="form-label">转班开始日期</label>
-                            <input asp-for="ShiftChangeStart" type="date" class="form-control" id="fShiftStart" required />
+                            <input asp-for="ShiftChangeStart" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-16" autocomplete="off" class="form-control" id="fShiftStart" required />
                         </div>
                         <div class="mb-3">
                             <label class="form-label">转班结束日期 <small class="text-muted">（含当天）</small></label>
-                            <input asp-for="ShiftChangeEnd" type="date" class="form-control" id="fShiftEnd" required />
+                            <input asp-for="ShiftChangeEnd" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-16" autocomplete="off" class="form-control" id="fShiftEnd" required />
                         </div>
                         <div class="mb-3">
                             <label class="form-label">转到哪个班次</label>

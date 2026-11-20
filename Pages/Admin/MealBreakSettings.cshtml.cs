@@ -72,7 +72,7 @@ public class MealBreakSettingsModel(AttendanceDbContext db, ILogger<MealBreakSet
             var s = i < Starts.Count ? Starts[i] : "";
             var e = i < Ends.Count ? Ends[i] : "";
             if (string.IsNullOrWhiteSpace(s) && string.IsNullOrWhiteSpace(e)) continue;   // 整行留空 = 这行不要了
-            if (!TimeOnly.TryParse(s, out var st) || !TimeOnly.TryParse(e, out var en))
+            if (!DateTimeTextParser.TryParseTime(s, out var st) || !DateTimeTextParser.TryParseTime(e, out var en))
             {
                 ErrorMessage = $"第 {i + 1} 行的开始/结束时间没填完整或格式不对";
                 await LoadAsync(keepForm: true);

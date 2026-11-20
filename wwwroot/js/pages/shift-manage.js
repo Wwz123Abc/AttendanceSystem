@@ -62,11 +62,11 @@ function addMidCheckRow(data) {
     div.innerHTML = `
         <div class="flex-fill">
             <label class="form-label small mb-1 text-muted">开始</label>
-            <input type="time" class="form-control form-control-sm" data-field="Start" />
+            <input type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 20:30" autocomplete="off" class="form-control form-control-sm" data-field="Start" />
         </div>
         <div class="flex-fill">
             <label class="form-label small mb-1 text-muted">结束</label>
-            <input type="time" class="form-control form-control-sm" data-field="End" />
+            <input type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 05:30" autocomplete="off" class="form-control form-control-sm" data-field="End" />
         </div>
         <button type="button" class="btn btn-outline-danger btn-sm" title="删除这一段" onclick="removeMidCheckRow(this)"><i class="bi bi-trash"></i></button>
     `;

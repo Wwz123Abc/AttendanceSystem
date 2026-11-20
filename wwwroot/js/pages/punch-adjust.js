@@ -1,4 +1,4 @@
-async function searchUsers(keyword) {
+﻿async function searchUsers(keyword) {
     if (!keyword) { renderUserResults([]); return; }
     try {
         const resp = await fetch(`?handler=SearchUsers&keyword=${encodeURIComponent(keyword)}`);
@@ -104,3 +104,4 @@ function autoNextDay() {
     if (time) box.checked = time < window.lastShiftStart;
 }
 document.getElementById('fPunchTime').addEventListener('input', autoNextDay);
+document.getElementById('fPunchTime').addEventListener('blur', autoNextDay);   // 文本框自动格式化后再判一次是否第二天

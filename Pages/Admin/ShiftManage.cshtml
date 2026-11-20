@@ -320,11 +320,11 @@
                         </div>
                         <div class="col-6">
                             <label class="form-label fw-semibold">上班时间</label>
-                            <input asp-for="WorkStart" id="fWS" type="time" class="form-control" required />
+                            <input asp-for="WorkStart" id="fWS" type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 20:30" autocomplete="off" class="form-control" required />
                         </div>
                         <div class="col-6">
                             <label class="form-label fw-semibold">下班时间</label>
-                            <input asp-for="WorkEnd" id="fWE" type="time" class="form-control" required />
+                            <input asp-for="WorkEnd" id="fWE" type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 05:30" autocomplete="off" class="form-control" required />
                         </div>
                         <div class="col-6">
                             <label class="form-label fw-semibold">迟到容忍（分钟）</label>

@@ -76,8 +76,8 @@
                             @for (var i = 0; i < Model.Starts.Count; i++)
                             {
                                 <tr>
-                                    <td><input type="time" name="Starts" value="@Model.Starts[i]" class="form-control form-control-sm" disabled="@(!Model.CanEdit)" /></td>
-                                    <td><input type="time" name="Ends" value="@(i < Model.Ends.Count ? Model.Ends[i] : "")" class="form-control form-control-sm" disabled="@(!Model.CanEdit)" /></td>
+                                    <td><input type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 12:00" autocomplete="off" name="Starts" value="@Model.Starts[i]" class="form-control form-control-sm" disabled="@(!Model.CanEdit)" /></td>
+                                    <td><input type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 13:00" autocomplete="off" name="Ends" value="@(i < Model.Ends.Count ? Model.Ends[i] : "")" class="form-control form-control-sm" disabled="@(!Model.CanEdit)" /></td>
                                     <td class="text-end">@if (Model.CanEdit) { <button type="button" class="btn btn-outline-danger btn-sm py-0" onclick="removeMealRow(this)">删除</button> }</td>
                                 </tr>
                             }
@@ -119,8 +119,8 @@
 <script>
 function addMealRow() {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td><input type="time" name="Starts" class="form-control form-control-sm" /></td>'
-        + '<td><input type="time" name="Ends" class="form-control form-control-sm" /></td>'
+    tr.innerHTML = '<td><input type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 12:00" autocomplete="off" name="Starts" class="form-control form-control-sm" /></td>'
+        + '<td><input type="text" data-dt="time" inputmode="numeric" maxlength="5" placeholder="如 13:00" autocomplete="off" name="Ends" class="form-control form-control-sm" /></td>'
         + '<td class="text-end"><button type="button" class="btn btn-outline-danger btn-sm py-0" onclick="removeMealRow(this)">删除</button></td>';
     document.getElementById('mealRows').appendChild(tr);
 }

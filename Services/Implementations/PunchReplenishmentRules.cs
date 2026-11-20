@@ -1,4 +1,5 @@
 using AttendanceSystem.Data;
+using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.Entities;
 using AttendanceSystem.Models.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -70,22 +71,19 @@ public static class PunchReplenishmentRules
     /// </summary>
     public static bool TryParseClockText(string? text, out TimeOnly time, out string? error)
     {
-        time = default;
-        error = null;
-        var s = (text ?? string.Empty).Trim().Replace('：', ':');
-        if (s.Length == 0)
+        if (string.IsNullOrWhiteSpace(text))
         {
+            time = default;
             error = "请填写打卡时间";
             return false;
         }
-        if (s.All(char.IsDigit) && s.Length is 3 or 4)
-            s = s.Length == 3 ? $"0{s[0]}:{s[1..]}" : $"{s[..2]}:{s[2..]}";
-        if (!TimeOnly.TryParse(s, out time))
+        if (DateTimeTextParser.TryParseTime(text, out time))
         {
-            error = "打卡时间格式不正确，请按 20:30 这样填写（也可以直接输 2030）";
-            return false;
+            error = null;
+            return true;
         }
-        return true;
+        error = "打卡时间格式不正确，请按 20:30 这样填写（也可以直接输 2030）";
+        return false;
     }
 
     /// <summary>把申请里的"日期 + 钟点"换算成真正的打卡时刻（夜班跨过午夜会落到第二天；计时工白班干到次日凌晨也会落到第二天）。</summary>

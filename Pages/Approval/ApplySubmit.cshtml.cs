@@ -85,6 +85,13 @@ public class ApplySubmitModel(
     public async Task<IActionResult> OnPostAsync()
     {
         await LoadMealBreakTextAsync();
+        NormalizeDateTimeInputs();
+        // 脱敏诊断（2026-11-20）：只记录"有没有值"，不记录具体内容/原因，方便下次 5 分钟内判断
+        // 是页面没提交上来（空）还是提交了但规则拒绝，不用再靠猜。
+        logger.LogInformation(
+            "申请提交字段检查：类型={Type}，审批人={HasApprover}，补卡日期={HasPunchDate}，补卡类型={HasPunchType}，打卡时间={HasPunchTime}，请假起={HasLeaveStart}，加班起={HasOvertimeStart}，出差起={HasTripStart}，转班起={HasShiftStart}",
+            ApprovalType, ApproverUserId is not null, !string.IsNullOrWhiteSpace(PunchDate), !string.IsNullOrWhiteSpace(PunchTypeVal), !string.IsNullOrWhiteSpace(PunchTime),
+            !string.IsNullOrWhiteSpace(LeaveStart), !string.IsNullOrWhiteSpace(OvertimeStart), !string.IsNullOrWhiteSpace(BusinessTripStart), !string.IsNullOrWhiteSpace(ShiftChangeStart));
         // 审批人名单要先查出来：一是校验员工选的人在不在名单里，二是提交失败时页面要重新显示这份名单
         ApproverOptions = await approvalService.GetAvailableApproversAsync(CurrentUserId);
 
@@ -140,12 +147,18 @@ public class ApplySubmitModel(
                     if (!Enum.TryParse<Models.Enums.LeaveType>(LeaveType, out var lt) || !Enum.IsDefined(lt))
                         throw new BusinessException("请选择请假类型");
                     dto.LeaveType      = lt;
-                    dto.LeaveStartTime = string.IsNullOrEmpty(LeaveStart) ? null : DateTime.Parse(LeaveStart);
-                    dto.LeaveEndTime   = string.IsNullOrEmpty(LeaveEnd)   ? null : DateTime.Parse(LeaveEnd);
+                    dto.LeaveStartTime = string.IsNullOrEmpty(LeaveStart) ? null : ParseDateTimeOrThrow(LeaveStart, "请假开始时间");
+                    dto.LeaveEndTime   = string.IsNullOrEmpty(LeaveEnd)   ? null : ParseDateTimeOrThrow(LeaveEnd, "请假结束时间");
                 }
                 else if (ApprovalType == "PunchReplenishment")
                 {
-                    dto.PunchDate = string.IsNullOrEmpty(PunchDate) ? null : DateOnly.Parse(PunchDate);
+                    if (!string.IsNullOrEmpty(PunchDate))
+                    {
+                        if (!DateTimeTextParser.TryParseDate(PunchDate, out var punchDate))
+                            throw new BusinessException("补卡日期格式不正确，请按 2026-11-16 这样填写");
+                        dto.PunchDate = punchDate;
+                    }
+                    else dto.PunchDate = null;
                     // 数字串 "3" 也能被 TryParse 成 MidCheck，补卡回写里"不是上班就当下班"，非法类型会被写成下班卡
                     dto.PunchType = Enum.TryParse<Models.Enums.PunchType>(PunchTypeVal, out var ptv) && Enum.IsDefined(ptv) ? ptv : null;
                     if (!string.IsNullOrWhiteSpace(PunchTime))
@@ -158,19 +171,19 @@ public class ApplySubmitModel(
                 }
                 else if (ApprovalType == "Overtime")
                 {
-                    dto.OvertimeStartTime = string.IsNullOrEmpty(OvertimeStart) ? null : DateTime.Parse(OvertimeStart);
-                    dto.OvertimeEndTime   = string.IsNullOrEmpty(OvertimeEnd)   ? null : DateTime.Parse(OvertimeEnd);
+                    dto.OvertimeStartTime = string.IsNullOrEmpty(OvertimeStart) ? null : ParseDateTimeOrThrow(OvertimeStart, "加班开始时间");
+                    dto.OvertimeEndTime   = string.IsNullOrEmpty(OvertimeEnd)   ? null : ParseDateTimeOrThrow(OvertimeEnd, "加班结束时间");
                 }
                 else if (ApprovalType == "BusinessTrip")
                 {
-                    dto.BusinessTripStartTime   = string.IsNullOrEmpty(BusinessTripStart) ? null : DateTime.Parse(BusinessTripStart);
-                    dto.BusinessTripEndTime     = string.IsNullOrEmpty(BusinessTripEnd)   ? null : DateTime.Parse(BusinessTripEnd);
+                    dto.BusinessTripStartTime   = string.IsNullOrEmpty(BusinessTripStart) ? null : ParseDateTimeOrThrow(BusinessTripStart, "出差开始时间");
+                    dto.BusinessTripEndTime     = string.IsNullOrEmpty(BusinessTripEnd)   ? null : ParseDateTimeOrThrow(BusinessTripEnd, "出差结束时间");
                     dto.BusinessTripDestination = string.IsNullOrWhiteSpace(BusinessTripDestination) ? null : BusinessTripDestination.Trim();
                 }
                 else if (ApprovalType == "ShiftChange")
                 {
-                    dto.ShiftChangeStartDate     = string.IsNullOrEmpty(ShiftChangeStart) ? null : DateOnly.Parse(ShiftChangeStart);
-                    dto.ShiftChangeEndDate       = string.IsNullOrEmpty(ShiftChangeEnd)   ? null : DateOnly.Parse(ShiftChangeEnd);
+                    dto.ShiftChangeStartDate     = string.IsNullOrEmpty(ShiftChangeStart) ? null : ParseDateOrThrow(ShiftChangeStart, "转班开始日期");
+                    dto.ShiftChangeEndDate       = string.IsNullOrEmpty(ShiftChangeEnd)   ? null : ParseDateOrThrow(ShiftChangeEnd, "转班结束日期");
                     dto.ShiftChangeTargetShiftId = ShiftChangeShiftId;
                 }
 
@@ -206,6 +219,35 @@ public class ApplySubmitModel(
         MyApplications = await approvalService.GetMyApprovalsAsync(CurrentUserId);   // 刷新列表
         return Page();
     }
+
+    /// <summary>
+    /// 把表单里的日期/时间文本统一成标准写法（2026-11-20：移动端改成文本框后，允许
+    /// 2026-11-16、2026-11-16 20:30、202611162030 等输入，这里先转成后续校验认识的格式）。
+    /// 转不了的原样保留，交给后面的校验给出明确提示。
+    /// </summary>
+    private void NormalizeDateTimeInputs()
+    {
+        if (DateTimeTextParser.TryParseDateTime(LeaveStart, out var leaveStart)) LeaveStart = leaveStart.ToString("yyyy-MM-ddTHH:mm");
+        if (DateTimeTextParser.TryParseDateTime(LeaveEnd, out var leaveEnd)) LeaveEnd = leaveEnd.ToString("yyyy-MM-ddTHH:mm");
+        if (DateTimeTextParser.TryParseDateTime(OvertimeStart, out var otStart)) OvertimeStart = otStart.ToString("yyyy-MM-ddTHH:mm");
+        if (DateTimeTextParser.TryParseDateTime(OvertimeEnd, out var otEnd)) OvertimeEnd = otEnd.ToString("yyyy-MM-ddTHH:mm");
+        if (DateTimeTextParser.TryParseDateTime(BusinessTripStart, out var tripStart)) BusinessTripStart = tripStart.ToString("yyyy-MM-ddTHH:mm");
+        if (DateTimeTextParser.TryParseDateTime(BusinessTripEnd, out var tripEnd)) BusinessTripEnd = tripEnd.ToString("yyyy-MM-ddTHH:mm");
+        if (DateTimeTextParser.TryParseDate(PunchDate, out var punchDate)) PunchDate = punchDate.ToString("yyyy-MM-dd");
+        if (DateTimeTextParser.TryParseDate(ShiftChangeStart, out var scStart)) ShiftChangeStart = scStart.ToString("yyyy-MM-dd");
+        if (DateTimeTextParser.TryParseDate(ShiftChangeEnd, out var scEnd)) ShiftChangeEnd = scEnd.ToString("yyyy-MM-dd");
+        if (PunchReplenishmentRules.TryParseClockText(PunchTime, out var punchClock, out _)) PunchTime = punchClock.ToString("HH:mm");
+    }
+
+    private static DateTime ParseDateTimeOrThrow(string text, string label) =>
+        DateTimeTextParser.TryParseDateTime(text, out var value)
+            ? value
+            : throw new BusinessException($"{label}格式不正确，请按 2026-11-16 20:30 这样填写");
+
+    private static DateOnly ParseDateOrThrow(string text, string label) =>
+        DateTimeTextParser.TryParseDate(text, out var value)
+            ? value
+            : throw new BusinessException($"{label}格式不正确，请按 2026-11-16 这样填写");
 
     /// <summary>
     /// 校验各类申请的时间是否合理：
