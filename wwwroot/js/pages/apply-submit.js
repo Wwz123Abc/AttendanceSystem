@@ -55,6 +55,17 @@ const maxAdvanceStr  = toLocalInputValue(maxAdvanceDate);   // 请假/出差开�
 const fLeaveStart = document.getElementById('fLeaveStart');
 const fLeaveEnd    = document.getElementById('fLeaveEnd');
 const fPunchDate   = document.getElementById('fPunchDate');
+const fPunchTime   = document.getElementById('fPunchTime');
+// 打卡时间现在是文本框：允许直接输数字（2030 / 930），失焦时自动补成 20:30 / 09:30。
+// 原来是 type=time，部分手机浏览器会显示时间但实际没提交值，导致服务器收到空值（2026-11-20）。
+function normalizePunchTime() {
+    if (!fPunchTime) return;
+    let v = (fPunchTime.value || '').replace(/：/g, ':').replace(/[^\d]/g, '');
+    if (v.length === 3) v = '0' + v;
+    if (v.length >= 4) v = v.slice(0, 2) + ':' + v.slice(2, 4);
+    fPunchTime.value = v;
+}
+if (fPunchTime) fPunchTime.addEventListener('blur', normalizePunchTime);
 const fOvertimeStart = document.getElementById('fOvertimeStart');
 const fOvertimeEnd   = document.getElementById('fOvertimeEnd');
 const fTripStart = document.getElementById('fTripStart');
@@ -107,7 +118,10 @@ document.querySelector('form[enctype]').addEventListener('submit', function (e) 
         else if (fLeaveStart.value && fLeaveStart.value > maxAdvanceStr) msg = '请假开始时间最多只能提前3个月申请';
         else if (fLeaveStart.value && fLeaveEnd.value && fLeaveEnd.value <= fLeaveStart.value) msg = '请假结束时间必须晚于开始时间';
     } else if (type === 'PunchReplenishment') {
-        if (fPunchDate.value && fPunchDate.value > todayStr) msg = '补卡日期不能晚于今天';
+        normalizePunchTime();
+        if (fPunchTime.value && !/^([01]\d|2[0-3]):[0-5]\d$/.test(fPunchTime.value))
+            msg = '打卡时间格式不正确，请按 20:30 这样填写（也可以直接输 2030）';
+        else if (fPunchDate.value && fPunchDate.value > todayStr) msg = '补卡日期不能晚于今天';
     } else if (type === 'Overtime') {
         if (fOvertimeStart.value && fOvertimeStart.value.slice(0, 10) < todayStr) msg = '加班申请不能事后补报，请在加班当天24点前提交（夜班员工可以提前一天提交）';
         else if (fOvertimeStart.value && fOvertimeStart.value > tomorrowEndStr) msg = '加班申请最早只能提前一天提交（仅夜班员工），请在加班前一天或当天提交';

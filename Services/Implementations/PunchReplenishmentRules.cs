@@ -63,6 +63,31 @@ public static class PunchReplenishmentRules
         _                  => "上班",
     };
 
+    /// <summary>
+    /// 补卡页面"打卡时间"的容错解析：接受 20:30、20：30（全角冒号），也接受直接输入 4 位数字
+    /// （2030 → 20:30）或 3 位数字（930 → 09:30）。2026-11-20 加：部分手机浏览器的时间控件
+    /// 会显示时间但实际没提交值，改成文本框后由这里统一兜底。
+    /// </summary>
+    public static bool TryParseClockText(string? text, out TimeOnly time, out string? error)
+    {
+        time = default;
+        error = null;
+        var s = (text ?? string.Empty).Trim().Replace('：', ':');
+        if (s.Length == 0)
+        {
+            error = "请填写打卡时间";
+            return false;
+        }
+        if (s.All(char.IsDigit) && s.Length is 3 or 4)
+            s = s.Length == 3 ? $"0{s[0]}:{s[1..]}" : $"{s[..2]}:{s[2..]}";
+        if (!TimeOnly.TryParse(s, out time))
+        {
+            error = "打卡时间格式不正确，请按 20:30 这样填写（也可以直接输 2030）";
+            return false;
+        }
+        return true;
+    }
+
     /// <summary>把申请里的"日期 + 钟点"换算成真正的打卡时刻（夜班跨过午夜会落到第二天；计时工白班干到次日凌晨也会落到第二天）。</summary>
     public static DateTime ResolveTime(PunchType type, DateOnly date, TimeOnly time, DateTime? existingClockIn, ShiftSchedule? shift, bool hourly = false) => type switch
     {

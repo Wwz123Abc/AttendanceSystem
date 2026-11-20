@@ -148,7 +148,13 @@ public class ApplySubmitModel(
                     dto.PunchDate = string.IsNullOrEmpty(PunchDate) ? null : DateOnly.Parse(PunchDate);
                     // 数字串 "3" 也能被 TryParse 成 MidCheck，补卡回写里"不是上班就当下班"，非法类型会被写成下班卡
                     dto.PunchType = Enum.TryParse<Models.Enums.PunchType>(PunchTypeVal, out var ptv) && Enum.IsDefined(ptv) ? ptv : null;
-                    dto.PunchTime = string.IsNullOrEmpty(PunchTime) ? null : TimeOnly.Parse(PunchTime);
+                    if (!string.IsNullOrWhiteSpace(PunchTime))
+                    {
+                        if (!PunchReplenishmentRules.TryParseClockText(PunchTime, out var punchClock, out var timeError))
+                            throw new BusinessException(timeError!);
+                        dto.PunchTime = punchClock;
+                    }
+                    else dto.PunchTime = null;
                 }
                 else if (ApprovalType == "Overtime")
                 {

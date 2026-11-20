@@ -82,8 +82,9 @@
                         </div>
                         <div class="mb-3">
                             <label class="form-label">打卡时间</label>
-                            <input asp-for="PunchTime" type="time" class="form-control" id="fPunchTime" required />
-                            <div class="form-text">请点一下上面的时间框，选好具体的时和分（部分手机浏览器会显示一个默认时间，但没选就不算填写）。<br />计时工白班如果干到次日 0 点以后才下班：请选“下班打卡”，<b>日期选上班那天</b>、时间填 <b>00:xx</b>（次日 02:00 前，前一天必须已打过上班卡）。</div>
+                            <input asp-for="PunchTime" type="text" inputmode="numeric" maxlength="5" autocomplete="off"
+                                   class="form-control" id="fPunchTime" placeholder="如 20:30（直接输 2030 也可以）" required />
+                            <div class="form-text">直接输入时间即可：输 <b>2030</b> 会自动变成 <b>20:30</b>（也支持 930 → 09:30）。<br />计时工白班如果干到次日 0 点以后才下班：请选“下班打卡”，<b>日期选上班那天</b>、时间填 <b>00:xx</b>（次日 02:00 前，前一天必须已打过上班卡）。</div>
                         </div>
                     </div>
 
