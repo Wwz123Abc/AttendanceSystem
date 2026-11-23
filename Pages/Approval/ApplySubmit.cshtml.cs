@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using AttendanceSystem.Helpers;
@@ -150,7 +150,7 @@ public class ApplySubmitModel(
                         throw new BusinessException("请选择请假类型");
                     dto.LeaveType      = lt;
                     dto.LeaveStartTime = string.IsNullOrEmpty(LeaveStart) ? null : ParseDateTimeOrThrow(LeaveStart, "请假开始时间");
-                    dto.LeaveEndTime   = string.IsNullOrEmpty(LeaveEnd)   ? null : ParseDateTimeOrThrow(LeaveEnd, "请假结束时间");
+                    dto.LeaveEndTime   = string.IsNullOrEmpty(LeaveEnd)   ? null : ParseDateTimeOrThrow(LeaveEnd, "请假结束时间", dto.LeaveStartTime is { } lst ? DateOnly.FromDateTime(lst) : null);
                 }
                 else if (ApprovalType == "PunchReplenishment")
                 {
@@ -174,12 +174,12 @@ public class ApplySubmitModel(
                 else if (ApprovalType == "Overtime")
                 {
                     dto.OvertimeStartTime = string.IsNullOrEmpty(OvertimeStart) ? null : ParseDateTimeOrThrow(OvertimeStart, "加班开始时间");
-                    dto.OvertimeEndTime   = string.IsNullOrEmpty(OvertimeEnd)   ? null : ParseDateTimeOrThrow(OvertimeEnd, "加班结束时间");
+                    dto.OvertimeEndTime   = string.IsNullOrEmpty(OvertimeEnd)   ? null : ParseDateTimeOrThrow(OvertimeEnd, "加班结束时间", dto.OvertimeStartTime is { } ost ? DateOnly.FromDateTime(ost) : null);
                 }
                 else if (ApprovalType == "BusinessTrip")
                 {
                     dto.BusinessTripStartTime   = string.IsNullOrEmpty(BusinessTripStart) ? null : ParseDateTimeOrThrow(BusinessTripStart, "出差开始时间");
-                    dto.BusinessTripEndTime     = string.IsNullOrEmpty(BusinessTripEnd)   ? null : ParseDateTimeOrThrow(BusinessTripEnd, "出差结束时间");
+                    dto.BusinessTripEndTime     = string.IsNullOrEmpty(BusinessTripEnd)   ? null : ParseDateTimeOrThrow(BusinessTripEnd, "出差结束时间", dto.BusinessTripStartTime is { } tst ? DateOnly.FromDateTime(tst) : null);
                     dto.BusinessTripDestination = string.IsNullOrWhiteSpace(BusinessTripDestination) ? null : BusinessTripDestination.Trim();
                 }
                 else if (ApprovalType == "ShiftChange")
@@ -247,10 +247,10 @@ public class ApplySubmitModel(
         if (PunchReplenishmentRules.TryParseClockText(PunchTime, out var punchClock, out _)) PunchTime = punchClock.ToString("HH:mm");
     }
 
-    private static DateTime ParseDateTimeOrThrow(string text, string label) =>
-        DateTimeTextParser.TryParseDateTime(text, out var value)
+    private static DateTime ParseDateTimeOrThrow(string text, string label, DateOnly? fallbackDate = null) =>
+        DateTimeTextParser.TryParseDateTime(text, out var value, fallbackDate)
             ? value
-            : throw new BusinessException($"{label}格式不正确，请按 2026-11-16 20:30 这样填写");
+            : throw new BusinessException($"{label}格式不正确，请按 2026-11-16 20:30 这样填写（只填时间也可以）");
 
     private static DateOnly ParseDateOrThrow(string text, string label) =>
         DateTimeTextParser.TryParseDate(text, out var value)

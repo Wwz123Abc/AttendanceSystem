@@ -32,9 +32,12 @@
             if (d.length >= 12) {
                 el.value = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) +
                            'T' + d.slice(8, 10) + ':' + d.slice(10, 12);
-            } else if (d.length === 8) {
-                el.value = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8);
+            } else if (d.length === 8 && /:/.test(el.value)) {
+                // 只写了"月-日 时:分"（如 11-21 22:47）：补上今年，避免被当成 8 位日期截断
+                el.value = new Date().getFullYear() + '-' + d.slice(0, 2) + '-' + d.slice(2, 4) +
+                           'T' + d.slice(4, 6) + ':' + d.slice(6, 8);
             }
+            // 其他不完整的写法保持原样，交给服务器容错解析（服务器会补年份/用开始日期补结束时间）
             return;
         }
     }
