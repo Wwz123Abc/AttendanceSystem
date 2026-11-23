@@ -133,6 +133,11 @@ public class PendingApprovalModel(IApprovalService approvalService, IDeptScopeSe
         if (ids.Count == 0)
             return await FailAsync("请至少勾选一条申请");
 
+        // 一次勾选上千条会让单次请求处理几十秒，期间整站都会明显变慢；限制单批数量，分批处理。
+        const int maxBatchSize = 100;
+        if (ids.Count > maxBatchSize)
+            return await FailAsync($"一次最多批量处理 {maxBatchSize} 条（当前勾选 {ids.Count} 条），请分批操作");
+
         var okCount = 0;
         foreach (var id in ids)
         {
