@@ -138,6 +138,31 @@ public class AuditFlowTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 特殊情况加半小对账后不再报加班多记()
+    {
+        var (uid, _) = SeedWeekWorld();
+        var id = await AddApprovedAsync(new ApprovalRequest
+        {
+            RequestNo = "JB-A-SPECIAL", ApplicantUserId = uid, ApprovalType = ApprovalType.Overtime,
+            OvertimeStartTime = Mon.ToDateTime(new TimeOnly(18, 0)), OvertimeEndTime = Mon.ToDateTime(new TimeOnly(21, 0)),
+            OvertimeDurationHours = 3, Reason = "t"
+        });
+        using (var db = CreateContext()) await Svc(db).UpdateAttendanceAfterApprovalAsync(id);
+
+        using (var db = CreateContext())
+        {
+            var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Mon);
+            rec.OvertimeHours = 3.5m;   // 加班单 3 小时 + 已确认的特殊加时 0.5 小时
+            rec.ApprovalNote = "特殊情况：加班加 0.5 小时（用户确认）";
+            await db.SaveChangesAsync();
+        }
+
+        using var db2 = CreateContext();
+        var issues = await Svc(db2).AuditAsync(Mon, Mon);
+        Assert.DoesNotContain(issues, i => i.Type == AttendanceService.AuditOtOver);
+    }
+
+    [Fact]
     public async Task 有打卡但没排班_核对报出来()
     {
         var (uid, _) = SeedDayMidWorld();

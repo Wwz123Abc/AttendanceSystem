@@ -244,11 +244,20 @@ public partial class AttendanceService
 
         // 加班：已批准的加班单按班次对账之后的合计，和记录上的加班时长比（多了、少了都报）
         var users = records.Select(r => r.User).DistinctBy(x => x.Id).ToDictionary(x => x.Id);
+        // 已确认的"特殊情况：加班加 0.5 小时"：记录上会比加班单多 0.5 小时，核对时不应再报"多记"。
+        // 只认差额正好 0.5 小时的；如果是别的差额，说明还有别的异常，继续报。
+        var confirmedHalfHourAdds = records
+            .Where(r => r.ApprovalNote is { } note && note.Contains("特殊情况：加班加"))
+            .Select(r => (r.UserId, r.WorkDate))
+            .ToHashSet();
         foreach (var row in await ReconcileOvertimeAsync(userIds, from, to, dryRun: true, ct, includeUnderRecorded: true))
         {
             users.TryGetValue(row.UserId, out var u);
+            var diff = row.OldOvertime - row.NewOvertime;
+            if (confirmedHalfHourAdds.Contains((row.UserId, row.WorkDate)) && Math.Abs(diff - 0.5m) < 0.01m)
+                continue;   // 备注已确认的特殊加时，视为已核实，不再报多记
             var under = row.OldOvertime < row.NewOvertime;
-            if (Math.Abs(row.OldOvertime - row.NewOvertime) < 0.01m) continue;
+            if (Math.Abs(diff) < 0.01m) continue;
             issues.Add(new AuditIssue(row.UserId, row.EmployeeNo, row.RealName, u?.AttendanceGroup?.GroupName, row.WorkDate,
                 under ? AuditOtUnder : AuditOtOver, "danger",
                 $"已批准的加班单（{row.Forms}）对账后合计 {row.NewOvertime:0.##} 小时，记录上是 {row.OldOvertime:0.##} 小时",
