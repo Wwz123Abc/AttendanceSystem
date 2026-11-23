@@ -904,6 +904,7 @@ public class ApprovalService(AttendanceDbContext db, IAttendanceService attendan
                     .Max(s => s.HandledAt)
             })
             .OrderByDescending(x => x.MyHandledAt)
+            .Take(200)   // 待审批页只展示最近 200 条：老审批人累计几千条时整页 DOM 过重，浏览器会卡死
             .Select(x => ToDto(x.Request))
             .ToList();
     }
