@@ -98,29 +98,6 @@
 
     <div class="card mb-3">
         <div class="card-header py-2">
-            <i class="bi bi-calendar-week me-1"></i>排班（今天前 14 天到后 45 天，红色 = 该排班的日子没有排班）
-        </div>
-        <div style="max-height:320px;overflow-y:auto">
-            <table class="table table-sm table-hover mb-0 align-middle">
-                <thead class="table-light" style="position:sticky;top:0"><tr><th>日期</th><th>星期</th><th>班次</th><th>上下班时间</th><th>备注</th></tr></thead>
-                <tbody>
-                @foreach (var s in Model.Shifts)
-                {
-                    <tr class="@(s.Missing ? "table-danger" : s.Date == Model.Today ? "table-primary" : "")">
-                        <td>@s.Date.ToString("yyyy-MM-dd")@(s.Date == Model.Today ? "（今天）" : "")</td>
-                        <td>@AttendanceSystem.Helpers.WeekdayText.Zh(s.Date)</td>
-                        <td>@(s.ShiftName ?? (s.Missing ? "未排班" : "—"))</td>
-                        <td>@s.Time@(s.CrossDay ? "（跨天）" : "")</td>
-                        <td>@(s.IsRest ? "休息日" : "")@(s.Missing && s.HasPunch ? "有打卡但没排班" : "")</td>
-                    </tr>
-                }
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <div class="card mb-3">
-        <div class="card-header py-2">
             <i class="bi bi-clipboard-data me-1"></i>考勤记录（@Model.Start.ToString("yyyy-MM-dd") 至 @Model.End.ToString("yyyy-MM-dd")，
             共 @Model.Records.Count 天；正班合计 @Model.TotalWork.ToString("0.##") 小时，加班合计 @Model.TotalOvertime.ToString("0.##") 小时）
         </div>
