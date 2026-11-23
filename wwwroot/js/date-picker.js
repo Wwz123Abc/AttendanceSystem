@@ -1,4 +1,4 @@
-// 自定义日期/时间选择器（2026-11-23）
+﻿// 自定义日期/时间选择器（2026-11-23）
 // 目的：不依赖浏览器原生 date/time 控件（部分手机浏览器会"显示有值但提交为空"），
 // 同时保留"点日历选择"的方便，不用手输数字。
 // 每个 [data-dt] 输入框后面加一个 📅 / 🕒 按钮，点开是自绘日历 + 时/分下拉。
@@ -198,7 +198,7 @@
         var kind = state.kind;
         var v = kind === 'time'
             ? hm(state.hour, state.minute)
-            : ymd(state.date) + (kind === 'datetime' ? 'T' + hm(state.hour, state.minute) : '');
+            : ymd(state.date) + (kind === 'datetime' ? ' ' + hm(state.hour, state.minute) : '');
         activeInput.value = v;
         done();
     }

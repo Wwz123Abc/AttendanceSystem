@@ -1,4 +1,4 @@
-// 每种申请类型对应哪几个"必填"的日期/时间字段（id）
+﻿// 每种申请类型对应哪几个"必填"的日期/时间字段（id）
 const REQUIRED_FIELDS_BY_TYPE = {
     Leave:              ['fLeaveStart', 'fLeaveEnd'],
     PunchReplenishment: ['fPunchDate', 'fPunchTime'],   // 打卡时间也是必填：手机浏览器的时间框可能显示默认值但其实没选，提交后被服务器拒绝
@@ -33,8 +33,8 @@ applyTypeSelect.addEventListener('change', function() { syncApplyTypeFields(this
 // ── 日期/时间选择限制：避免选出不合逻辑的时间（结束早于开始、请假选到过去、补卡选到未来）──
 // 说明：这里做的是“前端友好提示 + 限制选择器可选范围”，真正兜底的校验在后端（服务器不会信任前端）。
 function pad(n) { return String(n).padStart(2, '0'); }
-function toLocalInputValue(d) {   // Date -> "yyyy-MM-ddTHH:mm"，datetime-local 输入框要的格式
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function toLocalInputValue(d) {   // Date -> "yyyy-MM-dd HH:mm"（显示用空格，不用 T）
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function toDateInputValue(d) {    // Date -> "yyyy-MM-dd"，date 输入框要的格式
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
@@ -45,10 +45,10 @@ const nowStr    = toLocalInputValue(now);
 const todayStr  = toDateInputValue(now);
 const leaveMinDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 const leaveMinStr  = toLocalInputValue(leaveMinDate);   // 现在往前推24小时
-const todayStartStr = todayStr + 'T00:00';   // 今天0点
-const todayEndStr   = todayStr + 'T23:59';   // 今天23:59（当天24点前）
+const todayStartStr = todayStr + ' 00:00';   // 今天0点
+const todayEndStr   = todayStr + ' 23:59';   // 今天23:59（当天24点前）
 const tomorrow      = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-const tomorrowEndStr = toDateInputValue(tomorrow) + 'T23:59';   // 明天23:59：加班结束时间最晚只能到这（允许跨半夜，但不能随便选到更远的日期）
+const tomorrowEndStr = toDateInputValue(tomorrow) + ' 23:59';   // 明天23:59：加班结束时间最晚只能到这（允许跨半夜，但不能随便选到更远的日期）
 const maxAdvanceDate = new Date(now.getFullYear(), now.getMonth() + 3, now.getDate());
 const maxAdvanceStr  = toLocalInputValue(maxAdvanceDate);   // 请假/出差开始时间最多能提前3个月，避免选到离谱的未来日期（2026-09-30）
 
@@ -85,12 +85,12 @@ fPunchDate.max = todayStr;
 // 加班：加班当天24点前必须提交，不能事后补报；夜班员工可以提前一天提交（能不能提前由后端按排班判断，这里只放宽到明天）；
 // 结束时间不能早于开始时间，最晚只能选到"开始日期的第二天"23:59（允许夜班/晚上加班跨过午夜，但不能一次选出好几天）
 const dayAfterTomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
-const dayAfterTomorrowEndStr = toDateInputValue(dayAfterTomorrow) + 'T23:59';
+const dayAfterTomorrowEndStr = toDateInputValue(dayAfterTomorrow) + ' 23:59';
 function overtimeEndMax(startValue) {
     if (!startValue) return dayAfterTomorrowEndStr;
     const d = new Date(startValue.slice(0, 10) + 'T00:00');
     d.setDate(d.getDate() + 1);
-    return toDateInputValue(d) + 'T23:59';   // 开始日期的第二天 23:59
+    return toDateInputValue(d) + ' 23:59';   // 开始日期的第二天 23:59
 }
 fOvertimeStart.min = todayStartStr;
 fOvertimeStart.max = tomorrowEndStr;

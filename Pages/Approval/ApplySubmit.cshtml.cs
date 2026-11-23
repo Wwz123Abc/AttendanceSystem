@@ -235,12 +235,12 @@ public class ApplySubmitModel(
     /// </summary>
     private void NormalizeDateTimeInputs()
     {
-        if (DateTimeTextParser.TryParseDateTime(LeaveStart, out var leaveStart)) LeaveStart = leaveStart.ToString("yyyy-MM-ddTHH:mm");
-        if (DateTimeTextParser.TryParseDateTime(LeaveEnd, out var leaveEnd)) LeaveEnd = leaveEnd.ToString("yyyy-MM-ddTHH:mm");
-        if (DateTimeTextParser.TryParseDateTime(OvertimeStart, out var otStart)) OvertimeStart = otStart.ToString("yyyy-MM-ddTHH:mm");
-        if (DateTimeTextParser.TryParseDateTime(OvertimeEnd, out var otEnd)) OvertimeEnd = otEnd.ToString("yyyy-MM-ddTHH:mm");
-        if (DateTimeTextParser.TryParseDateTime(BusinessTripStart, out var tripStart)) BusinessTripStart = tripStart.ToString("yyyy-MM-ddTHH:mm");
-        if (DateTimeTextParser.TryParseDateTime(BusinessTripEnd, out var tripEnd)) BusinessTripEnd = tripEnd.ToString("yyyy-MM-ddTHH:mm");
+        if (DateTimeTextParser.TryParseDateTime(LeaveStart, out var leaveStart)) LeaveStart = leaveStart.ToString("yyyy-MM-dd HH:mm");
+        if (DateTimeTextParser.TryParseDateTime(LeaveEnd, out var leaveEnd)) LeaveEnd = leaveEnd.ToString("yyyy-MM-dd HH:mm");
+        if (DateTimeTextParser.TryParseDateTime(OvertimeStart, out var otStart)) OvertimeStart = otStart.ToString("yyyy-MM-dd HH:mm");
+        if (DateTimeTextParser.TryParseDateTime(OvertimeEnd, out var otEnd)) OvertimeEnd = otEnd.ToString("yyyy-MM-dd HH:mm");
+        if (DateTimeTextParser.TryParseDateTime(BusinessTripStart, out var tripStart)) BusinessTripStart = tripStart.ToString("yyyy-MM-dd HH:mm");
+        if (DateTimeTextParser.TryParseDateTime(BusinessTripEnd, out var tripEnd)) BusinessTripEnd = tripEnd.ToString("yyyy-MM-dd HH:mm");
         if (DateTimeTextParser.TryParseDate(PunchDate, out var punchDate)) PunchDate = punchDate.ToString("yyyy-MM-dd");
         if (DateTimeTextParser.TryParseDate(ShiftChangeStart, out var scStart)) ShiftChangeStart = scStart.ToString("yyyy-MM-dd");
         if (DateTimeTextParser.TryParseDate(ShiftChangeEnd, out var scEnd)) ShiftChangeEnd = scEnd.ToString("yyyy-MM-dd");

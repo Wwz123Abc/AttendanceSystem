@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
@@ -217,8 +217,8 @@ public class PunchAdjustModel(IAttendanceService attendanceService, IDeptScopeSe
             midResult = record.MidCheckResults,
             notes,
             exists    = true,
-            clockIn   = record.ClockInTime?.ToString("yyyy-MM-ddTHH:mm"),
-            clockOut  = record.ClockOutTime?.ToString("yyyy-MM-ddTHH:mm"),
+            clockIn   = record.ClockInTime?.ToString("yyyy-MM-dd HH:mm"),
+            clockOut  = record.ClockOutTime?.ToString("yyyy-MM-dd HH:mm"),
             status    = AttendanceService.StatusText(record.AttendanceStatus),
             workHours = record.ActualWorkHours,
             note      = record.ApprovalNote   // 旧字段，页面改用 notes（已拆开去重）

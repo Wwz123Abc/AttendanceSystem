@@ -1,4 +1,4 @@
-// 统一的日期/时间文本输入格式化（2026-11-20）
+﻿// 统一的日期/时间文本输入格式化（2026-11-20）
 // 目的：移动端不再依赖浏览器原生的 date/time/datetime-local 控件——部分浏览器会"显示有值但提交为空"。
 // 用法：<input type="text" data-dt="date|time|datetime" ... />
 // 输入纯数字也能自动补分隔符：
@@ -31,11 +31,11 @@
         if (kind === 'datetime') {
             if (d.length >= 12) {
                 el.value = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) +
-                           'T' + d.slice(8, 10) + ':' + d.slice(10, 12);
+                           ' ' + d.slice(8, 10) + ':' + d.slice(10, 12);
             } else if (d.length === 8 && /:/.test(el.value)) {
                 // 只写了"月-日 时:分"（如 11-21 22:47）：补上今年，避免被当成 8 位日期截断
                 el.value = new Date().getFullYear() + '-' + d.slice(0, 2) + '-' + d.slice(2, 4) +
-                           'T' + d.slice(4, 6) + ':' + d.slice(6, 8);
+                           ' ' + d.slice(4, 6) + ':' + d.slice(6, 8);
             }
             // 其他不完整的写法保持原样，交给服务器容错解析（服务器会补年份/用开始日期补结束时间）
             return;
@@ -79,7 +79,7 @@
                     this.value = d.slice(0, 2) + ':' + d.slice(2, 4);
                 } else if (kind === 'datetime' && d.length >= 12) {
                     this.value = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) +
-                                 'T' + d.slice(8, 10) + ':' + d.slice(10, 12);
+                                 ' ' + d.slice(8, 10) + ':' + d.slice(10, 12);
                 }
             });
         }
