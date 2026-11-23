@@ -13,11 +13,11 @@
     <form method="get" class="row g-2 align-items-end mb-3">
         <div class="col-auto">
             <label class="form-label small mb-0">开始日期</label>
-            <input type="date" name="From" class="form-control form-control-sm" value="@Model.From?.ToString("yyyy-MM-dd")" />
+            <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="From" class="form-control form-control-sm" value="@Model.From?.ToString("yyyy-MM-dd")" />
         </div>
         <div class="col-auto">
             <label class="form-label small mb-0">结束日期</label>
-            <input type="date" name="To" class="form-control form-control-sm" value="@Model.To?.ToString("yyyy-MM-dd")" />
+            <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="To" class="form-control form-control-sm" value="@Model.To?.ToString("yyyy-MM-dd")" />
         </div>
         <div class="col-auto">
             <label class="form-label small mb-0">结果</label>

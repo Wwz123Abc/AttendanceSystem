@@ -501,11 +501,11 @@
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">入职日期</label>
-                            <input asp-for="HireDate" type="date" class="form-control" id="fHireDate" />
+                            <input asp-for="HireDate" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" class="form-control" id="fHireDate" />
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">离职日期</label>
-                            <input asp-for="ResignDate" type="date" class="form-control" id="fResignDate" />
+                            <input asp-for="ResignDate" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" class="form-control" id="fResignDate" />
                             <div class="form-text">停用员工时默认填当天，可以改；重新启用会清空。</div>
                         </div>
                         <div class="col-md-6">

@@ -151,11 +151,11 @@
                     <div class="row g-2 mb-3">
                         <div class="col-6">
                             <label class="form-label fw-semibold">开始日期</label>
-                            <input asp-for="AssignStart" type="date" class="form-control" />
+                            <input asp-for="AssignStart" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" class="form-control" />
                         </div>
                         <div class="col-6">
                             <label class="form-label fw-semibold">结束日期</label>
-                            <input asp-for="AssignEnd" type="date" class="form-control" />
+                            <input asp-for="AssignEnd" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" class="form-control" />
                         </div>
                     </div>
                     <div class="form-check mb-3">
@@ -228,9 +228,9 @@
         <form method="get" class="d-flex align-items-center gap-2 mb-0">
             @Html.Raw(getGroupsHidden)
             <label class="form-label mb-0 small text-nowrap">日期范围：</label>
-            <input type="date" name="viewStart" value="@Model.ViewStart.ToString("yyyy-MM-dd")" class="form-control form-control-sm w-auto" />
+            <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="viewStart" value="@Model.ViewStart.ToString("yyyy-MM-dd")" class="form-control form-control-sm w-auto" />
             <span>~</span>
-            <input type="date" name="viewEnd" value="@Model.ViewEnd.ToString("yyyy-MM-dd")" class="form-control form-control-sm w-auto" />
+            <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="viewEnd" value="@Model.ViewEnd.ToString("yyyy-MM-dd")" class="form-control form-control-sm w-auto" />
             <button type="submit" class="btn btn-outline-primary btn-sm">查询</button>
             <!-- GET 表单提交时，浏览器会把 action/formaction 里原有的查询参数整个丢掉、只用表单字段重新拼一次，
                  所以 formaction="...?handler=Export" 这种写法在 GET 表单里不会生效（跟以前"导出汇总表"点了没反应
@@ -381,7 +381,7 @@
                     </div>
                     <div class="d-flex align-items-center gap-2 mt-1">
                         <span class="small text-muted">从</span>
-                        <input asp-for="RecalcFrom" id="fRecalcFrom" type="date" class="form-control form-control-sm" style="max-width:160px" />
+                        <input asp-for="RecalcFrom" id="fRecalcFrom" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" class="form-control form-control-sm" style="max-width:160px" />
                         <span class="small text-muted">起（最多往前 93 天）</span>
                     </div>
                     <div class="form-text">改了午间窗口或上下班时间后建议勾上：只重算工时和午间命中，不动考勤状态、迟到早退、加班、请假。不勾的话，旧记录的工时还是按旧设置算的。</div>

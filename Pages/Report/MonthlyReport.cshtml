@@ -39,12 +39,12 @@
             <div class="row g-2 mb-2 align-items-end">
                 <div class="col-auto">
                     <label class="form-label small mb-1">开始日期</label>
-                    <input type="date" name="start" class="form-control form-control-sm"
+                    <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="start" class="form-control form-control-sm"
                            value="@Model.Start.ToString("yyyy-MM-dd")" required />
                 </div>
                 <div class="col-auto">
                     <label class="form-label small mb-1">结束日期</label>
-                    <input type="date" name="end" class="form-control form-control-sm"
+                    <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="end" class="form-control form-control-sm"
                            value="@Model.End.ToString("yyyy-MM-dd")" required />
                 </div>
                 <div class="col-auto">

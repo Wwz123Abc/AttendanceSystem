@@ -44,12 +44,12 @@
         <form method="get" class="row g-2 align-items-end">
             <div class="col-6 col-md-2">
                 <label class="form-label small mb-0">提交日期（起）</label>
-                <input type="date" name="start" value="@Model.StartDate.ToString("yyyy-MM-dd")"
+                <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="start" value="@Model.StartDate.ToString("yyyy-MM-dd")"
                        min="@Model.WindowStart.ToString("yyyy-MM-dd")" max="@DateTime.Today.ToString("yyyy-MM-dd")" class="form-control form-control-sm" />
             </div>
             <div class="col-6 col-md-2">
                 <label class="form-label small mb-0">提交日期（止）</label>
-                <input type="date" name="end" value="@Model.EndDate.ToString("yyyy-MM-dd")"
+                <input type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" name="end" value="@Model.EndDate.ToString("yyyy-MM-dd")"
                        min="@Model.WindowStart.ToString("yyyy-MM-dd")" max="@DateTime.Today.ToString("yyyy-MM-dd")" class="form-control form-control-sm" />
             </div>
             <div class="col-6 col-md-2">

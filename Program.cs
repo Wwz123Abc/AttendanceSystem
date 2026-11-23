@@ -218,6 +218,11 @@ builder.Services.AddRazorPages(options =>
     options.Conventions.AllowAnonymousToPage("/Login");
     options.Conventions.AllowAnonymousToPage("/Logout");
     options.Conventions.AllowAnonymousToPage("/Employee/SelfRegister");
+})
+.AddMvcOptions(options =>
+{
+    // 2026-11-23：日期/时间统一用手输容错绑定，不依赖浏览器原生控件提交的固定格式
+    options.ModelBinderProviders.Insert(0, new AttendanceSystem.ModelBinding.FlexibleDateTimeModelBinderProvider());
 });
 builder.Services.AddControllers()
     .AddJsonOptions(o =>

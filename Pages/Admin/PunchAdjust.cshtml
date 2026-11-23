@@ -36,7 +36,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">考勤日期 <span class="text-danger">*</span></label>
-                        <input asp-for="WorkDate" type="date" class="form-control" id="fWorkDate" required />
+                        <input asp-for="WorkDate" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" class="form-control" id="fWorkDate" required />
                         <div class="form-text">对应"考勤记录"所属的那一天（夜班取上班当天的日期，不是下班那天）。</div>
                     </div>
                     <button type="button" class="btn btn-outline-secondary btn-sm mb-3" onclick="loadCurrentRecord()">

@@ -198,7 +198,7 @@
                         <div class="col-12">
                             <hr class="my-1" />
                             <label class="form-label fw-semibold">计时工模式起始日 <small class="text-muted fw-normal">（留空 = 普通考勤组）</small></label>
-                            <input asp-for="HourlyStart" id="fHourlyStart" type="date" class="form-control" style="max-width:200px" />
+                            <input asp-for="HourlyStart" id="fHourlyStart" type="text" data-dt="date" inputmode="numeric" maxlength="10" placeholder="2026-11-23" autocomplete="off" class="form-control" style="max-width:200px" />
                             <div class="form-text">
                                 从这一天起，组内员工按<b>实际打卡时长</b>算工时：最后一次下班卡 − 第一次上班卡，扣午饭 1 小时、晚饭 0.5 小时，不封顶；
                                 没有加班（不能提交加班申请）、休息日、旷工、迟到早退；午间窗口漏打只算窗口开始之前的工时；00:00–07:00 的打卡无效。

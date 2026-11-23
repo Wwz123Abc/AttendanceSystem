@@ -64,6 +64,24 @@
         for (var i = 0; i < inputs.length; i++) {
             var el = inputs[i];
             el.addEventListener('blur', function () { normalize(this); });
+            // 边输边格式化（只在"纯数字、光标在末尾"时做，避免打断修改中间的数字）：
+            // 输满 8 位日期 / 4 位时间 / 12 位日期时间，立刻补上分隔符，手机上不用找冒号横杠。
+            el.addEventListener('input', function () {
+                var kind = this.dataset.dt;
+                if (!kind) return;
+                var raw = this.value || '';
+                if (/[-:\/\s]/.test(raw)) return;
+                if (typeof this.selectionStart === 'number' && this.selectionStart !== raw.length) return;
+                var d = raw.replace(/\D/g, '');
+                if (kind === 'date' && d.length >= 8) {
+                    this.value = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8);
+                } else if (kind === 'time' && d.length >= 4) {
+                    this.value = d.slice(0, 2) + ':' + d.slice(2, 4);
+                } else if (kind === 'datetime' && d.length >= 12) {
+                    this.value = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) +
+                                 'T' + d.slice(8, 10) + ':' + d.slice(10, 12);
+                }
+            });
         }
         // 在页面自己的 submit 处理之前格式化（capture 阶段），保证后续比较/提交都用标准写法
         var forms = document.querySelectorAll('form');
