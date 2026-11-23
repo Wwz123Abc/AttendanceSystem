@@ -23,6 +23,16 @@
                 <p class="text-muted small mb-0">请填写以下基础信息，提交后等待管理员确认</p>
             </div>
 
+            <div class="alert alert-info small">
+                <div class="fw-semibold mb-1"><i class="bi bi-info-circle me-1"></i>填写前准备</div>
+                <ul class="mb-0 ps-3">
+                    <li>准备好<b>身份证</b>（要填 18 位身份证号、上传身份证照片）；</li>
+                    <li>手机号、劳务公司、家庭住址、紧急联系人姓名和电话都要填真实信息；</li>
+                    <li>身份证照片：jpg / png / webp，最大 10MB，必须能看清证件内容；</li>
+                    <li>提交后不会立即建号，管理员确认并补全部门/考勤组后才会通知你；信息填错可重新提交或联系管理员。</li>
+                </ul>
+            </div>
+
             <div class="card">
                 <div class="card-body p-4">
                     @if (!string.IsNullOrEmpty(Model.ErrorMessage))
@@ -91,6 +101,7 @@
                             <button type="submit" class="btn btn-primary w-100">
                                 <i class="bi bi-send me-2"></i>提交
                             </button>
+                            <div class="form-text text-center mt-2">提交成功后会显示“等待管理员确认”；确认前不用重复提交。</div>
                         </form>
                     }
                 </div>

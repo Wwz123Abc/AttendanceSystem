@@ -98,6 +98,14 @@
     </div>
 </div>
 
+<div class="alert alert-info py-2">
+    <div class="small">
+        <b>怎么看：</b>点<b>有颜色</b>的日期，可以看当天的上下班打卡、工时、迟到早退、排班和备注；蓝色圆圈是今天。
+        灰色是周末，空白表示当天没有记录、也还没排班。上方的“实到/应到、迟到、旷工、请假、总工时”与发薪口径一致；
+        用“上一周期 / 下一周期”或年月下拉切换。发现某天记录不对，及时联系文员核对或提交补卡。
+    </div>
+</div>
+
 @{
     var actualDays   = p?.ActualWorkdays ?? 0m;
     var expectedDays = p?.ExpectedWorkdays ?? 0;

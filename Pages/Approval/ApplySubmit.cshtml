@@ -6,6 +6,21 @@
     <h4><i class="bi bi-file-earmark-plus me-2 text-primary"></i>提交申请</h4>
 </div>
 
+<div class="alert alert-info">
+    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i>填写步骤（照着做就不会错）</div>
+    <ol class="mb-1 ps-3 small">
+        <li>先选<b>申请类型</b>（请假/补卡/加班/出差/转班），下面只会显示这一类要填的字段。</li>
+        <li>填<b>日期和时间</b>：点输入框右侧 📅/🕒 按钮选择；也可以直接输，如 2026-11-28 09:35。</li>
+        <li>填写<b>申请原因</b>；请假要选假别，出差要填目的地，转班要选目标班次。</li>
+        <li>如有证明（病假条等）上传附件：最多 5 个，单个不超过 10MB。</li>
+        <li>选择<b>审批人</b>（页面有名单时必选），点“提交申请”；提交后在右侧“我的申请记录”看进度。</li>
+    </ol>
+    <div class="small">
+        提醒：补卡普通员工每月最多 3 次（按已通过算），超限审批时会被自动驳回；补卡、转班超过 15 天未处理会自动作废；
+        被驳回后请按驳回意见修改或联系审批人。
+    </div>
+</div>
+
 @if (!string.IsNullOrEmpty(Model.SuccessMessage))
 {
     <div class="alert alert-success alert-dismissible fade show">
@@ -174,6 +189,7 @@
                     <button type="submit" class="btn btn-primary w-100">
                         <i class="bi bi-send me-2"></i>提交申请
                     </button>
+                    <div class="form-text text-center mt-2">提交前请再核对日期、时间和原因；提交后到右侧“我的申请记录”看进度。</div>
                 </form>
             </div>
         </div>
@@ -184,6 +200,11 @@
         <div class="card">
             <div class="card-header">我的申请记录</div>
             <div class="card-body p-0">
+                <div class="px-3 pt-2 pb-2 small text-muted">
+                    状态说明：<b>待审批</b>=还在等第一级；<b>审批中</b>=已过一级、等下一级；<b>已通过</b>=审批完成；
+                    <b>已驳回</b>=没通过（看驳回意见）；<b>已撤销</b>=你自己撤回的；<b>已过期</b>=超过 15 天没人处理自动作废。
+                    只有“待审批/审批中”的单子可以点“撤销”。
+                </div>
                 <div class="table-responsive">
                     <table class="table table-hover mb-0">
                         <thead>

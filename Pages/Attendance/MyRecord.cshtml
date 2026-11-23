@@ -11,6 +11,17 @@
     <h4><i class="bi bi-journal-text me-2 text-primary"></i>我的考勤记录</h4>
 </div>
 
+<div class="alert alert-info">
+    <div class="fw-semibold mb-1"><i class="bi bi-info-circle me-1"></i>怎么看这份记录</div>
+    <ul class="mb-0 ps-3 small">
+        <li><b>周期</b>：每月 26 日 ~ 次月 25 日算一个薪资周期，上面选的是周期的“结束月份”（选 11 月 = 10-26 ~ 11-25）。</li>
+        <li><b>汇总数字</b>：和公司发薪用的“考勤汇总表”是同一套算法，可以放心对照；实到天数、迟到、缺勤、总工时都在上方卡片里。</li>
+        <li><b>状态颜色</b>：绿色=正常，黄色=迟到/早退，红色=旷工/缺卡，蓝色=请假/出差。</li>
+        <li><b>午间打卡</b>：显示班次要求的午间窗口和实际打卡时间；没打或超出窗口会标红/黄，可能影响当天工时。</li>
+        <li><b>发现异常</b>：当天漏打卡的尽快提交补卡申请（普通员工每月最多 3 次）；补卡次数用完或拿不准的，联系文员核对。</li>
+    </ul>
+</div>
+
 <!-- 月份筛选 -->
 <div class="card mb-4">
     <div class="card-body py-3">
@@ -90,16 +101,16 @@
             <table class="table table-hover mb-0">
                 <thead>
                     <tr>
-                        <th>日期</th>
+                        <th title="考勤日（不是打卡机上的时间）">日期</th>
                         <th>星期</th>
-                        <th>上班</th>
-                        <th>下班</th>
-                        <th>午间打卡</th>
-                        <th>状态</th>
-                        <th>工时(h)</th>
-                        <th>迟到</th>
-                        <th>早退</th>
-                        <th>备注</th>
+                        <th title="当天第一次上班打卡时间；-- 表示没打">上班</th>
+                        <th title="当天最后一次下班打卡时间；-- 表示没打">下班</th>
+                        <th title="班次要求的午间打卡窗口和实际打卡时间">午间打卡</th>
+                        <th title="正常/迟到/早退/旷工/请假/出差等">状态</th>
+                        <th title="按公司口径算出的当天工时；-- 表示没有有效打卡">工时(h)</th>
+                        <th title="比班次上班时间晚的分钟数">迟到</th>
+                        <th title="比班次下班时间早的分钟数">早退</th>
+                        <th title="补卡、审批、半天旷工等说明">备注</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -156,6 +167,10 @@
                 </tbody>
             </table>
         </div>
+    </div>
+    <div class="card-footer text-muted small">
+        说明：“--”表示当天没有这一项数据（比如没打卡、没迟到）；备注列会显示补卡、审批、半天旷工等说明。
+        如果某天确实到岗但记录不对，先看当天有没有打卡记录，再联系文员核对或提交补卡。
     </div>
 </div>
 

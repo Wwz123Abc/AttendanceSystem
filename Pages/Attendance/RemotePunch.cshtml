@@ -20,6 +20,20 @@
     <i class="bi bi-info-circle me-2"></i>给出差、到不了考勤机的情况用：手机定位 + 现场人脸照片，识别通过才能打卡。正常在公司请用考勤机刷脸。
 </div>
 
+<div class="alert alert-light border">
+    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i>使用步骤和注意</div>
+    <ol class="mb-1 ps-3 small">
+        <li><b>先允许定位</b>：浏览器询问定位权限时点“允许”；不开定位无法打卡。</li>
+        <li><b>确认在范围内</b>：页面显示“位置已获取”并提示在打卡范围内，才会打开摄像头。</li>
+        <li><b>正对镜头</b>：摘掉帽子口罩，光线充足；点击“打卡”时系统自动拍下当前画面做人脸比对。</li>
+        <li><b>看结果</b>：成功后页面会显示记成了“上班/下班/午间”以及打卡时间；失败按提示重试。</li>
+    </ol>
+    <div class="small text-muted">
+        提醒：10 分钟内识别失败 5 次会临时锁定 10 分钟；识别成功后短时间内不要重复点；
+        多次失败可以直接提交补卡申请，或联系文员处理。微信里权限受限，建议用系统浏览器打开。
+    </div>
+</div>
+
 @if (!Model.AllowRemotePunch)
 {
     <div class="empty-state">

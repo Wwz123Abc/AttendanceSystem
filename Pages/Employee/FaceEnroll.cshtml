@@ -8,6 +8,17 @@
     <h4><i class="bi bi-person-bounding-box me-2 text-primary"></i>人脸信息</h4>
 </div>
 
+<div class="alert alert-info">
+    <div class="fw-semibold mb-1"><i class="bi bi-info-circle me-1"></i>录入前须知</div>
+    <ul class="mb-0 ps-3 small">
+        <li>这张照片只用于<b>手机远程打卡</b>时的人脸比对，不做其他用途。</li>
+        <li>拍照要求：<b>正对镜头、光线充足、五官清晰、单人</b>；不要戴帽子、口罩、墨镜，不要用美颜/滤镜过重的照片。</li>
+        <li>格式：jpg / png / webp，单张不超过 <b>10MB</b>；手机浏览器会直接调用前置摄像头。</li>
+        <li>录入成功后一般不能自己更换；换了发型/眼镜影响识别时，请联系管理员在「员工管理」里清除后重录。</li>
+        <li>需要先勾选“同意录入本人人脸信息”才能提交。</li>
+    </ul>
+</div>
+
 @if (!string.IsNullOrEmpty(Model.SuccessMessage))
 {
     <div class="alert alert-success alert-dismissible fade show">
@@ -77,6 +88,7 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-upload me-2"></i>提交
                     </button>
+                    <div class="form-text mt-2">提交成功后会显示绿色提示；如果提示照片不合格，按上面的要求重新拍一张再提交。</div>
                 </form>
                 }
             </div>
