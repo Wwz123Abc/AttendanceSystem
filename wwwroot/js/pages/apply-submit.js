@@ -1,4 +1,4 @@
-﻿// 每种申请类型对应哪几个"必填"的日期/时间字段（id）
+// 每种申请类型对应哪几个"必填"的日期/时间字段（id）
 const REQUIRED_FIELDS_BY_TYPE = {
     Leave:              ['fLeaveStart', 'fLeaveEnd'],
     PunchReplenishment: ['fPunchDate', 'fPunchTime'],   // 打卡时间也是必填：手机浏览器的时间框可能显示默认值但其实没选，提交后被服务器拒绝
@@ -39,8 +39,18 @@ function toLocalInputValue(d) {   // Date -> "yyyy-MM-dd HH:mm"（显示用空�
 function toDateInputValue(d) {    // Date -> "yyyy-MM-dd"，date 输入框要的格式
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
+// 当前时间以服务器为准：员工手机时钟可能被设错（曾出现年份 2626），不能直接 new Date()
+function serverNow() {
+    const today = window.APP_TODAY;
+    const time  = window.APP_NOW_TIME;
+    if (today && time) {
+        const d = new Date(`${today}T${time}:00`);
+        if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
+}
 
-const now       = new Date();
+const now       = serverNow();
 const nowStr    = toLocalInputValue(now);
 const todayStr  = toDateInputValue(now);
 const leaveMinDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -129,7 +139,7 @@ document.querySelector('form[enctype]').addEventListener('submit', function (e) 
         else if (fOvertimeStart.value && fOvertimeEnd.value && fOvertimeEnd.value > overtimeEndMax(fOvertimeStart.value)) msg = '加班结束时间最晚只能选到开始日期的第二天24点前，一次申请只对应一天的加班（跨夜的加班如果确实超过这个范围，请分开提交）';
     } else if (type === 'ShiftChange') {
         const sd = document.getElementById('fShiftStart').value, ed = document.getElementById('fShiftEnd').value;
-        const earliest = new Date(); earliest.setDate(earliest.getDate() - 3);
+        const earliest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 3);
         if (sd && sd < toDateInputValue(earliest)) msg = '转班最多只能补报最近 3 天，更早的日期请联系管理员处理';
         else if (sd && ed && ed < sd) msg = '转班结束日期不能早于开始日期';
         else if (sd && ed && (new Date(ed) - new Date(sd)) / 86400000 + 1 > 7) msg = '一张转班申请最多连续 7 天，请拆成多张提交';

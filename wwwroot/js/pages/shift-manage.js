@@ -26,7 +26,9 @@ function openAddShift() {
 function showRecalcRow(visible) {
     document.getElementById('recalcRow').style.display = visible ? '' : 'none';
     document.getElementById('fRecalc').checked = false;
-    const d = new Date();
+    // 起始日期默认是当前发薪周期的开始（上个 26 号）；日期以服务器为准，避免管理员手机时钟年份错误
+    const base = window.APP_TODAY ? new Date(window.APP_TODAY + 'T00:00:00') : new Date();
+    const d = isNaN(base.getTime()) ? new Date() : base;
     const start = new Date(d.getFullYear(), d.getDate() >= 26 ? d.getMonth() : d.getMonth() - 1, 26);
     const pad = n => String(n).padStart(2, '0');
     document.getElementById('fRecalcFrom').value = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
