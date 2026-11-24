@@ -14,8 +14,18 @@
     function pad(n) { return n < 10 ? '0' + n : String(n); }
 
     function todayText() {
+        // 以服务器日期为准：员工手机时钟可能被设成 2626 年，不能直接 new Date() 取年份
+        if (window.APP_TODAY) return window.APP_TODAY;
         var d = new Date();
         return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    function nowTime() {
+        var s = String(window.APP_NOW_TIME || '');
+        var m = s.match(/^(\d{1,2}):(\d{2})/);
+        if (m) return { h: pad(parseInt(m[1], 10) % 24), m: m[2] };
+        var d = new Date();
+        return { h: pad(d.getHours()), m: pad(d.getMinutes()) };
     }
 
     function dateIn(value) {
@@ -36,8 +46,7 @@
     function currentTime(value) {
         var m = String(value || '').match(/(\d{1,2}):(\d{2})/);
         if (m) return { h: pad(parseInt(m[1], 10) % 24), m: m[2] };
-        var d = new Date();
-        return { h: pad(d.getHours()), m: pad(d.getMinutes()) };
+        return nowTime();
     }
 
     function ensureMinuteOption(mm) {
@@ -106,10 +115,10 @@
         panel.querySelector('.tp-cancel').addEventListener('click', close);
         panel.querySelector('.tp-ok').addEventListener('click', apply);
         panel.querySelector('.tp-now').addEventListener('click', function () {
-            var d = new Date();
-            hourSel.value = pad(d.getHours());
-            ensureMinuteOption(pad(d.getMinutes()));
-            minuteSel.value = pad(d.getMinutes());
+            var t = nowTime();
+            hourSel.value = t.h;
+            ensureMinuteOption(t.m);
+            minuteSel.value = t.m;
         });
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape' && panel.style.display === 'block') close();
@@ -121,7 +130,7 @@
         currentInput = input;
         var t = currentTime(input.value);
         var hasHour = HOURS.indexOf(t.h) >= 0;
-        hourSel.value = hasHour ? t.h : HOURS[new Date().getHours()];
+        hourSel.value = hasHour ? t.h : nowTime().h;
         ensureMinuteOption(t.m);
         minuteSel.value = t.m;
 

@@ -598,6 +598,11 @@ else
     </text>
 }
 <script src="~/js/pages/prevent-double-submit.js" asp-append-version="true"></script>
+<script>
+    // 服务器当前日期/时间：员工手机时钟可能不准（曾出现年份被设成 2626），日期补全统一以服务器为准
+    window.APP_TODAY = '@DateTime.Today.ToString("yyyy-MM-dd")';
+    window.APP_NOW_TIME = '@DateTime.Now.ToString("HH:mm")';
+</script>
 <script src="~/js/input-format.js" asp-append-version="true"></script>
 @await RenderSectionAsync("Scripts", required: false)
 </body>
