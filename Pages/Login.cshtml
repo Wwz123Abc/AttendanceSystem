@@ -47,8 +47,6 @@
         .btn-login { background: #0056b8; border: none; padding: .75rem; font-size: 1rem; letter-spacing: .04em; border-radius: 8px; transition: background .15s, transform .1s; }
         .btn-login:hover { background: #4d9bff; transform: translateY(-1px); }
         .login-foot { color: rgba(255,255,255,.4); font-size: .75rem; }
-        .login-help { margin-top: .9rem; padding: .7rem .8rem; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; background: rgba(255,255,255,.05); color: rgba(255,255,255,.72); font-size: .78rem; line-height: 1.7; }
-        .login-help b { color: #fff; font-weight: 600; }
         .alert { border: none; border-radius: 8px; }
         .alert-danger  { background: rgba(255,95,110,.16); color: #ffb4bb; }
         .alert-warning { background: rgba(255,180,80,.16); color: #ffcf8a; }
@@ -60,13 +58,6 @@
     <div class="text-center mb-3">
         <div class="login-title">考勤管理系统</div>
         <p class="login-sub mb-0">请使用工号登录</p>
-    </div>
-
-    <div class="login-help">
-        <div><i class="bi bi-info-circle me-1"></i><b>工号</b>：入职时分配的工号（如 IN00059、201867）。</div>
-        <div><i class="bi bi-key me-1"></i>新员工初始密码为 <b>123456</b>，首次登录后请立即修改。</div>
-        <div><i class="bi bi-question-circle me-1"></i>忘记密码、账号被锁定：联系本考勤组的文员或管理员重置。</div>
-        <div><i class="bi bi-phone me-1"></i>建议用 Chrome / Safari / 系统浏览器打开；微信里打不开时请点右上角“在浏览器打开”。</div>
     </div>
 
     @if (Model.Denied)
