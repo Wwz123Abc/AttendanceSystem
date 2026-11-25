@@ -342,13 +342,16 @@ public class RemotePunchModel(
             var hPrevShiftRaw = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today.AddDays(-1)))?.ShiftSchedule;
             var hPrevRecord = await db.AttendanceRecords
                 .Where(r => r.UserId == CurrentUserId && r.WorkDate == today.AddDays(-1))
-                .Select(r => new { r.ClockInTime }).FirstOrDefaultAsync();
+                .Select(r => new { r.ClockInTime, r.ClockOutTime }).FirstOrDefaultAsync();
             var hPrevClockIn = hPrevRecord?.ClockInTime;
-            var hPrevDayStart = today.AddDays(-1).ToDateTime(TimeOnly.MinValue);
-            var hPrevDayEnd = today.ToDateTime(TimeOnly.MinValue);
-            var hPrevClosed = await db.AttendancePunches.AnyAsync(p =>
-                p.UserId == CurrentUserId && p.IsValid && p.PunchType == PunchType.ClockOut
-                && p.PunchTime >= hPrevDayStart && p.PunchTime < hPrevDayEnd);
+            var hPrevClosed = false;
+            if (hPrevRecord?.ClockOutTime is { } hPrevOut)
+            {
+                var hPrevOutMinute = new DateTime(hPrevOut.Year, hPrevOut.Month, hPrevOut.Day, hPrevOut.Hour, hPrevOut.Minute, 0);
+                hPrevClosed = await db.AttendancePunches.AnyAsync(p =>
+                    p.UserId == CurrentUserId && p.IsValid && p.PunchType == PunchType.ClockOut
+                    && p.PunchTime >= hPrevOutMinute && p.PunchTime < hPrevOutMinute.AddMinutes(1));
+            }
             var hPrevShift = AttendanceService.EffectivePrevNightShift(hPrevShiftRaw, hPrevClockIn);
             hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift, hPrevClockIn, hPrevClosed) ?? today;
             var hourlyShift = hourlyWorkDate == today ? hTodayShift : hPrevShift;

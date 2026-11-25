@@ -274,9 +274,9 @@ public partial class AttendanceService
         var rawPunches = await db.AttendancePunches
             .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= fromDt && p.PunchTime < toDt && p.IsValid)
             .Select(p => new { p.UserId, p.PunchTime, p.PunchType }).ToListAsync(ct);
-        var clockOutDays = rawPunches
+        var clockOutPunchTimes = rawPunches
             .Where(p => p.PunchType == PunchType.ClockOut)
-            .Select(p => (p.UserId, Day: DateOnly.FromDateTime(p.PunchTime)))
+            .Select(p => (p.UserId, Minute: new DateTime(p.PunchTime.Year, p.PunchTime.Month, p.PunchTime.Day, p.PunchTime.Hour, p.PunchTime.Minute, 0)))
             .ToHashSet();
         var nightWorkedOn = rawPunches
             .Where(p => p.PunchTime.Hour >= HourlyNightEarliestHour)
@@ -299,7 +299,9 @@ public partial class AttendanceService
             var prevDay = punchDay.AddDays(-1);
             DateTime? prevDayClockIn = records.TryGetValue((p.UserId, prevDay), out var prevDayRec) ? prevDayRec.ClockInTime : null;
             if (prevDayClockIn is null) prevDayClockIn = dayFirstClockIn.GetValueOrDefault((p.UserId, prevDay));
-            if (ResolveHourlyWorkDate(p.PunchTime, todayShift, prevShift, prevDayClockIn, clockOutDays.Contains((p.UserId, prevDay))) is not { } wd || wd < from || wd > to) continue;
+            var prevDayClosed = prevDayRec?.ClockOutTime is { } prevDayOut
+                                && clockOutPunchTimes.Contains((p.UserId, new DateTime(prevDayOut.Year, prevDayOut.Month, prevDayOut.Day, prevDayOut.Hour, prevDayOut.Minute, 0)));
+            if (ResolveHourlyWorkDate(p.PunchTime, todayShift, prevShift, prevDayClockIn, prevDayClosed) is not { } wd || wd < from || wd > to) continue;
             var key = (p.UserId, wd);
             if (!candsByUserDay.TryGetValue(key, out var list)) candsByUserDay[key] = list = [];
             if (!list.Contains(p.PunchTime)) list.Add(p.PunchTime);

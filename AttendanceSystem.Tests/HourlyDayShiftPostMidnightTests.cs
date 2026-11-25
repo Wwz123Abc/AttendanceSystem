@@ -146,6 +146,31 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 前一天的凌晨下班卡_不会把后一天误标成已下班()
+    {
+        var (uid, _) = SeedHourlyDay();
+        var wed = Tue.AddDays(1);
+        var thu = wed.AddDays(1);
+        using (var db = CreateContext())
+        {
+            var shiftId = db.ShiftAssignments.Single(a => a.UserId == uid && a.WorkDate == Tue).ShiftScheduleId;
+            db.ShiftAssignments.Add(new ShiftAssignment { UserId = uid, WorkDate = wed, ShiftScheduleId = shiftId });
+            await db.SaveChangesAsync();
+        }
+
+        await SyncAsync(
+            At(Tue, 8, 25), At(Tue, 12, 20), At(wed, 0, 30),   // 周二班，周三 0:30 下班
+            At(wed, 8, 25), At(wed, 12, 20), At(thu, 0, 30));   // 周三班，周四 0:30 下班
+
+        var tueRec = await RecordAsync(uid, Tue);
+        var wedRec = await RecordAsync(uid, wed);
+        Assert.Equal(At(wed, 0, 30), tueRec.ClockOutTime);
+        Assert.Equal(At(thu, 0, 30), wedRec.ClockOutTime);       // 不能被周二那条 0:30 的卡误判成"周三已下班"
+        using var db2 = CreateContext();
+        Assert.False(await db2.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == thu));
+    }
+
+    [Fact]
     public async Task 前一天已经正常下班_凌晨再打卡不能覆盖下班时间()
     {
         var (uid, _) = SeedHourlyDay();

@@ -80,13 +80,18 @@ public partial class AttendanceService
             var hPrevShiftRaw = (await GetShiftAssignmentAsync(userId, today.AddDays(-1)))?.ShiftSchedule;
             var hPrevRecord = await db.AttendanceRecords
                 .Where(r => r.UserId == userId && r.WorkDate == today.AddDays(-1))
-                .Select(r => new { r.ClockInTime }).FirstOrDefaultAsync();
+                .Select(r => new { r.ClockInTime, r.ClockOutTime }).FirstOrDefaultAsync();
             var hPrevClockIn = hPrevRecord?.ClockInTime;
-            var hPrevDayStart = today.AddDays(-1).ToDateTime(TimeOnly.MinValue);
-            var hPrevDayEnd = today.ToDateTime(TimeOnly.MinValue);
-            var hPrevClosed = await db.AttendancePunches.AnyAsync(p =>
-                p.UserId == userId && p.IsValid && p.PunchType == PunchType.ClockOut
-                && p.PunchTime >= hPrevDayStart && p.PunchTime < hPrevDayEnd);
+            var hPrevClosed = false;
+            if (hPrevRecord?.ClockOutTime is { } hPrevOut)
+            {
+                // 只有记录上的 ClockOutTime 能找到对应的“下班卡”类型打卡，才算真正已下班；
+                // 计时工午间卡也会把 ClockOutTime 写成最晚一次打卡，但流水类型是 MidCheck，不算下班。
+                var hPrevOutMinute = new DateTime(hPrevOut.Year, hPrevOut.Month, hPrevOut.Day, hPrevOut.Hour, hPrevOut.Minute, 0);
+                hPrevClosed = await db.AttendancePunches.AnyAsync(p =>
+                    p.UserId == userId && p.IsValid && p.PunchType == PunchType.ClockOut
+                    && p.PunchTime >= hPrevOutMinute && p.PunchTime < hPrevOutMinute.AddMinutes(1));
+            }
             var hPrevShift = EffectivePrevNightShift(hPrevShiftRaw, hPrevClockIn);
             if (ResolveHourlyWorkDate(now, hTodayShift, hPrevShift, hPrevClockIn, hPrevClosed) is not { } resolvedHourlyDate)
                 return new PunchResponseDto { Success = false, Message = HourlyInvalidMessageFor(hTodayShift, hPrevShift) };
@@ -553,13 +558,16 @@ public partial class AttendanceService
             var rPrevShiftRaw = (await GetShiftAssignmentAsync(userId, today.AddDays(-1)))?.ShiftSchedule;
             var rPrevRecord = await db.AttendanceRecords
                 .Where(r => r.UserId == userId && r.WorkDate == today.AddDays(-1))
-                .Select(r => new { r.ClockInTime }).FirstOrDefaultAsync();
+                .Select(r => new { r.ClockInTime, r.ClockOutTime }).FirstOrDefaultAsync();
             var rPrevClockIn = rPrevRecord?.ClockInTime;
-            var rPrevDayStart = today.AddDays(-1).ToDateTime(TimeOnly.MinValue);
-            var rPrevDayEnd = today.ToDateTime(TimeOnly.MinValue);
-            var rPrevClosed = await db.AttendancePunches.AnyAsync(p =>
-                p.UserId == userId && p.IsValid && p.PunchType == PunchType.ClockOut
-                && p.PunchTime >= rPrevDayStart && p.PunchTime < rPrevDayEnd);
+            var rPrevClosed = false;
+            if (rPrevRecord?.ClockOutTime is { } rPrevOut)
+            {
+                var rPrevOutMinute = new DateTime(rPrevOut.Year, rPrevOut.Month, rPrevOut.Day, rPrevOut.Hour, rPrevOut.Minute, 0);
+                rPrevClosed = await db.AttendancePunches.AnyAsync(p =>
+                    p.UserId == userId && p.IsValid && p.PunchType == PunchType.ClockOut
+                    && p.PunchTime >= rPrevOutMinute && p.PunchTime < rPrevOutMinute.AddMinutes(1));
+            }
             var rPrevShift = EffectivePrevNightShift(rPrevShiftRaw, rPrevClockIn);
             return ResolveHourlyWorkDate(now, rTodayShift, rPrevShift, rPrevClockIn, rPrevClosed) is null ? HourlyInvalidMessageFor(rTodayShift, rPrevShift) : null;
         }
