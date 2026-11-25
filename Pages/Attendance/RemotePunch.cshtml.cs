@@ -340,20 +340,11 @@ public class RemotePunchModel(
             // 夜班计时工：次日早上的卡归上班那天，这天的班次、有没有上班卡都要按"考勤日"去查，不是日历上的今天
             var hTodayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
             var hPrevShiftRaw = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today.AddDays(-1)))?.ShiftSchedule;
-            var hPrevRecord = await db.AttendanceRecords
+            var hPrevClockIn = await db.AttendanceRecords
                 .Where(r => r.UserId == CurrentUserId && r.WorkDate == today.AddDays(-1))
-                .Select(r => new { r.ClockInTime, r.ClockOutTime }).FirstOrDefaultAsync();
-            var hPrevClockIn = hPrevRecord?.ClockInTime;
-            var hPrevClosed = false;
-            if (hPrevRecord?.ClockOutTime is { } hPrevOut)
-            {
-                var hPrevOutMinute = new DateTime(hPrevOut.Year, hPrevOut.Month, hPrevOut.Day, hPrevOut.Hour, hPrevOut.Minute, 0);
-                hPrevClosed = await db.AttendancePunches.AnyAsync(p =>
-                    p.UserId == CurrentUserId && p.IsValid && p.PunchType == PunchType.ClockOut
-                    && p.PunchTime >= hPrevOutMinute && p.PunchTime < hPrevOutMinute.AddMinutes(1));
-            }
+                .Select(r => r.ClockInTime).FirstOrDefaultAsync();
             var hPrevShift = AttendanceService.EffectivePrevNightShift(hPrevShiftRaw, hPrevClockIn);
-            hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift, hPrevClockIn, hPrevClosed) ?? today;
+            hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift, hPrevClockIn) ?? today;
             var hourlyShift = hourlyWorkDate == today ? hTodayShift : hPrevShift;
             var hourlyRec = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == CurrentUserId && r.WorkDate == hourlyWorkDate);
             return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, hourlyWorkDate.Value, hourlyShift, hourlyRec?.ClockInTime is not null), todayBeforePunch);

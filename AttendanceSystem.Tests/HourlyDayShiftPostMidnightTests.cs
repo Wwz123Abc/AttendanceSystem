@@ -146,7 +146,7 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 审批补下班卡后_次日凌晨卡不能再延长工时()
+    public async Task 审批补下班卡后_凌晨卡仍按最后一次打卡算()
     {
         var (uid, _) = SeedHourlyDay();
         var wed = Tue.AddDays(1);
@@ -181,13 +181,13 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
         await SyncAsync(At(wed, 0, 30));
 
         var after = await RecordAsync(uid, Tue);
-        Assert.Equal(At(Tue, 17, 30), after.ClockOutTime);
+        Assert.Equal(At(wed, 0, 30), after.ClockOutTime);
         using var check = CreateContext();
-        Assert.False(await check.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
+        Assert.True(await check.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
     }
 
     [Fact]
-    public async Task 管理员补下班卡后_次日凌晨卡不能再延长工时()
+    public async Task 管理员补下班卡后_凌晨卡仍按最后一次打卡算()
     {
         var (uid, _) = SeedHourlyDay();
         var wed = Tue.AddDays(1);
@@ -204,12 +204,12 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
                 && p.PunchTime == At(Tue, 17, 30)));
         }
 
-        await SyncAsync(At(wed, 0, 30));   // 补出来的下班卡也要被识别为"已下班"
+        await SyncAsync(At(wed, 0, 30));   // 业务口径：凌晨 2 点前的打卡按最后一次算
 
         var after = await RecordAsync(uid, Tue);
-        Assert.Equal(At(Tue, 17, 30), after.ClockOutTime);   // 不能被凌晨卡延长
+        Assert.Equal(At(wed, 0, 30), after.ClockOutTime);
         using var check = CreateContext();
-        Assert.False(await check.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
+        Assert.True(await check.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
         Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == wed));
     }
 
@@ -239,7 +239,20 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 前一天已经正常下班_凌晨再打卡不能覆盖下班时间()
+    public async Task 次日7点43的卡算当天上班卡_不算前一天下班()
+    {
+        var (uid, _) = SeedHourlyDay();
+        var wed = Tue.AddDays(1);
+        await SyncAsync(At(Tue, 8, 25), At(Tue, 12, 20), At(Tue, 17, 30), At(wed, 7, 43));
+
+        var tueRec = await RecordAsync(uid, Tue);
+        Assert.Equal(At(Tue, 17, 30), tueRec.ClockOutTime);   // 次日 07:43 已超过凌晨 2 点，不能算前一天下班
+        var wedRec = await RecordAsync(uid, wed);
+        Assert.Equal(At(wed, 7, 43), wedRec.ClockInTime);
+    }
+
+    [Fact]
+    public async Task 前一天正常下班后_凌晨卡仍按最后一次打卡算()
     {
         var (uid, _) = SeedHourlyDay();
         var wed = Tue.AddDays(1);
@@ -247,10 +260,11 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
 
         var rec = await RecordAsync(uid, Tue);
         Assert.Equal(At(Tue, 8, 25), rec.ClockInTime);
-        Assert.Equal(At(Tue, 17, 30), rec.ClockOutTime);   // 已结束的记录不能被凌晨卡延长/覆盖
+        Assert.Equal(At(wed, 0, 30), rec.ClockOutTime);   // 业务口径：凌晨 2 点前还有打卡，按最后一次算
 
         using var db = CreateContext();
-        Assert.False(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
+        Assert.True(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
+        Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == wed));
     }
 
     [Fact]

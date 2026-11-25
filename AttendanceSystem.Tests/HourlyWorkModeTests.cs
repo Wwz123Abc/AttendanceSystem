@@ -65,7 +65,7 @@ public class HourlyWorkModeTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task 白班正常下班后_凌晨0点30再打卡不能覆盖下班时间_6点59仍无效()
+    public async Task 白班干到次日凌晨0点30_下班卡归前一天_6点59仍无效()
     {
         var (uid, _) = SeedHourly();
         var wed = Tue.AddDays(1);
@@ -73,10 +73,10 @@ public class HourlyWorkModeTests : SqliteTestBase
         await SyncAsync(At(8, 25), At(12, 20), At(17, 40), wed0030, wed.ToDateTime(new TimeOnly(6, 59)));
         using var db = CreateContext();
         var rec = await TueRecordAsync(uid);
-        Assert.Equal(At(17, 40), rec.ClockOutTime);                    // 已经正常下班的记录不能被凌晨卡覆盖
-        Assert.InRange(rec.ActualWorkHours, 8m, 8.1m);                  // 08:25–17:40，扣午饭/晚饭
+        Assert.Equal(wed0030, rec.ClockOutTime);                           // 业务口径：凌晨 2 点前还有打卡，按最后一次算
+        Assert.InRange(rec.ActualWorkHours, 14m, 14.1m);                    // 08:25–次日00:30 扣 2 小时饭点 = 14.08 → 14.0
         Assert.False(await db.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == wed));
-        Assert.False(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == wed0030));
+        Assert.True(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == wed0030 && p.PunchType == PunchType.ClockOut));
         Assert.False(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == wed.ToDateTime(new TimeOnly(6, 59))));
     }
 
