@@ -643,6 +643,28 @@ public partial class AttendanceService
 
         if (clockIn.HasValue)  record.ClockInTime  = clockIn.Value;
         if (clockOut.HasValue) record.ClockOutTime = clockOut.Value;
+
+        // 高权限补卡同样要写打卡流水：Agent/维护工具也走这个入口，只改记录不写流水的话，
+        // "前一天是否已下班"仍然认不出来，次日凌晨的卡还能延长工时（2026-11-25 P2）。
+        // 撤回时按 DeviceInfo 的"管理员补卡"前缀删掉这次新增的流水。
+        if (clockIn.HasValue && !await db.AttendancePunches.AnyAsync(p =>
+                p.UserId == userId && p.PunchType == PunchType.ClockIn && p.PunchTime == clockIn.Value))
+        {
+            db.AttendancePunches.Add(new AttendancePunch
+            {
+                UserId = userId, PunchTime = clockIn.Value, PunchType = PunchType.ClockIn, IsValid = true,
+                DeviceInfo = $"管理员补卡:{operatorName}", CreatedAt = clock.LocalNow()
+            });
+        }
+        if (clockOut.HasValue && !await db.AttendancePunches.AnyAsync(p =>
+                p.UserId == userId && p.PunchType == PunchType.ClockOut && p.PunchTime == clockOut.Value))
+        {
+            db.AttendancePunches.Add(new AttendancePunch
+            {
+                UserId = userId, PunchTime = clockOut.Value, PunchType = PunchType.ClockOut, IsValid = true,
+                DeviceInfo = $"管理员补卡:{operatorName}", CreatedAt = clock.LocalNow()
+            });
+        }
         // 备注里带上操作人姓名，留下痕迹，方便"手动补卡"页面下方的操作记录列表追溯是谁改的。
         // 用 AppendApprovalNote 追加而不是直接覆盖——这天如果之前已经有请假/加班/出差审批通过的备注，
         // 手动补卡不该把那条记录抹掉，不然事后没法还原这天到底发生过什么（2026-09-17 代码审查发现）

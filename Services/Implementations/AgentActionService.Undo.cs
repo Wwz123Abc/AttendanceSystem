@@ -206,6 +206,21 @@ public partial class AgentActionService
         var note = root.GetProperty("approvalNote").ValueKind == JsonValueKind.Null ? null : root.GetProperty("approvalNote").GetString();
 
         var rec = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == uid && r.WorkDate == wd);
+        // 高权限补卡现在会写"管理员补卡"打卡流水；撤回动作恢复记录时，也要把这次新增的流水删掉，
+        // 否则记录已恢复、流水还在，后面会被误判成"这天已下班"（2026-11-25 P2 同一类问题）。
+        var oldIn = rec?.ClockInTime;
+        var oldOut = rec?.ClockOutTime;
+        var addedPunches = new List<Models.Entities.AttendancePunch>();
+        if (rec is not null)
+        {
+            if (oldIn is { } oi && oi != ci)
+                addedPunches.AddRange(await db.AttendancePunches.Where(p => p.UserId == uid && p.PunchType == Models.Enums.PunchType.ClockIn
+                    && p.PunchTime == oi && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")).ToListAsync());
+            if (oldOut is { } oo && oo != co)
+                addedPunches.AddRange(await db.AttendancePunches.Where(p => p.UserId == uid && p.PunchType == Models.Enums.PunchType.ClockOut
+                    && p.PunchTime == oo && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")).ToListAsync());
+            if (addedPunches.Count > 0) db.AttendancePunches.RemoveRange(addedPunches);
+        }
         if (!existed)
         {
             if (rec is not null) { db.AttendanceRecords.Remove(rec); await db.SaveChangesAsync(); }

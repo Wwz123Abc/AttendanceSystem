@@ -65,6 +65,28 @@ public class RevertAdminPunchAdjustTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 高权限补下班卡_写流水_撤回后流水一起删除()
+    {
+        var uid = await SeedDayWithoutMidAsync();
+        using (var db = CreateContext())
+            await Svc(db).AdminAdjustPunchAsync(uid, Tue, null, At(19, 0), "维护工具补卡", "管理员");
+
+        using (var db = CreateContext())
+            Assert.True(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchType == PunchType.ClockOut
+                && p.PunchTime == At(19, 0) && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")));
+
+        var logId = await LatestLogIdAsync(uid);
+        using (var db = CreateContext())
+            await Svc(db).RevertAdminPunchAdjustAsync(logId, "管理员");
+
+        using var check = CreateContext();
+        var rec = await check.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+        Assert.Equal(new TimeOnly(17, 40), TimeOnly.FromDateTime(rec.ClockOutTime!.Value));
+        Assert.False(await check.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchType == PunchType.ClockOut
+            && p.PunchTime == At(19, 0) && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")));
+    }
+
+    [Fact]
     public async Task 撤回补下班卡_新增的下班打卡流水一起删掉()
     {
         var uid = await SeedDayWithoutMidAsync();
