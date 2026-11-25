@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using SixLabors.ImageSharp;
 using AttendanceSystem.Data;
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Models.DTOs;
@@ -58,13 +59,50 @@ public class RemotePunchModel(
     /// 的内存缓冲区）之前挡掉恶意构造的超大字符串，避免有人直接绕过前端拿超大 payload 打这个接口刷内存。</summary>
     private const int MaxCapturedPhotoDataLength = 5 * 1024 * 1024;
 
+    /// <summary>远程打卡抓拍允许解码的最大像素数。手机摄像头截图通常远小于此；
+    /// 先用 Identify 读宽高，再按这个上限挡掉“几 MB 文件、上亿像素”的解压炸弹。</summary>
+    private const long MaxRemotePunchDecodePixels = 20_000_000;
+
     /// <summary>是不是一张像样的 JPEG：至少 1KB（480 宽的真实人脸照片远大于此）、以 JPEG 文件头 FF D8 开头、
-    /// 且以 EOI 结束标记 FF D9 结尾。最后这条不能省：不完整/被截断的图片以前也能进识别接口，
-    /// 白花一次付费调用，还可能被当成"服务异常"而绕过失败限流（2026-11-16 复审 P2）。</summary>
+    /// 且以 EOI 结束标记 FF D9 结尾。这里只是调用解码器前的快速初筛；**真正是否可解码**由
+    /// <see cref="IsDecodableJpegAsync"/> 用 ImageSharp 完整解码确认（2026-11-25 复审 P2）。</summary>
     public static bool IsUsableJpeg(byte[] bytes) =>
         bytes.Length >= 1024
         && bytes[0] == 0xFF && bytes[1] == 0xD8
         && bytes[^2] == 0xFF && bytes[^1] == 0xD9;
+
+    /// <summary>完整校验 JPEG：格式确实是 JPEG、宽高在解码预算内、并且 ImageSharp 能真正解码成功。
+    /// 只查 SOI/EOI 挡不住“首尾标记正确、中间数据损坏”的畸形图片，这种图会白调一次付费人脸识别。</summary>
+    public static async Task<bool> IsDecodableJpegAsync(byte[] bytes, CancellationToken ct = default)
+    {
+        if (!IsUsableJpeg(bytes)) return false;
+        try
+        {
+            var format = Image.DetectFormat(bytes);
+            if (format is null || !string.Equals(format.Name, "JPEG", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            using (var identifyStream = new MemoryStream(bytes, writable: false))
+            {
+                var info = await Image.IdentifyAsync(identifyStream, ct);
+                if (info is null || !ImageValidationHelper.IsWithinDecodePixelBudget(info.Width, info.Height))
+                    return false;
+                if ((long)info.Width * info.Height > MaxRemotePunchDecodePixels) return false;
+            }
+
+            using var decodeStream = new MemoryStream(bytes, writable: false);
+            using var image = await Image.LoadAsync(decodeStream, ct);
+            return image.Width > 0 && image.Height > 0;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>远程打卡页每个账号的请求频率上限：单实例部署下用进程内限流即可。
     /// 失败限流只统计"识别失败"，被参数校验/成本闸门/服务异常挡下的请求不产生失败记录，
@@ -193,7 +231,7 @@ public class RemotePunchModel(
             if (!locationValid)
                 throw new BusinessException(locationMessage ?? "打卡位置不在允许范围内");
 
-            var liveBytes = DecodeCapturedPhoto();
+            var liveBytes = await DecodeCapturedPhotoAsync(ct);
 
             var refBytes = await LoadReferencePhotoAsync(user, ct);
 
@@ -302,11 +340,17 @@ public class RemotePunchModel(
             // 夜班计时工：次日早上的卡归上班那天，这天的班次、有没有上班卡都要按"考勤日"去查，不是日历上的今天
             var hTodayShift = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today))?.ShiftSchedule;
             var hPrevShiftRaw = (await attendanceService.GetShiftAssignmentAsync(CurrentUserId, today.AddDays(-1)))?.ShiftSchedule;
-            var hPrevClockIn = await db.AttendanceRecords
+            var hPrevRecord = await db.AttendanceRecords
                 .Where(r => r.UserId == CurrentUserId && r.WorkDate == today.AddDays(-1))
-                .Select(r => r.ClockInTime).FirstOrDefaultAsync();
+                .Select(r => new { r.ClockInTime }).FirstOrDefaultAsync();
+            var hPrevClockIn = hPrevRecord?.ClockInTime;
+            var hPrevDayStart = today.AddDays(-1).ToDateTime(TimeOnly.MinValue);
+            var hPrevDayEnd = today.ToDateTime(TimeOnly.MinValue);
+            var hPrevClosed = await db.AttendancePunches.AnyAsync(p =>
+                p.UserId == CurrentUserId && p.IsValid && p.PunchType == PunchType.ClockOut
+                && p.PunchTime >= hPrevDayStart && p.PunchTime < hPrevDayEnd);
             var hPrevShift = AttendanceService.EffectivePrevNightShift(hPrevShiftRaw, hPrevClockIn);
-            hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift, hPrevClockIn) ?? today;
+            hourlyWorkDate = AttendanceService.ResolveHourlyWorkDate(DateTime.Now, hTodayShift, hPrevShift, hPrevClockIn, hPrevClosed) ?? today;
             var hourlyShift = hourlyWorkDate == today ? hTodayShift : hPrevShift;
             var hourlyRec = await db.AttendanceRecords.FirstOrDefaultAsync(r => r.UserId == CurrentUserId && r.WorkDate == hourlyWorkDate);
             return (AttendanceService.ResolveHourlyPunchType(DateTime.Now, hourlyWorkDate.Value, hourlyShift, hourlyRec?.ClockInTime is not null), todayBeforePunch);
@@ -370,8 +414,8 @@ public class RemotePunchModel(
         }
     }
 
-    /// <summary>把前端传来的抓拍 Data URL 解码成 JPEG 字节，并拦掉空数据、超大数据和非 JPEG。</summary>
-    private byte[] DecodeCapturedPhoto()
+    /// <summary>把前端传来的抓拍 Data URL 解码成 JPEG 字节，并拦掉空数据、超大数据和无法解码的图片。</summary>
+    private async Task<byte[]> DecodeCapturedPhotoAsync(CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(CapturedPhotoData))
             throw new BusinessException("未能拍到人脸画面，请确认摄像头已开启后重试");
@@ -391,11 +435,12 @@ public class RemotePunchModel(
             throw new BusinessException("拍摄的照片数据不完整，请重试");
         }
 
-        // 空数据/非 JPEG 直接拒绝，不去调（付费的）阿里云：摄像头还没出画面就点打卡时，前端截到的是 0×0 画布，
-        // toDataURL 返回 "data:,"，解码出来是 0 字节——以前这种情况会原样传给阿里云，被报"图片无法下载"并白白重试 3 次
+        // 空数据、非 JPEG、或只有首尾标记但中间数据损坏的，直接拒绝，不去调（付费的）阿里云：
+        // 摄像头还没出画面就点打卡时，前端截到的是 0×0 画布，toDataURL 返回 "data:,"，解码出来是 0 字节——
+        // 以前这种情况会原样传给阿里云，被报"图片无法下载"并白白重试 3 次
         // （2026-10-04 阿里云确认服务端收到的图片是空白的）
-        if (!IsUsableJpeg(liveBytes))
-            throw new BusinessException("没有拍到有效的画面（摄像头可能还没出画面），请等预览画面出现后再点打卡；如果一直没有画面，请刷新页面并允许摄像头权限后重试");
+        if (!await IsDecodableJpegAsync(liveBytes, ct))
+            throw new BusinessException("没有拍到有效的画面（摄像头可能还没出画面，或照片数据损坏），请等预览画面出现后再点打卡；如果一直没有画面，请刷新页面并允许摄像头权限后重试");
         return liveBytes;
     }
 

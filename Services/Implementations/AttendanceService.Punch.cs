@@ -78,11 +78,17 @@ public partial class AttendanceService
             // 夜班计时工（排的是跨天班次）：上班日 19:00 到次日 10:00 的打卡有效，次日早上的下班卡归上班那天
             var hTodayShift = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
             var hPrevShiftRaw = (await GetShiftAssignmentAsync(userId, today.AddDays(-1)))?.ShiftSchedule;
-            var hPrevClockIn = await db.AttendanceRecords
+            var hPrevRecord = await db.AttendanceRecords
                 .Where(r => r.UserId == userId && r.WorkDate == today.AddDays(-1))
-                .Select(r => r.ClockInTime).FirstOrDefaultAsync();
+                .Select(r => new { r.ClockInTime }).FirstOrDefaultAsync();
+            var hPrevClockIn = hPrevRecord?.ClockInTime;
+            var hPrevDayStart = today.AddDays(-1).ToDateTime(TimeOnly.MinValue);
+            var hPrevDayEnd = today.ToDateTime(TimeOnly.MinValue);
+            var hPrevClosed = await db.AttendancePunches.AnyAsync(p =>
+                p.UserId == userId && p.IsValid && p.PunchType == PunchType.ClockOut
+                && p.PunchTime >= hPrevDayStart && p.PunchTime < hPrevDayEnd);
             var hPrevShift = EffectivePrevNightShift(hPrevShiftRaw, hPrevClockIn);
-            if (ResolveHourlyWorkDate(now, hTodayShift, hPrevShift, hPrevClockIn) is not { } resolvedHourlyDate)
+            if (ResolveHourlyWorkDate(now, hTodayShift, hPrevShift, hPrevClockIn, hPrevClosed) is not { } resolvedHourlyDate)
                 return new PunchResponseDto { Success = false, Message = HourlyInvalidMessageFor(hTodayShift, hPrevShift) };
             hourlyWorkDate = resolvedHourlyDate;
         }
@@ -545,11 +551,17 @@ public partial class AttendanceService
         {
             var rTodayShift = (await GetShiftAssignmentAsync(userId, today))?.ShiftSchedule;
             var rPrevShiftRaw = (await GetShiftAssignmentAsync(userId, today.AddDays(-1)))?.ShiftSchedule;
-            var rPrevClockIn = await db.AttendanceRecords
+            var rPrevRecord = await db.AttendanceRecords
                 .Where(r => r.UserId == userId && r.WorkDate == today.AddDays(-1))
-                .Select(r => r.ClockInTime).FirstOrDefaultAsync();
+                .Select(r => new { r.ClockInTime }).FirstOrDefaultAsync();
+            var rPrevClockIn = rPrevRecord?.ClockInTime;
+            var rPrevDayStart = today.AddDays(-1).ToDateTime(TimeOnly.MinValue);
+            var rPrevDayEnd = today.ToDateTime(TimeOnly.MinValue);
+            var rPrevClosed = await db.AttendancePunches.AnyAsync(p =>
+                p.UserId == userId && p.IsValid && p.PunchType == PunchType.ClockOut
+                && p.PunchTime >= rPrevDayStart && p.PunchTime < rPrevDayEnd);
             var rPrevShift = EffectivePrevNightShift(rPrevShiftRaw, rPrevClockIn);
-            return ResolveHourlyWorkDate(now, rTodayShift, rPrevShift, rPrevClockIn) is null ? HourlyInvalidMessageFor(rTodayShift, rPrevShift) : null;
+            return ResolveHourlyWorkDate(now, rTodayShift, rPrevShift, rPrevClockIn, rPrevClosed) is null ? HourlyInvalidMessageFor(rTodayShift, rPrevShift) : null;
         }
         // 今天已经有上班卡了，不是"新的上班卡"，不归这里管
         if (await db.AttendanceRecords.AnyAsync(r => r.UserId == userId && r.WorkDate == today && r.ClockInTime != null))

@@ -97,11 +97,18 @@ public class ZKDeviceSyncService(
 
         // 2) 预加载：已有打卡流水（去重用）、已有考勤日记录、当天排班
 
-        var punchSet = (await db.AttendancePunches
+        var punchRows = await db.AttendancePunches
                 .Where(p => uids.Contains(p.UserId) && dates.Contains(DateOnly.FromDateTime(p.PunchTime)))
-                .Select(p => new { p.UserId, p.PunchType, p.PunchTime })
-                .ToListAsync(ct))
+                .Select(p => new { p.UserId, p.PunchType, p.PunchTime, p.IsValid })
+                .ToListAsync(ct);
+        var punchSet = punchRows
             .Select(p => (p.UserId, p.PunchType, Minute: TruncateToMinute(p.PunchTime)))
+            .ToHashSet();
+        // 哪些"人+考勤日"已经真正打过下班卡。计时工的午间卡也会写 ClockOutTime（取最晚一次），
+        // 不能只看 ClockOutTime 判断"已结束"；必须看 AttendancePunch 的类型，且只认有效打卡。
+        var clockOutDays = punchRows
+            .Where(p => p.IsValid && p.PunchType == PunchType.ClockOut)
+            .Select(p => (p.UserId, Day: DateOnly.FromDateTime(p.PunchTime)))
             .ToHashSet();
 
         var recordMap = (await db.AttendanceRecords
@@ -136,8 +143,9 @@ public class ZKDeviceSyncService(
                 shiftByUserDate.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevShiftRaw);
                 // 前一天排了夜班但没打过上班卡（比如夜班周换白班周）：不算续接，早上的卡按今天的规则判断
                 DateTime? hPrevClockIn = recordMap.TryGetValue((uid, rowDay.AddDays(-1)), out var hPrevRec) ? hPrevRec.ClockInTime : null;
+                var hPrevClosed = clockOutDays.Contains((uid, rowDay.AddDays(-1)));
                 var hPrevShift = AttendanceService.EffectivePrevNightShift(hPrevShiftRaw, hPrevClockIn);
-                if (AttendanceService.ResolveHourlyWorkDate(r.Time, hTodayShift, hPrevShift, hPrevClockIn) is not { } hourlyDate)
+                if (AttendanceService.ResolveHourlyWorkDate(r.Time, hTodayShift, hPrevShift, hPrevClockIn, hPrevClosed) is not { } hourlyDate)
                 {
                     // Warning：这类打卡是被丢掉的——常见原因是排班类型和实际上班时间对不上（白班的人被排成夜班），
                     // 要让管理员能在日志里看到，不能只记 Information
@@ -207,6 +215,7 @@ public class ZKDeviceSyncService(
             //   但没有改成"不带类型"：那样第一次被误判的类型（比如先到的唯一一条 17:29 被当成上班卡）就永远没法
             //   重新归类，补传更早的上班卡之后下班卡丢失，反而更糟。多出来的只是审计流水，不影响考勤记录结果。
             if (!punchSet.Add((uid, type, TruncateToMinute(r.Time)))) continue;
+            if (type == PunchType.ClockOut) clockOutDays.Add((uid, workDate));
             touchedKeys.Add((uid, workDate));
 
             db.AttendancePunches.Add(new AttendancePunch

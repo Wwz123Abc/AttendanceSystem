@@ -146,6 +146,21 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 前一天已经正常下班_凌晨再打卡不能覆盖下班时间()
+    {
+        var (uid, _) = SeedHourlyDay();
+        var wed = Tue.AddDays(1);
+        await SyncAsync(At(Tue, 8, 25), At(Tue, 12, 20), At(Tue, 17, 30), At(wed, 0, 30));
+
+        var rec = await RecordAsync(uid, Tue);
+        Assert.Equal(At(Tue, 8, 25), rec.ClockInTime);
+        Assert.Equal(At(Tue, 17, 30), rec.ClockOutTime);   // 已结束的记录不能被凌晨卡延长/覆盖
+
+        using var db = CreateContext();
+        Assert.False(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
+    }
+
+    [Fact]
     public async Task 历史重建_把次日0点30的下班卡归到前一天()
     {
         var (uid, gid) = SeedHourlyDay();

@@ -60,7 +60,7 @@ public partial class AttendanceService
     /// 昨天排的是普通白班、昨天确实有上班卡、这次是次日 02:00 前的下班卡 → 也算昨天的（2026-11-20 新增）；
     /// 今天排的是跨天班次 → 19:00 起才有效；其余（白班/没排班）按原规则：当天 07:00 起有效，00:00–07:00 无效。
     /// </summary>
-    public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift, DateTime? prevDayClockIn = null)
+    public static DateOnly? ResolveHourlyWorkDate(DateTime punchTime, ShiftSchedule? todayShift, ShiftSchedule? prevShift, DateTime? prevDayClockIn = null, bool prevDayClosed = false)
     {
         var d = DateOnly.FromDateTime(punchTime);
         // 夜班次日上限按"这次打卡将要归到的考勤日"选：2026-11-03 及以后的考勤日 18:00，之前仍是 10:00。
@@ -77,8 +77,12 @@ public partial class AttendanceService
         //   ③ 这张卡在上班卡之后、且间隔不超过 20 小时（跟普通白班过零点下班同一个上限）；
         //   ④ 在次日 02:00 之前；
         //   ⑤ 今天不是夜班（避免把今晚夜班前很早就来刷的卡吞到前一天）；
+        //   ⑥ 前一天**没有真正下班**（已经打过 ClockOut 的记录不能再被凌晨的卡延长/覆盖，2026-11-25 P2）。
+        //     注意不能只看 ClockOutTime：计时工的午间卡也会把"最晚打卡"写进 ClockOutTime，但那张不是下班卡；
+        //     这里由调用方根据 AttendancePunch 的 ClockOut 类型传入 prevDayClosed。
         // 就归到前一天，作为"很晚的下班卡"。次日 07:00 之后的正常上班卡不受影响。
         if (prevDayClockIn is { } prevClockIn
+            && !prevDayClosed
             && prevShift is not null
             && !IsHourlyNightShift(prevShift)
             && !IsHourlyNightShift(todayShift)
@@ -269,7 +273,11 @@ public partial class AttendanceService
         //   前一天排夜班且确实上过（有 19 点后的卡）才算续接，避免"排了夜班人没来、次日早上的白班卡被吸到前一天"。
         var rawPunches = await db.AttendancePunches
             .Where(p => userIds.Contains(p.UserId) && p.PunchTime >= fromDt && p.PunchTime < toDt && p.IsValid)
-            .Select(p => new { p.UserId, p.PunchTime }).ToListAsync(ct);
+            .Select(p => new { p.UserId, p.PunchTime, p.PunchType }).ToListAsync(ct);
+        var clockOutDays = rawPunches
+            .Where(p => p.PunchType == PunchType.ClockOut)
+            .Select(p => (p.UserId, Day: DateOnly.FromDateTime(p.PunchTime)))
+            .ToHashSet();
         var nightWorkedOn = rawPunches
             .Where(p => p.PunchTime.Hour >= HourlyNightEarliestHour)
             .Select(p => (p.UserId, Day: DateOnly.FromDateTime(p.PunchTime)))
@@ -291,7 +299,7 @@ public partial class AttendanceService
             var prevDay = punchDay.AddDays(-1);
             DateTime? prevDayClockIn = records.TryGetValue((p.UserId, prevDay), out var prevDayRec) ? prevDayRec.ClockInTime : null;
             if (prevDayClockIn is null) prevDayClockIn = dayFirstClockIn.GetValueOrDefault((p.UserId, prevDay));
-            if (ResolveHourlyWorkDate(p.PunchTime, todayShift, prevShift, prevDayClockIn) is not { } wd || wd < from || wd > to) continue;
+            if (ResolveHourlyWorkDate(p.PunchTime, todayShift, prevShift, prevDayClockIn, clockOutDays.Contains((p.UserId, prevDay))) is not { } wd || wd < from || wd > to) continue;
             var key = (p.UserId, wd);
             if (!candsByUserDay.TryGetValue(key, out var list)) candsByUserDay[key] = list = [];
             if (!list.Contains(p.PunchTime)) list.Add(p.PunchTime);

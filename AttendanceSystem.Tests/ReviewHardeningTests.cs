@@ -1,5 +1,7 @@
 using AttendanceSystem.Helpers;
 using AttendanceSystem.Pages.Attendance;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using Xunit;
 
 namespace AttendanceSystem.Tests;
@@ -47,6 +49,28 @@ public class ReviewHardeningTests
     public void 文件太小不能通过()
     {
         Assert.False(RemotePunchModel.IsUsableJpeg(Jpeg(512)));
+    }
+
+    [Fact]
+    public async Task 首尾标记正确但中间损坏的JPEG_不能通过完整解码()
+    {
+        var fake = Jpeg(2048);
+        Assert.True(RemotePunchModel.IsUsableJpeg(fake));       // 旧检查会被骗过
+        Assert.False(await RemotePunchModel.IsDecodableJpegAsync(fake));   // 完整解码必须拒绝
+    }
+
+    [Fact]
+    public async Task 真实JPEG可以通过完整解码()
+    {
+        using var image = new Image<Rgb24>(300, 300);
+        for (var y = 0; y < image.Height; y++)
+            for (var x = 0; x < image.Width; x++)
+                image[x, y] = new Rgb24((byte)(x % 256), (byte)(y % 256), (byte)((x + y) % 256));
+        using var ms = new MemoryStream();
+        await image.SaveAsJpegAsync(ms);
+        var bytes = ms.ToArray();
+        Assert.True(bytes.Length >= 1024);
+        Assert.True(await RemotePunchModel.IsDecodableJpegAsync(bytes));
     }
 
     [Fact]
