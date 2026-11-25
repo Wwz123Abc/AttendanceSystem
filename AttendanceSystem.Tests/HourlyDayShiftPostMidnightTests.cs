@@ -146,6 +146,74 @@ public class HourlyDayShiftPostMidnightTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task 审批补下班卡后_次日凌晨卡不能再延长工时()
+    {
+        var (uid, _) = SeedHourlyDay();
+        var wed = Tue.AddDays(1);
+        await SyncAsync(At(Tue, 8, 25), At(Tue, 12, 20));
+
+        int requestId;
+        using (var db = CreateContext())
+        {
+            var req = new ApprovalRequest
+            {
+                RequestNo = "BK-HOURLY-CLOSED", ApplicantUserId = uid,
+                ApprovalType = ApprovalType.PunchReplenishment, ApprovalStatus = ApprovalStatus.Approved,
+                PunchDate = Tue, PunchType = PunchType.ClockOut, PunchTime = new TimeOnly(17, 30),
+                SubmittedAt = At(Tue, 12, 30), UpdatedAt = At(Tue, 12, 30)
+            };
+            db.ApprovalRequests.Add(req);
+            await db.SaveChangesAsync();
+            requestId = req.Id;
+        }
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance)
+                .UpdateAttendanceAfterApprovalAsync(requestId);
+
+        using (var db = CreateContext())
+        {
+            var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+            Assert.Equal(At(Tue, 17, 30), rec.ClockOutTime);
+            Assert.True(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchType == PunchType.ClockOut
+                && p.PunchTime == At(Tue, 17, 30)));
+        }
+
+        await SyncAsync(At(wed, 0, 30));
+
+        var after = await RecordAsync(uid, Tue);
+        Assert.Equal(At(Tue, 17, 30), after.ClockOutTime);
+        using var check = CreateContext();
+        Assert.False(await check.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
+    }
+
+    [Fact]
+    public async Task 管理员补下班卡后_次日凌晨卡不能再延长工时()
+    {
+        var (uid, _) = SeedHourlyDay();
+        var wed = Tue.AddDays(1);
+        await SyncAsync(At(Tue, 8, 25), At(Tue, 12, 20));
+        using (var db = CreateContext())
+            await new AttendanceService(db, AppOptions, NullLogger<AttendanceService>.Instance)
+                .AdminReplenishPunchAsync(uid, Tue, PunchType.ClockOut, At(Tue, 17, 30), false, null, "管理员");
+
+        using (var db = CreateContext())
+        {
+            var rec = await db.AttendanceRecords.SingleAsync(r => r.UserId == uid && r.WorkDate == Tue);
+            Assert.Equal(At(Tue, 17, 30), rec.ClockOutTime);
+            Assert.True(await db.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchType == PunchType.ClockOut
+                && p.PunchTime == At(Tue, 17, 30)));
+        }
+
+        await SyncAsync(At(wed, 0, 30));   // 补出来的下班卡也要被识别为"已下班"
+
+        var after = await RecordAsync(uid, Tue);
+        Assert.Equal(At(Tue, 17, 30), after.ClockOutTime);   // 不能被凌晨卡延长
+        using var check = CreateContext();
+        Assert.False(await check.AttendancePunches.AnyAsync(p => p.UserId == uid && p.PunchTime == At(wed, 0, 30)));
+        Assert.False(await check.AttendanceRecords.AnyAsync(r => r.UserId == uid && r.WorkDate == wed));
+    }
+
+    [Fact]
     public async Task 前一天的凌晨下班卡_不会把后一天误标成已下班()
     {
         var (uid, _) = SeedHourlyDay();

@@ -196,6 +196,18 @@ public partial class AttendanceService
         }
         if (type == PunchType.ClockIn) record.ClockInTime  = punchDt;   // 补上班卡（已确认比现有的更早）
         else                           record.ClockOutTime = punchDt;   // 补下班卡（已确认比现有的更晚）
+
+        // 补卡也要留一条打卡流水：后面判断"前一天是否真的已下班"需要用它匹配 ClockOutTime。
+        // 只补记录、不补流水的话，补出来的下班记录会被当成"还没下班"，次日凌晨的卡又能延长工时（2026-11-25 P2）。
+        if (!await db.AttendancePunches.AnyAsync(p =>
+                p.UserId == approval.ApplicantUserId && p.PunchType == type && p.PunchTime == punchDt))
+        {
+            db.AttendancePunches.Add(new AttendancePunch
+            {
+                UserId = approval.ApplicantUserId, PunchTime = punchDt, PunchType = type, IsValid = true,
+                DeviceInfo = $"补卡审批:{approval.RequestNo}", CreatedAt = clock.LocalNow()
+            });
+        }
         AppendApprovalNote(record, $"补卡已审批通过（{approval.RequestNo}）");
         record.UpdatedAt    = clock.LocalNow();
 
@@ -687,6 +699,22 @@ public partial class AttendanceService
             db.AttendancePunches.RemoveRange(added);
         }
 
+        // 补上班/下班卡时新增的流水也要一起撤回；只删"管理员补卡"前缀的，原来设备/手机的卡不动
+        var addedClockPunches = new List<AttendancePunch>();
+        if (log.AdjustType.Contains("上班") && log.NewClockIn is { } addedIn)
+        {
+            addedClockPunches.AddRange(await db.AttendancePunches.Where(p => p.UserId == log.UserId
+                && p.PunchType == PunchType.ClockIn && p.PunchTime == addedIn
+                && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")).ToListAsync());
+        }
+        if (log.AdjustType.Contains("下班") && log.NewClockOut is { } addedOut)
+        {
+            addedClockPunches.AddRange(await db.AttendancePunches.Where(p => p.UserId == log.UserId
+                && p.PunchType == PunchType.ClockOut && p.PunchTime == addedOut
+                && p.DeviceInfo != null && p.DeviceInfo.StartsWith("管理员补卡")).ToListAsync());
+        }
+        db.AttendancePunches.RemoveRange(addedClockPunches);
+
         var opText = string.IsNullOrWhiteSpace(operatorName) ? "管理员" : operatorName;
         var deleteRecord = !log.RecordExisted && record.OvertimeHours == 0 && record.LeaveHours == 0;
         if (deleteRecord)
@@ -786,6 +814,16 @@ public partial class AttendanceService
             }
             if (type == PunchType.ClockIn) record.ClockInTime = punchAt;
             else                           record.ClockOutTime = punchAt;
+
+            // 与审批补卡一样，补出来的上下班卡要留一条打卡流水；撤回时按下面的 DeviceInfo 前缀删掉。
+            if (!await db.AttendancePunches.AnyAsync(p => p.UserId == userId && p.PunchType == type && p.PunchTime == punchAt))
+            {
+                db.AttendancePunches.Add(new AttendancePunch
+                {
+                    UserId = userId, PunchTime = punchAt, PunchType = type, IsValid = true,
+                    DeviceInfo = $"管理员补卡:{operatorName}", CreatedAt = clock.LocalNow()
+                });
+            }
             AppendApprovalNote(record, note);
             record.UpdatedAt = clock.LocalNow();
         }
